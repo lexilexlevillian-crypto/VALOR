@@ -46,4 +46,6 @@ test('anchored prose cites every simulation fragment and preserves player dialog
  assert.equal(validateAnchoredNarration(raw,anchored),'The minute passes.\n\nI stay right here.');
  assert.throws(()=>validateAnchoredNarration({paragraphs:[{sourceIds:[consequence.id],text:'The minute passes.'}]},anchored),/incomplete_narrative_sources/);
  assert.throws(()=>validateAnchoredNarration({paragraphs:[{sourceIds:[consequence.id],text:'The minute passes.'},{sourceIds:[dialogue.id],text:'You decide to leave.'}]},anchored),/player_dialogue_not_preserved/);
+ const noDialogueProtection={...anchored,protectedIds:[]};
+ assert.throws(()=>validateAnchoredNarration({paragraphs:[{sourceIds:[consequence.id],text:'Time passes.'},{sourceIds:[dialogue.id],text:'You decide to leave.'}]},noDialogueProtection),/player_agency_violation/);
 });

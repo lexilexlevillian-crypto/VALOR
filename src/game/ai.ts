@@ -37,6 +37,8 @@ export function validateAnchoredNarration(raw:unknown,context:NarrativeContext){
  ensure(used.size===allowed.size&&[...allowed.keys()].every(id=>used.has(id)),400,'incomplete_narrative_sources');
  const narration=paragraphs.join('\n\n');
  for(const id of context.protectedIds??[]){const text=allowed.get(id);ensure(text!==undefined&&narration.includes(text),400,'player_dialogue_not_preserved');}
+ let connective=narration;for(const text of allowed.values())connective=connective.replaceAll(text,'');
+ ensure(!/\b(?:you|your|yourself|i|we|our)\b/i.test(connective),400,'player_agency_violation');
  ensure(Buffer.byteLength(narration)<=24000,400,'narration_too_large');
  return narration;
 }
