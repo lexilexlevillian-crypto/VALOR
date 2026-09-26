@@ -54,7 +54,7 @@ const character=z.strictObject({...common,playable:z.boolean().default(false),co
  plans:z.array(z.strictObject({id,type:z.enum(['work','socialize','offer','share','travel','crime','care','message','breakup']),targetId:id,auxiliaryId:ref,
    priority:z.number().int().default(0),cooldownMinutes:z.number().int().min(15).max(10080).default(60),
    lastRun:z.iso.datetime().nullable().default(null),enabled:z.boolean().default(true),text:short.default(''),conditions:z.array(condition).max(32).default([])})).max(100).default([]),
- preferences:z.record(z.string(),short).default({}),boundaries:tags,
+ preferences:z.record(z.string(),short).default({}),compatibility:z.strictObject({traitWeights:z.record(id,score).default({}),requiredTraits:z.array(id).max(100).default([]),minimum:score.default(-100)}).default({traitWeights:{},requiredTraits:[],minimum:-100}),boundaries:tags,
  journey:z.strictObject({originId:id,destinationId:id,arrivesAt:z.iso.datetime(),activity:short}).nullable().default(null),
  reproductive:z.strictObject({enabled:z.boolean(),cycleStart:z.iso.datetime().nullable().default(null),cycleDays:z.number().int().min(1).max(400),bleedingDays:z.number().int().min(0).max(100),pregnancyStartedAt:z.iso.datetime().nullable().default(null),pregnancyDays:z.number().int().min(1).max(500),phase:z.enum(['inactive','cycle','menstruation','pregnancy','due']).default('inactive')}).nullable().default(null)
 });
@@ -218,7 +218,7 @@ export function refs(e:Entity):string[]{
  const result:string[]=[];const walk=(v:unknown,key='')=>{if(!v)return;if(typeof v==='string'&&((key.endsWith('Id')&&!['controllerUserId','sourceEventId','eventId','parentId'].includes(key))||['parentId','to'].includes(key)&&e.kind==='location'))result.push(v);
  else if(Array.isArray(v)){if(['traits','factionIds','occupants','links','prerequisites','opposes','jurisdictionIds','memberIds','stock','suspectIds','evidenceIds','warrantLocationIds','lawIds','participants','mediaIds'].includes(key))result.push(...v as string[]);else v.forEach(x=>walk(x,key));}
  else if(typeof v==='object')for(const[k,x]of Object.entries(v))if(!['sections','history','custody'].includes(k))walk(x,k);};walk(e.data);
- if(e.kind==='character')result.push(...Object.keys(e.data.skills as object));
+ if(e.kind==='character'){const c=data(e,'character');result.push(...Object.keys(c.skills),...c.compatibility.requiredTraits,...Object.keys(c.compatibility.traitWeights));}
  return [...new Set(result)].filter(x=>x!==e.id);
 }
 export function validateState(s:State){

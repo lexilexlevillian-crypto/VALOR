@@ -4,6 +4,7 @@ import type {Entity,State} from './model.ts';
 import {fact,observe,remember} from './epistemics.ts';
 import {matchesCondition} from './conditions.ts';
 import {advanceLifecycle,startNpcJourney,finishNpcJourney} from './lifecycle.ts';
+import {authoredCompatibility} from './compatibility.ts';
 export type Effect={id:string;text:string;observers:string[];type:string;subjectId:string};
 export function emit(effects:Effect[],text:string,observers:string[],type:string,subjectId:string){effects.push({id:randomUUID(),text,observers:[...new Set(observers)],type,subjectId});}
 export function atLocation(s:State,locationId:string|null){return s.entities.filter(e=>e.kind==='character'&&!e.archived&&e.data.locationId===locationId&&locationId&&e.data.condition==='conscious');}
@@ -187,7 +188,7 @@ function advanceStep(s:State,minutes:number,eventId:string,effects:Effect[],play
    if(plan.type==='offer'&&target.kind==='relationship'&&target.data.fromId===npc.id){
     const r=data(target,'relationship'),recipient=getEntity(s,r.toId,'character'),intent=r.tags.find(t=>['date','commit','cohabit','marry','reconcile','intimacy'].includes(t));
     const adult=(dob:unknown)=>typeof dob==='string'&&(end-Date.parse(dob))/31557600000>=18;
-    if(intent&&s.settings.romance&&adult(d.dob)&&adult(recipient.data.dob)&&recipient.data.locationId===d.locationId&&!r.pending&&!r.boundaries.includes(intent)&&!d.boundaries.includes(intent)&&!(recipient.data.boundaries as string[]).includes(intent)&&d.preferences.romance!=='off'&&(recipient.data.preferences as Record<string,string>).romance!=='off'&&(intent!=='intimacy'||s.settings.intimacy==='fade-to-black')){
+    if(intent&&s.settings.romance&&adult(d.dob)&&adult(recipient.data.dob)&&recipient.data.locationId===d.locationId&&!r.pending&&!r.boundaries.includes(intent)&&!d.boundaries.includes(intent)&&!(recipient.data.boundaries as string[]).includes(intent)&&d.preferences.romance!=='off'&&(recipient.data.preferences as Record<string,string>).romance!=='off'&&authoredCompatibility(s,npc.id,recipient.id)>=d.compatibility.minimum&&(intent!=='intimacy'||s.settings.intimacy==='fade-to-black')){
      r.pending=intent;target.data=r as Entity['data'];
      const reciprocal=s.entities.find(e=>e.kind==='relationship'&&!e.archived&&e.data.fromId===recipient.id&&e.data.toId===npc.id);
      if(!recipient.data.playable&&reciprocal?.data.pending===intent&&!(reciprocal.data.boundaries as string[]).includes(intent)){
