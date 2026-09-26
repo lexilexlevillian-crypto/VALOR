@@ -35,7 +35,7 @@ export function buildApp(store:Store,settings:Config,logging:boolean|{write(chun
     const unsafe=!['GET','HEAD','OPTIONS'].includes(request.method);
     if(unsafe)ensure(request.headers.origin===settings.origin,403,'origin_rejected');
     if((path==='/healthz' || path==='/' || publicAssets.has(path??'')) && (request.method==='GET' || request.method==='HEAD'))return;
-    if(path==='/auth/login' && request.method==='POST') {
+    if((path==='/auth/login' || path==='/auth/signup') && request.method==='POST') {
       (await auth.limit('login-ip',request.ip,settings.loginLimit*3,900000));
       return;
     }
@@ -75,6 +75,13 @@ export function buildApp(store:Store,settings:Config,logging:boolean|{write(chun
     (await auth.limit('login-account',input.email,settings.loginLimit,900000));
     const result=await auth.login(input.email,input.password);
     reply.header('Set-Cookie',cookie(result.token,settings.sessionHours*3600));
+    return {user:result.user,csrfToken:result.csrfToken};
+  });
+  app.post('/auth/signup',async(request,reply)=>{
+    const input=credentials.parse(request.body);
+    (await auth.limit('signup-account',input.email,settings.loginLimit,900000));
+    const result=await auth.signup(input.email,input.password);
+    reply.code(201).header('Set-Cookie',cookie(result.token,settings.sessionHours*3600));
     return {user:result.user,csrfToken:result.csrfToken};
   });
   app.get('/auth/session',async(request)=>({user:actor(request),csrfToken:csrfFor(tokenFrom(request.headers.cookie)!)}));

@@ -28,11 +28,15 @@ function frame(content){
  $('main',{id:'main',tabindex:'-1'},content)));
  app.replaceChildren(shell);
 }
-function loginScreen(){
- const email=input('','email'),password=input('','password');email.autocomplete='username';password.autocomplete='current-password';email.required=true;password.required=true;
- const form=$('form',{onsubmit:e=>{e.preventDefault();run(async()=>{const result=await api('/auth/login',{email:email.value,password:password.value});S.user=result.user;S.csrf=result.csrfToken;password.value='';await render();});}},
- field('Email address',email),field('Password',password),$('button',{type:'submit',class:'primary'},'Enter Valor'));
- app.replaceChildren($('main',{id:'main',class:'login'},$('div',{class:'eyebrow'},'A PERSISTENT CRIME-DRAMA RPG'),$('div',{class:'brand'},'VALOR'),$('div',{class:'rule'}),$('h1',{},'Every choice leaves a trace.'),$('p',{},'A city written by its Creator. A life shaped by your decisions.'),form,$('p',{class:'muted'},'Use the account provisioned by your game administrator.'),$('small',{class:S.online?'':'offline'},S.online?'Your session stays private.':'Offline — reconnect to sign in.')));
+function loginScreen(mode='login'){
+ const signup=mode==='signup',email=input('','email'),password=input('','password');email.autocomplete='email';password.autocomplete=signup?'new-password':'current-password';email.required=true;password.required=true;
+ const fields=[field('Email address',email),field('Password',password)];
+ let confirmation;
+ if(signup){confirmation=input('','password');confirmation.autocomplete='new-password';confirmation.required=true;fields.push(field('Confirm password',confirmation));}
+ const form=$('form',{onsubmit:e=>{e.preventDefault();run(async()=>{if(signup&&password.value!==confirmation.value)throw new Error('Passwords do not match.');const result=await api(signup?'/auth/signup':'/auth/login',{email:email.value,password:password.value});S.user=result.user;S.csrf=result.csrfToken;password.value='';await render();});}},
+ ...fields,$('button',{type:'submit',class:'primary'},signup?'Create account':'Enter Valor'));
+ const switcher=$('p',{class:'auth-switch'},signup?'Already have an account? ':'Need an account? ',$('button',{type:'button',class:'link-button',onclick:()=>loginScreen(signup?'login':'signup')},signup?'Log in':'Sign up'));
+ app.replaceChildren($('main',{id:'main',class:'login'},$('div',{class:'eyebrow'},'A PERSISTENT CRIME-DRAMA RPG'),$('div',{class:'brand'},'VALOR'),$('div',{class:'rule'}),$('h1',{},'Every choice leaves a trace.'),$('p',{},'A city written by its Creator. A life shaped by your decisions.'),form,switcher,$('p',{class:'muted'},signup?'Create a player account to begin your chronicle.':'Sign in to continue your chronicle.'),$('small',{class:S.online?'':'offline'},S.online?'Your session stays private.':'Offline — reconnect to sign in.')));
 }
 async function render(){
  if(!S.user)return loginScreen();

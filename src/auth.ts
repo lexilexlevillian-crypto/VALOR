@@ -1,7 +1,7 @@
 import { createHash, createHmac, randomBytes, randomUUID, scrypt, timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
 import { Store } from './db.ts';
-import { ensure } from './contracts.ts';
+import { Fault, ensure } from './contracts.ts';
 import type { Actor } from './contracts.ts';
 import type { Config } from './config.ts';
 export const credentials=z.strictObject({email:z.email().max(254).transform(v=>v.toLowerCase()),password:z.string().min(12).max(128)});
@@ -58,6 +58,25 @@ export class Auth {
       (await this.store.run('INSERT INTO audit_log(id,actor_id,action,target_id,created_at) VALUES (?,?,?,?,?)',randomUUID(),row.id,'auth.login',row.id,now));
     }));
     return {token,csrfToken:csrfFor(token),user:{id:row.id,role:row.role}};
+  }
+  async signup(email:string,password:string) {
+    const input=credentials.parse({email,password});
+    const existing=await this.store.get<{id:string}>('SELECT id FROM users WHERE email=?',input.email);
+    ensure(!existing,409,'account_exists');
+    const encoded=await passwordHash(input.password), id=randomUUID(), now=new Date().toISOString();
+    const token=randomBytes(32).toString('hex');
+    try {
+      await this.store.transaction(async ()=>{
+        (await this.store.run('INSERT INTO users(id,email,password_hash,role,created_at,updated_at) VALUES (?,?,?,?,?,?)',id,input.email,encoded,'player',now,now));
+        (await this.store.run('INSERT INTO sessions VALUES (?,?,?,?)',hash(token),id,now,new Date(Date.now()+this.settings.sessionHours*3600000).toISOString()));
+        (await this.store.run('INSERT INTO audit_log(id,actor_id,action,target_id,created_at) VALUES (?,NULL,?,?,?)',randomUUID(),'account.signup',id,now));
+        (await this.store.run('INSERT INTO audit_log(id,actor_id,action,target_id,created_at) VALUES (?,?,?,?,?)',randomUUID(),id,'auth.login',id,now));
+      });
+    } catch(error) {
+      if(error instanceof Error && /unique/i.test(error.message))throw new Fault(409,'account_exists');
+      throw error;
+    }
+    return {token,csrfToken:csrfFor(token),user:{id,role:'player' as const}};
   }
   async authenticate(token:string|undefined):Promise<Actor> {
     ensure(token && /^[a-f0-9]{64}$/.test(token),401,'unauthenticated');
