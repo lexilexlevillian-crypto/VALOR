@@ -1,4 +1,4 @@
-name: System 01 foundation
+name: VALOR verification
 on: [push, pull_request]
 permissions:
   contents: read
@@ -12,5 +12,6 @@ jobs:
           node-version-file: .node-version
           cache: npm
       - run: npm ci
+      - run: npx playwright install --with-deps chromium
       - run: npm run check
       - run: npm test

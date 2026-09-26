@@ -7,7 +7,7 @@ export type Config = {
 };
 export function config(env:NodeJS.ProcessEnv=process.env):Config {
   const production=env.NODE_ENV==='production';
-  const origin=z.url().parse(env.APP_ORIGIN??'http://localhost:3000');
+  const origin=z.url().parse(env.APP_ORIGIN??env.RENDER_EXTERNAL_URL??'http://localhost:3000');
   const url=new URL(origin);
   if(url.origin!==origin || url.username || url.password) throw new Error('APP_ORIGIN must be an origin without a path or credentials');
   const databasePath=env.DATABASE_PATH??'./data/valor.sqlite';

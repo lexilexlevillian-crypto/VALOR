@@ -144,6 +144,6 @@ test('service serves a real HTTP health request and shuts down cleanly',async()=
     const address=await f.app.listen({host:'127.0.0.1',port:0});
     const response=await fetch(address+'/healthz');
     assert.equal(response.status,200);assert.deepEqual(await response.json(),{status:'ok'});
-    const root=await fetch(address);assert.equal((await root.json()).playable,false);
+    const root=await fetch(address);assert.equal((await root.json()).playable,true);
   }finally{await f.close();}
 });

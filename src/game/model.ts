@@ -1,0 +1,188 @@
+import {z} from 'zod';
+import {id,name,visibility} from '../contracts.ts';
+const text=z.string().max(16000), short=z.string().max(1000), ref=id.nullable().default(null);
+const cents=z.number().int().min(0).max(100000000000), score=z.number().min(-100).max(100), unit=z.number().min(0).max(100);
+const tags=z.array(z.string().max(80)).max(100).default([]);
+export const attributes=['Strength','Agility','Endurance','Intellect','Perception','Presence','Will'] as const;
+const customField=z.strictObject({id,name,type:z.enum(['text','number','boolean','json']),visibility,value:z.json()});
+const customSection=z.strictObject({id,name,parentId:ref,position:z.number().int().min(0),visibility:visibility.default('creator'),fields:z.array(customField).max(500)});
+const common={description:text.default(''),tags,sections:z.array(customSection).max(200).default([])};
+const schedule=z.strictObject({id,minute:z.number().int().min(0).max(1439),locationId:id,activity:short,days:z.array(z.number().int().min(0).max(6)).default([0,1,2,3,4,5,6])});
+const rules=z.strictObject({
+ dieSides:z.number().int().min(2).max(1000),threshold:z.number().min(1).max(10000),
+ damage:z.number().min(0).max(100),treatmentMinutes:z.number().int().min(1).max(1440),
+ recoveryPerDay:z.number().min(0).max(100),unfamiliarPenalty:z.number().min(0).max(100),
+ bleedPerMinute:z.number().min(0).max(10)
+});
+export const settingsSchema=z.strictObject({
+ needs:z.boolean().default(false),fuel:z.boolean().default(false),weather:z.enum(['clear','rain','overcast','snow','fog']).default('clear'),
+ romance:z.boolean().default(false),intimacy:z.enum(['off','fade-to-black']).default('off'),
+ intensity:z.enum(['restrained','grounded']).default('restrained'),difficulty:z.enum(['custom','narrative']).default('custom'),
+ rules:rules.nullable().default(null),tokenBudget:z.number().int().min(0).max(1000000).default(0),userTokenBudget:z.number().int().min(0).max(1000000).default(0),
+ contextTokens:z.number().int().min(256).max(16000).default(2000),timezone:z.string().default('America/New_York'),
+ npcBudget:z.number().int().min(1).max(10000).default(2000),traitBudget:z.number().min(0).max(1000).default(0)
+});
+const character=z.strictObject({...common,playable:z.boolean().default(false),controllerUserId:ref,
+ aliases:tags,dob:z.iso.date().nullable().default(null),identity:z.record(z.string(),short).default({}),
+ appearance:z.record(z.string(),short).default({}),background:z.record(z.string(),text).default({}),
+ voice:text.default(''),instructions:text.default(''),secrets:text.default(''),
+ attributes:z.record(z.enum(attributes),z.number().min(0).max(100)).default({Strength:0,Agility:0,Endurance:0,Intellect:0,Perception:0,Presence:0,Will:0}),
+ skills:z.record(z.string(),z.number().min(0).max(100)).default({}),traits:z.array(id).default([]),
+ locationId:ref,homeId:ref,factionIds:z.array(id).default([]),cash:cents.default(0),bank:cents.default(0),
+ condition:z.enum(['conscious','unconscious','dead']).default('conscious'),blood:unit.default(100),fatigue:unit.default(0),
+ hunger:unit.default(0),thirst:unit.default(0),hygiene:unit.default(100),intoxication:unit.default(0),
+ restrainedBy:ref,goals:tags,fears:tags,mood:short.default(''),activity:short.default(''),heat:z.record(z.string(),unit).default({}),
+ schedule:z.array(schedule).max(100).default([]),lastSimulated:z.iso.datetime().nullable().default(null),
+ plans:z.array(z.strictObject({id,type:z.enum(['work','socialize','offer','share','travel','crime','care']),targetId:id,auxiliaryId:ref,
+   priority:z.number().int().default(0),cooldownMinutes:z.number().int().min(15).max(10080).default(60),
+   lastRun:z.iso.datetime().nullable().default(null),enabled:z.boolean().default(true)})).max(100).default([]),
+ preferences:z.record(z.string(),short).default({}),boundaries:tags
+});
+const location=z.strictObject({...common,parentId:ref,category:z.enum(['city','district','street','building','room','road','outside']).default('room'),
+ exits:z.array(z.strictObject({to:id,minutes:z.number().int().min(1).max(10080),modes:z.array(z.enum(['walk','drive','transit','taxi'])).default(['walk']),locked:z.boolean().default(false),keyId:ref,fare:cents.default(0)})).default([]),
+ hours:z.strictObject({opens:z.number().int().min(0).max(23),closes:z.number().int().min(0).max(24)}).nullable().default(null),
+ discoverable:z.boolean().default(false),ownerId:ref,cover:unit.default(0),weatherExposed:z.boolean().default(false)
+});
+const item=z.strictObject({...common,category:z.enum(['object','clothing','weapon','firearm','ammo','medicine','food','drink','substance','key','document','container','phone','armor']).default('object'),
+ ownerId:ref,locationId:ref,containerId:ref,quantity:z.number().int().min(0).max(100000).default(1),
+ weight:z.number().min(0).max(100000).default(0),capacity:z.number().min(0).max(100000).default(0),
+ condition:unit.default(100),concealed:z.boolean().default(false),equipped:z.boolean().default(false),
+ stolen:z.boolean().default(false),price:cents.default(0),serial:short.default(''),caliber:short.default(''),
+ magazine:z.number().int().min(0).max(1000).default(0),loaded:z.number().int().min(0).max(1000).default(0),
+ proficiency:short.default(''),coverage:tags,battery:unit.default(100),locked:z.boolean().default(false),
+ contacts:z.array(z.strictObject({characterId:id,label:name})).default([]),dose:unit.default(0),provenance:text.default('')
+});
+const vehicle=z.strictObject({...common,ownerId:ref,locationId:ref,keyId:ref,plate:short.default(''),registration:text.default(''),
+ category:z.enum(['car','truck','motorcycle','bus','taxi','transit']).default('car'),fuel:unit.default(100),condition:unit.default(100),
+ capacity:z.number().int().min(1).max(100).default(5),occupants:z.array(id).default([]),stolen:z.boolean().default(false),locked:z.boolean().default(true)
+});
+const relation=z.strictObject({...common,fromId:id,toId:id,labels:tags,attraction:score.default(0),affection:score.default(0),trust:score.default(0),
+ respect:score.default(0),attachment:score.default(0),familiarity:score.default(0),desire:score.default(0),jealousy:score.default(0),
+ resentment:score.default(0),fear:score.default(0),loyalty:score.default(0),dependency:score.default(0),inertia:z.number().min(0).max(1).default(0.8),
+ boundaries:tags,history:z.array(z.strictObject({at:z.iso.datetime(),eventId:id,label:short})).default([]),secret:z.boolean().default(true),pending:short.default('')
+});
+const injury=z.strictObject({...common,characterId:id,bodyPart:name,category:z.enum(['cut','gunshot','burn','blunt','fracture','internal','infection','illness','overdose','scar','disability']),
+ severity:unit,bleeding:unit.default(0),pain:unit.default(0),treated:z.boolean().default(false),permanent:z.boolean().default(false),
+ startedAt:z.iso.datetime(),recoveryDays:z.number().min(0).max(10000).default(0),substance:short.default('')
+});
+const lore=z.strictObject({...common,subjectId:ref,source:text.default('Creator'),validFrom:z.iso.datetime().nullable().default(null),
+ validUntil:z.iso.datetime().nullable().default(null),links:z.array(id).default([]),priority:z.number().int().default(0),
+ activation:z.strictObject({locationId:ref,characterId:ref,keywords:tags}).nullable().default(null),embedding:z.array(z.number().finite()).max(4096).default([])
+});
+const catalog=z.strictObject({...common,category:short.default(''),cost:z.number().min(-100).max(100).default(0),mode:z.enum(['descriptive','costed']).default('descriptive'),
+ prerequisites:z.array(id).default([]),opposes:z.array(id).default([]),modifiers:z.record(z.string(),z.number().min(-100).max(100)).default({}),permanent:z.boolean().default(false),acquirable:z.boolean().default(true)
+});
+const faction=z.strictObject({...common,category:short.default(''),leaderId:ref,cohesion:unit.default(50),jurisdictionIds:z.array(id).default([]),memberIds:z.array(id).default([]),reputation:z.record(z.string(),score).default({})});
+const business=z.strictObject({...common,locationId:id,ownerId:ref,cash:cents.default(0),stock:z.array(id).default([]),priceMultiplier:z.number().min(0.1).max(10).default(1),
+ hours:z.strictObject({opens:z.number().int().min(0).max(23),closes:z.number().int().min(0).max(24)}).default({opens:0,closes:24}),contraband:z.boolean().default(false)
+});
+const job=z.strictObject({...common,employerId:id,employeeId:id,locationId:id,hourlyCents:cents,minutesPerShift:z.number().int().min(1).max(1440),lastWorked:z.iso.datetime().nullable().default(null)});
+const housing=z.strictObject({...common,locationId:id,landlordId:id,tenantId:id,rentCents:cents,dueAt:z.iso.datetime(),periodDays:z.number().int().min(1).max(366),access:z.boolean().default(true)});
+const evidence=z.strictObject({...common,locationId:ref,objectId:ref,caseId:ref,sourceEventId:ref,discoveredBy:z.array(id).default([]),
+ contaminated:z.boolean().default(false),destroyed:z.boolean().default(false),custodianId:ref,
+ custody:z.array(z.strictObject({at:z.iso.datetime(),fromId:ref,toId:ref,eventId:id,reason:short})).default([])
+});
+const caseSchema=z.strictObject({...common,agencyId:id,investigatorId:id,suspectIds:z.array(id).default([]),evidenceIds:z.array(id).default([]),
+ stage:z.enum(['reported','investigating','warrant','arrest','booking','jail','bail','interrogation','charged','trial','sentenced','probation','parole','closed']).default('reported'),
+ warrantLocationIds:z.array(id).default([]),lawIds:z.array(id).default([]),leads:tags
+});
+const law=z.strictObject({...common,jurisdictionIds:z.array(id).default([]),agencyIds:z.array(id).default([]),
+ permits:z.array(z.enum(['search','arrest','charge','sentence'])).default([]),requiresWarrant:z.boolean().default(true),bailCents:cents.default(0),penalty:text.default('')});
+const quest=z.strictObject({...common,status:z.enum(['dormant','active','succeeded','failed','expired']).default('dormant'),characterId:ref,
+ deadline:z.iso.datetime().nullable().default(null),objectives:tags,hiddenSolution:text.default(''),branches:z.record(z.string(),short).default({})});
+const watcher=z.strictObject({...common,trigger:z.enum(['time','location','item','relationship','knowledge','health','quest']),subjectId:ref,targetId:ref,
+ dueAt:z.iso.datetime().nullable().default(null),threshold:z.number().default(0),effect:z.enum(['activate-quest','fail-quest','reveal-lore','npc-offer']),
+ cooldownMinutes:z.number().int().min(1).default(60),lastFired:z.iso.datetime().nullable().default(null),
+ expiresAt:z.iso.datetime().nullable().default(null),priority:z.number().int().default(0),once:z.boolean().default(true),fired:z.boolean().default(false)});
+const message=z.strictObject({...common,fromId:id,toId:id,phoneId:id,medium:z.enum(['sms','mms','call','voicemail','email']).default('sms'),body:text,at:z.iso.datetime(),read:z.boolean().default(false),status:z.enum(['queued','delivered','read']).default('queued')});
+const combat=z.strictObject({...common,participants:z.array(id).min(2),turnIndex:z.number().int().min(0).default(0),round:z.number().int().min(1).default(1),
+ active:z.boolean().default(true),cover:z.record(z.string(),unit).default({}),defenses:z.record(z.string(),z.enum(['dodge','block','parry'])).default({}),log:tags});
+export const dataSchemas={character,location,item,vehicle,relationship:relation,injury,lore,storycard:lore,trait:catalog,skill:catalog,faction,business,job,housing,evidence,case:caseSchema,law,quest,watcher,message,combat};
+export type Kind=keyof typeof dataSchemas;
+export const kinds=Object.keys(dataSchemas) as [Kind,...Kind[]];
+export const entitySchema=z.strictObject({id,kind:z.enum(kinds),name,visibility, data:z.record(z.string(),z.json()),revision:z.number().int().positive().default(1),archived:z.boolean().default(false)});
+export type Entity=z.infer<typeof entitySchema>;
+export type Data<K extends Kind>=z.infer<(typeof dataSchemas)[K]>;
+export function data<K extends Kind>(entity:Entity,kind:K):Data<K>{
+ if(entity.kind!==kind)throw new Error('entity_kind_mismatch');
+ return dataSchemas[kind].parse(entity.data) as Data<K>;
+}
+export function validateEntity(raw:unknown):Entity{
+ const e=entitySchema.parse(raw);e.data=dataSchemas[e.kind].parse(e.data) as Entity['data'];
+ if(e.kind==='item'){const d=data(e,'item');if(d.loaded>d.magazine)throw new Error('ammo_capacity');if(d.ownerId && (d.locationId||d.containerId))throw new Error('ambiguous_item_location');if(d.locationId&&d.containerId)throw new Error('ambiguous_item_location');}
+ const sections=e.data.sections as z.infer<typeof customSection>[];const sectionIds=new Set(sections.map(s=>s.id)),fieldIds=new Set<string>();
+ if(sectionIds.size!==sections.length)throw new Error('duplicate_section_id');
+ for(const s of sections){if(s.parentId&&!sectionIds.has(s.parentId))throw new Error('missing_parent_section');let p=s.parentId;const seen=new Set([s.id]);while(p){if(seen.has(p))throw new Error('section_cycle');seen.add(p);p=sections.find(x=>x.id===p)!.parentId;}for(const f of s.fields){if(fieldIds.has(f.id))throw new Error('duplicate_field_id');fieldIds.add(f.id);if(f.type!=='json'&&typeof f.value!==(f.type==='text'?'string':f.type))throw new Error('custom_field_type');}}
+ return e;
+}
+export const actionSchema=z.discriminatedUnion('type',[
+ z.strictObject({type:z.literal('look')}),z.strictObject({type:z.literal('wait'),minutes:z.number().int().min(1).max(10080)}),
+ z.strictObject({type:z.literal('sleep'),minutes:z.number().int().min(1).max(720)}),z.strictObject({type:z.literal('say'),text:short}),
+ z.strictObject({type:z.literal('travel'),destinationId:id,mode:z.enum(['walk','drive','transit','taxi']).default('walk'),vehicleId:ref}),
+ z.strictObject({type:z.literal('take'),itemId:id}),z.strictObject({type:z.literal('give'),itemId:id,toId:id}),
+ z.strictObject({type:z.literal('steal'),itemId:id,targetId:id}),
+ z.strictObject({type:z.literal('cover')}),
+ z.strictObject({type:z.literal('equip'),itemId:id,equipped:z.boolean()}),
+ z.strictObject({type:z.literal('reload'),weaponId:id,ammoId:id}),z.strictObject({type:z.literal('consume'),itemId:id}),
+ z.strictObject({type:z.literal('treat'),injuryId:id,medicineId:id}),
+ z.strictObject({type:z.literal('message'),phoneId:id,toId:id,text:short,medium:z.enum(['sms','mms','call','voicemail','email']).default('sms')}),
+ z.strictObject({type:z.literal('buy'),businessId:id,itemId:id,payment:z.enum(['cash','bank']).optional()}),z.strictObject({type:z.literal('sell'),businessId:id,itemId:id}),
+ z.strictObject({type:z.literal('bank'),businessId:id,operation:z.enum(['deposit','withdraw']),cents:cents.refine(n=>n>0)}),
+ z.strictObject({type:z.literal('work'),jobId:id}),z.strictObject({type:z.literal('pay-rent'),housingId:id}),
+ z.strictObject({type:z.literal('social'),targetId:id,intent:z.enum(['greet','trust','flirt','date','commit','breakup','intimacy','decline']),consent:z.boolean().default(false)}),
+ z.strictObject({type:z.literal('share'),targetId:id,factId:id}),
+ z.strictObject({type:z.literal('check'),attribute:z.enum(attributes),skillId:ref}),
+ z.strictObject({type:z.literal('combat'),targetId:id}),
+ z.strictObject({type:z.literal('attack'),targetId:id,weaponId:ref,bodyPart:name.default('torso')}),
+ z.strictObject({type:z.literal('defend'),defense:z.enum(['dodge','block','parry'])}),
+ z.strictObject({type:z.literal('grapple'),targetId:id}),z.strictObject({type:z.literal('restrain'),targetId:id,itemId:id}),
+ z.strictObject({type:z.literal('disarm'),targetId:id}),z.strictObject({type:z.literal('shove'),targetId:id}),
+ z.strictObject({type:z.literal('surrender')}),z.strictObject({type:z.literal('flee'),destinationId:id}),
+ z.strictObject({type:z.literal('chase'),targetId:id,destinationId:id,vehicleId:ref}),
+ z.strictObject({type:z.literal('custody'),evidenceId:id,toId:id,reason:short}),
+ z.strictObject({type:z.literal('conceal'),itemId:id,concealed:z.boolean()}),
+ z.strictObject({type:z.literal('store'),itemId:id,containerId:id}),
+ z.strictObject({type:z.literal('retrieve'),itemId:id,containerId:id}),
+ z.strictObject({type:z.literal('search')}),z.strictObject({type:z.literal('crime'),lawId:id,targetId:ref}),
+ z.strictObject({type:z.literal('report'),factId:id,agencyId:id,investigatorId:id}),
+ z.strictObject({type:z.literal('report-belief'),beliefId:id,agencyId:id,investigatorId:id,targetId:id}),
+ z.strictObject({type:z.literal('collect'),evidenceId:id,caseId:id}),
+ z.strictObject({type:z.literal('case'),caseId:id,operation:z.enum(['investigate','warrant','search','arrest','booking','jail','bail','interrogation','charge','trial','sentence','probation','parole','close']),targetId:ref}),
+]);
+export type Action=z.infer<typeof actionSchema>;
+export type Settings=z.infer<typeof settingsSchema>;
+export type Fact={id:string;subjectId:string;predicate:string;value:unknown;eventId:string;at:string;retiredAt:string|null};
+export type Knowledge={observerId:string;factId:string;source:string;at:string};
+export type Belief={id:string;observerId:string;proposition:string;confidence:number;source:string;at:string;correctedBy:string|null};
+export type Memory={id:string;observerId:string;text:string;salience:number;decayPerDay:number;eventId:string;at:string;private:boolean};
+export type State={clock:string;settings:Settings;entities:Entity[];facts:Fact[];knowledge:Knowledge[];beliefs:Belief[];memories:Memory[]};
+export const getEntity=(s:State,id:string,kind?:Kind)=>{const e=s.entities.find(e=>e.id===id&&!e.archived);if(!e||kind&&e.kind!==kind)throw new Error('entity_unavailable');return e;};
+export function refs(e:Entity):string[]{
+ const result:string[]=[];const walk=(v:unknown,key='')=>{if(!v)return;if(typeof v==='string'&&((key.endsWith('Id')&&!['controllerUserId','sourceEventId','eventId','parentId'].includes(key))||['parentId','to'].includes(key)&&e.kind==='location'))result.push(v);
+ else if(Array.isArray(v)){if(['traits','factionIds','occupants','links','prerequisites','opposes','jurisdictionIds','memberIds','stock','suspectIds','evidenceIds','warrantLocationIds','lawIds','participants'].includes(key))result.push(...v as string[]);else v.forEach(x=>walk(x,key));}
+ else if(typeof v==='object')for(const[k,x]of Object.entries(v))if(!['sections','history','custody'].includes(k))walk(x,k);};walk(e.data);
+ if(e.kind==='character')result.push(...Object.keys(e.data.skills as object));
+ return [...new Set(result)].filter(x=>x!==e.id);
+}
+export function validateState(s:State){
+ const ids=new Set(s.entities.map(e=>e.id));if(ids.size!==s.entities.length)throw new Error('duplicate_entity_id');
+ for(const e of s.entities){validateEntity(e);for(const r of refs(e))if(!ids.has(r))throw new Error('broken_reference');}
+ for(const e of s.entities.filter(e=>!e.archived&&['location','item'].includes(e.kind))){const seen=new Set([e.id]);let p=(e.data.parentId??e.data.containerId) as string|null;while(p){if(seen.has(p))throw new Error('containment_cycle');seen.add(p);const parent=getEntity(s,p);p=(parent.data.parentId??parent.data.containerId) as string|null;}}
+ for(const k of s.knowledge)if(!s.facts.some(f=>f.id===k.factId)||!ids.has(k.observerId))throw new Error('invalid_knowledge_reference');
+ const byId=new Map(s.entities.map(e=>[e.id,e]));
+ const target=(value:unknown,kinds:Kind[])=>{if(value!==null&&value!==undefined){const e=byId.get(String(value));if(!e||!kinds.includes(e.kind))throw new Error('reference_kind_mismatch');}};
+ const common:Record<string,Kind[]>={locationId:['location'],homeId:['location'],characterId:['character'],investigatorId:['character'],employeeId:['character'],tenantId:['character'],leaderId:['character'],employerId:['business'],agencyId:['faction'],caseId:['case'],phoneId:['item'],keyId:['item'],containerId:['item','vehicle']};
+ const arrays:Record<string,Kind[]>={traits:['trait'],factionIds:['faction'],occupants:['character'],jurisdictionIds:['location'],memberIds:['character'],stock:['item'],suspectIds:['character'],evidenceIds:['evidence'],warrantLocationIds:['location'],lawIds:['law'],participants:['character']};
+ for(const e of s.entities){
+  for(const [key,kinds]of Object.entries(common))target(e.data[key],kinds);
+  for(const [key,kinds]of Object.entries(arrays))for(const value of (e.data[key]??[]) as unknown[])target(value,kinds);
+  if(['relationship','message'].includes(e.kind)){target(e.data.fromId,['character']);target(e.data.toId,['character']);}
+  if(e.kind==='location'){target(e.data.parentId,['location']);for(const exit of data(e,'location').exits){target(exit.to,['location']);target(exit.keyId,['item']);}}
+  if(e.kind==='character'){for(const skillId of Object.keys(data(e,'character').skills))target(skillId,['skill']);for(const entry of data(e,'character').schedule)target(entry.locationId,['location']);}
+ }
+ for(const [rows,label]of [[s.facts,'fact'],[s.beliefs,'belief'],[s.memories,'memory']] as const){if(new Set(rows.map(r=>r.id)).size!==rows.length)throw new Error('duplicate_'+label+'_id');}
+ for(const f of s.facts)if(!ids.has(f.subjectId))throw new Error('invalid_fact_reference');
+ for(const k of s.knowledge)target(k.observerId,['character']);
+ for(const b of s.beliefs){target(b.observerId,['character']);if(b.correctedBy&&!s.facts.some(f=>f.id===b.correctedBy))throw new Error('invalid_correction_reference');}
+ for(const m of s.memories)target(m.observerId,['character']);
+}

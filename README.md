@@ -1,8 +1,8 @@
 # VALOR
 
-Persistent, server-authoritative foundation for a Creator-authored, grounded 2012 text RPG.
+Persistent, server-authoritative web game and installable PWA for a Creator-authored, grounded 2012 text RPG.
 
-**Implemented: System 01 only.** There is no game UI, AI narrator, authored city canon, or mobile/PWA client yet. System 02 requires a separate instruction. The complete supplied brief is in [docs/IMPLEMENTATION_BRIEF.md](docs/IMPLEMENTATION_BRIEF.md).
+**Integrated alpha:** working client, Creator studio, deterministic game actions, NPC simulation, four-layer knowledge, relationships, items, health/combat, economy, investigations, Watchers, and branchable saves. This is not a claim that every advanced feature in all 18 systems is finished. See the exact [system coverage and limitations](docs/IMPLEMENTATION_STATUS.md). The complete supplied brief is in [docs/IMPLEMENTATION_BRIEF.md](docs/IMPLEMENTATION_BRIEF.md).
 
 Database determines what exists. Simulation determines what happens. AI interprets, reasons, and narrates.
 
@@ -12,13 +12,14 @@ Requires Node **24.21.x** (see .node-version).
 
 ```sh
 npm ci
+npx playwright install chromium
 npm run check
 npm test
 npm run migrate
 npm start
 ```
 
-The default API listens on http://localhost:3000. GET /healthz returns a database-backed health result. GET / explicitly reports that this foundation is not playable.
+Open http://localhost:3000/app after provisioning an account. Browser requests to / also open the client. GET /healthz returns a database-backed health result. JSON requests to / return release metadata.
 
 Optional: create .env from .env.example and customize the settings. Node loads it for start/dev/operator commands; environment variables take precedence. No credentials or database files belong in Git.
 
@@ -38,7 +39,18 @@ Remove-Variable valorCredential
 
 Use role player for ordinary accounts; campaigns separately grant player/observer/creator/admin membership. A global admin account has **no automatic access to another user's world or campaign**.
 
-See [API contract](docs/API.md) for authentication and commands, [architecture](docs/ARCHITECTURE.md) for authority and visibility, and [operations](docs/OPERATIONS.md) for migrations, backups and hosting constraints.
+See [API contract](docs/API.md) and [game API](docs/GAME_API.md) for commands, [architecture](docs/ARCHITECTURE.md) for authority and visibility, and [operations](docs/OPERATIONS.md) for migrations, backups and hosting constraints.
+
+## First game
+
+1. Sign in, create a world and campaign, and open Creator.
+2. Create a location, then a character with Playable enabled, your account as Controller, and that Location. Visibility defaults to Creator; set visible scene records to Campaign or Knowledge deliberately.
+3. Open Chronicle, choose your character, and enter `look`, `wait 10`, `say ...`, or `go to [known location]`. The structured action panel exposes all supported actions; ambiguous prose never silently chooses an action.
+4. Author NPCs, routes, objects, schedules, relationships and rules in Creator. Install the editable skill/trait catalog if wanted. No city canon or test fixture is seeded into your game.
+5. Configure resolution rules in Settings before combat/checks/treatment. Needs, fuel, mature content and external AI budgets default off/zero.
+6. Use Saves to create checkpoints, branch without overwriting a parent, export/import, and reuse world templates.
+
+On iPad Safari, use Share → Add to Home Screen. The app is a PWA, not an App Store binary. Offline mode keeps the public shell available; authoritative game actions require the server. Sign-in and private state are never cached by the service worker.
 
 ## Verification
 
@@ -52,6 +64,6 @@ The test suite uses temporary databases and synthetic test content. No test fixt
 
 ## Hosting
 
-This is a Node web service, not a static site. SQLite requires a persistent disk and a single application instance. A Render static site or ephemeral disk cannot host the authoritative state safely. No Render service, paid resource, or production deployment is created by this implementation. Release deployment is reserved for System 18 in the brief.
+This is a Node web service, not a static site. SQLite requires a persistent disk and a single application instance. A Render static site or ephemeral disk cannot host the authoritative state safely. Follow the [Render deployment runbook](docs/RENDER.md) for the supplied service. No paid resource is silently provisioned.
 
-Next authorized implementation: System 02, client shell/Chronicle/navigation/PWA, after explicit instruction.
+The optional AI gateway only arranges approved simulation fragments; it cannot invent prose or alter game state. Grounded local narration works without any API key. Rich generative narration and several advanced simulation features remain explicitly tracked in the status report.

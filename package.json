@@ -1,6 +1,6 @@
 {
   "name": "valor",
-  "version": "0.1.0",
+  "version": "0.2.0-alpha",
   "private": true,
   "type": "module",
   "engines": {
@@ -20,6 +20,8 @@
     "zod": "4.6.5"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.13.0",
+    "@playwright/test": "^1.63.0",
     "@types/node": "24.19.0",
     "typescript": "5.9.3"
   }

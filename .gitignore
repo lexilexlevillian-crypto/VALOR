@@ -8,4 +8,5 @@ backups/
 *.sqlite-wal
 *.sqlite-shm
 coverage/
+artifacts/
 *.log

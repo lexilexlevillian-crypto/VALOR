@@ -7,6 +7,9 @@ import { Auth, credentials, csrfFor } from './auth.ts';
 import { Fault, ensure, envelopeSchema, id, name, scopeSchema } from './contracts.ts';
 import type { Actor, Scope } from './contracts.ts';
 import type { Config } from './config.ts';
+import { Game } from './game/engine.ts';
+import { gameRoutes } from './game/routes.ts';
+import { publicAssets, shell, shellPolicy, staticRoutes } from './static.ts';
 
 export function buildApp(store:Store,settings:Config,logging:boolean|{write(chunk:string):void}=true) {
   const domain=new Domain(store),auth=new Auth(store,settings);
@@ -31,7 +34,7 @@ export function buildApp(store:Store,settings:Config,logging:boolean|{write(chun
     const path=request.url.split('?')[0];
     const unsafe=!['GET','HEAD','OPTIONS'].includes(request.method);
     if(unsafe)ensure(request.headers.origin===settings.origin,403,'origin_rejected');
-    if((path==='/healthz' || path==='/') && (request.method==='GET' || request.method==='HEAD'))return;
+    if((path==='/healthz' || path==='/' || publicAssets.has(path??'')) && (request.method==='GET' || request.method==='HEAD'))return;
     if(path==='/auth/login' && request.method==='POST') {
       auth.limit('login-ip',request.ip,settings.loginLimit*3,900000);
       return;
@@ -62,7 +65,10 @@ export function buildApp(store:Store,settings:Config,logging:boolean|{write(chun
     const p=scopeParams.parse(params); return scopeSchema.parse({type:p.type,id:p.scopeId});
   };
   const cursor=(query:unknown)=>z.strictObject({after:id.optional()}).parse(query).after??'';
-  app.get('/',async()=>({name:'VALOR',system:1,status:'foundation',playable:false}));
+  app.get('/',async(request,reply)=>{
+    if(request.headers.accept?.includes('text/html'))return reply.header('Content-Security-Policy',shellPolicy).type('text/html').send(shell());
+    return {name:'VALOR',version:'0.2.0-alpha',status:'integrated-alpha',playable:true,client:'/app'};
+  });
   app.get('/healthz',async()=>{store.get('SELECT 1');return {status:'ok'};});
   app.post('/auth/login',async(request,reply)=>{
     const input=credentials.parse(request.body);
@@ -111,5 +117,7 @@ export function buildApp(store:Store,settings:Config,logging:boolean|{write(chun
   });
   app.get('/scopes/:type/:scopeId/events',async(request)=>domain.history(actor(request),getScope(request.params),cursor(request.query)));
   app.get('/scopes/:type/:scopeId/audits',async(request)=>domain.audits(actor(request),getScope(request.params),cursor(request.query)));
+  gameRoutes(app,new Game(store),actor,key);
+  staticRoutes(app);
   return app;
 }
