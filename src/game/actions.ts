@@ -6,6 +6,7 @@ import type {Effect} from './simulation.ts';
 import {fact,observe,remember,visible} from './epistemics.ts';
 import {randomSource} from '../random.ts';
 import {extendedAction} from './extended-actions.ts';
+import {damageVehicle,vehicleOperational,vehiclePenalty as vehiclePenaltyFor} from './vehicle.ts';
 const requireRule=(s:State)=>{if(!s.settings.rules)throw new Error('configure_resolution_rules_first');return s.settings.rules;};
 const assert=(ok:unknown,code:string)=>{if(!ok)throw new Error(code);};
 export function resolveAction(s:State,actorId:string,action:Action,eventId:string,seed:string){
@@ -67,7 +68,7 @@ export function resolveAction(s:State,actorId:string,action:Action,eventId:strin
   if(mode==='drive'){
    const vehicle=getEntity(s,action.type==='travel'?action.vehicleId??'':'','vehicle'),d=data(vehicle,'vehicle');nearby(vehicle);
    assert(d.ownerId===actorId||d.keyId&&s.entities.some(e=>e.id===d.keyId&&e.data.ownerId===actorId),'vehicle_access_denied');
-   assert(d.condition>0,'vehicle_disabled');if(s.settings.fuel){assert(d.fuel>=travelMinutes/10,'insufficient_fuel');d.fuel-=travelMinutes/10;}
+   assert(vehicleOperational(d),'vehicle_disabled');if(s.settings.fuel){assert(d.fuel>=travelMinutes/10,'insufficient_fuel');d.fuel-=travelMinutes/10;}
    assert(d.occupants.every(id=>id===actorId||!getEntity(s,id,'character').data.playable),'passenger_consent_required');
    for(const id of d.occupants)getEntity(s,id,'character').data.locationId=arrival.id;
    d.locationId=arrival.id;vehicle.data=d as Entity['data'];
@@ -226,11 +227,11 @@ export function resolveAction(s:State,actorId:string,action:Action,eventId:strin
   assert(pc.locationId,'starting_location_required');const location=data(getEntity(s,pc.locationId!,'location'),'location');
   const route=location.exits.find(e=>e.to===action.destinationId&&!e.locked&&e.modes.includes(action.vehicleId?'drive':'walk'));
   assert(route,'route_unavailable');const destination=getEntity(s,action.destinationId,'location');assert(visible(s,destination,actorId),'destination_unknown');
-  if(action.vehicleId){const vehicle=getEntity(s,action.vehicleId,'vehicle'),v=data(vehicle,'vehicle');nearby(vehicle);assert(v.ownerId===actorId&&v.condition>0,'vehicle_access_denied');if(s.settings.fuel){assert(v.fuel>=route!.minutes/10,'insufficient_fuel');v.fuel-=route!.minutes/10;}v.locationId=destination.id;vehicle.data=v as Entity['data'];}
+  if(action.vehicleId){const vehicle=getEntity(s,action.vehicleId,'vehicle'),v=data(vehicle,'vehicle');nearby(vehicle);assert(v.ownerId===actorId&&vehicleOperational(v),'vehicle_access_denied');if(s.settings.fuel){assert(v.fuel>=route!.minutes/10,'insufficient_fuel');v.fuel-=route!.minutes/10;}v.locationId=destination.id;vehicle.data=v as Entity['data'];}
   const driving=s.entities.find(e=>e.kind==='skill'&&e.name.toLowerCase()==='driving');
-  const vehiclePenalty=action.vehicleId?(100-Number(getEntity(s,action.vehicleId,'vehicle').data.condition))/10:0;
+  const vehiclePenalty=action.vehicleId?vehiclePenaltyFor(data(getEntity(s,action.vehicleId,'vehicle'),'vehicle')):0;
   const success=roll(action.vehicleId?'Perception':'Agility',action.vehicleId?driving?.id??null:null,requireRule(s).threshold+route!.terrainPenalty+(action.vehicleId?route!.trafficPenalty+vehiclePenalty:0));
-  if(action.vehicleId){const vehicle=getEntity(s,action.vehicleId,'vehicle'),v=data(vehicle,'vehicle');assert(v.occupants.every(id=>id===actorId||!getEntity(s,id,'character').data.playable),'passenger_consent_required');for(const id of v.occupants)if(id!==actorId)getEntity(s,id,'character').data.locationId=destination.id;if(!success&&s.settings.tactics)vehicle.data.condition=Math.max(0,v.condition-s.settings.tactics.failedChaseVehicleDamage);}
+  if(action.vehicleId){const vehicle=getEntity(s,action.vehicleId,'vehicle'),v=data(vehicle,'vehicle');assert(v.occupants.every(id=>id===actorId||!getEntity(s,id,'character').data.playable),'passenger_consent_required');for(const id of v.occupants)if(id!==actorId)getEntity(s,id,'character').data.locationId=destination.id;if(!success&&s.settings.tactics){const damaged=damageVehicle(v,s.settings.tactics.failedChaseVehicleDamage,rng);vehicle.data=v as Entity['data'];say(damaged?'Vehicle damage recorded: '+damaged+'.':'Vehicle condition worsened.','vehicle.damage',vehicle.id);}}
   arrivalId=destination.id;pc.locationId=null;target.data.locationId=destination.id;minutes=route!.minutes;
   if(success)target.data.fatigue=Math.min(100,Number(target.data.fatigue)+10);
   say(success?'The pursuit closes the distance.':'The pursued character maintains separation.');fact(s,target.id,'chase',{pursuerId:actorId,closed:success},eventId,atLocation(s,destination.id).map(e=>e.id));break;

@@ -77,7 +77,7 @@ const item=z.strictObject({...common,category:z.enum(['object','clothing','weapo
 const vehicle=z.strictObject({...common,ownerId:ref,locationId:ref,keyId:ref,plate:short.default(''),registration:text.default(''),
  category:z.enum(['car','truck','motorcycle','bus','taxi','transit']).default('car'),fuel:unit.default(100),condition:unit.default(100),
  capacity:z.number().int().min(1).max(100).default(5),occupants:z.array(id).default([]),stolen:z.boolean().default(false),locked:z.boolean().default(true),
- trunkCapacity:z.number().min(0).max(100000).default(0)
+ trunkCapacity:z.number().min(0).max(100000).default(0),components:z.record(z.string(),unit).default({})
 });
 const relation=z.strictObject({...common,fromId:id,toId:id,labels:tags,attraction:score.default(0),affection:score.default(0),trust:score.default(0),
  respect:score.default(0),attachment:score.default(0),familiarity:score.default(0),desire:score.default(0),jealousy:score.default(0),

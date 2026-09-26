@@ -3,6 +3,7 @@ import type {Action,Data,Entity,State} from './model.ts';
 import {visible,fact} from './epistemics.ts';
 import {add,emit,isOpen} from './simulation.ts';
 import type {Effect} from './simulation.ts';
+import {vehicleOperational} from './vehicle.ts';
 const requireCondition=(ok:unknown,code:string)=>{if(!ok)throw new Error(code);};
 export function extendedAction(s:State,actorId:string,pc:Data<'character'>,action:Action,eventId:string,effects:Effect[]):number{
  const output=(text:string)=>emit(effects,text,[actorId],action.type,actorId);
@@ -85,7 +86,7 @@ export function extendedAction(s:State,actorId:string,pc:Data<'character'>,actio
    const access=v.ownerId===actorId||!!v.keyId&&s.entities.some(e=>e.id===v.keyId&&!e.archived&&e.data.ownerId===actorId);
    if(action.operation==='leave'){requireCondition(v.occupants.includes(actorId),'not_in_vehicle');v.occupants=v.occupants.filter(id=>id!==actorId);}
    else{requireCondition(access,'vehicle_access_denied');
-    if(action.operation==='enter'){requireCondition(!v.locked&&v.condition>0,'vehicle_unavailable');requireCondition(!v.occupants.includes(actorId)&&v.occupants.length<v.capacity,'vehicle_capacity');requireCondition(!s.entities.some(e=>e.kind==='vehicle'&&e.id!==vehicle.id&&(e.data.occupants as string[]).includes(actorId)),'already_in_vehicle');v.occupants.push(actorId);}
+    if(action.operation==='enter'){requireCondition(!v.locked&&vehicleOperational(v),'vehicle_unavailable');requireCondition(!v.occupants.includes(actorId)&&v.occupants.length<v.capacity,'vehicle_capacity');requireCondition(!s.entities.some(e=>e.kind==='vehicle'&&e.id!==vehicle.id&&(e.data.occupants as string[]).includes(actorId)),'already_in_vehicle');v.occupants.push(actorId);}
     else v.locked=action.operation==='lock';
    }
    vehicle.data=v as Entity['data'];output('Vehicle access recorded: '+action.operation+'.');return 0;
