@@ -1,0 +1,9 @@
+CREATE INDEX records_campaign ON records(campaign_id,archived_at,id);
+CREATE INDEX records_world ON records(world_id,archived_at,id);
+CREATE INDEX sections_record ON sections(record_id,position,id);
+CREATE INDEX fields_record ON fields(record_id,position,id);
+CREATE INDEX events_campaign ON domain_events(campaign_id,created_at,id);
+CREATE INDEX audits_campaign ON audit_log(campaign_id,created_at,id);
+CREATE INDEX memberships_user ON memberships(user_id,campaign_id);
+CREATE INDEX sessions_expiry ON sessions(expires_at);
+CREATE INDEX outbox_pending ON outbox(delivered_at,created_at);
