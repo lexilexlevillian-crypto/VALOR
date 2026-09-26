@@ -64,6 +64,6 @@ The test suite uses temporary databases and synthetic test content. No test fixt
 
 ## Hosting
 
-This is a Node web service, not a static site. SQLite requires a persistent disk and a single application instance. A Render static site or ephemeral disk cannot host the authoritative state safely. Follow the [Render deployment runbook](docs/RENDER.md) for the supplied service. No paid resource is silently provisioned.
+This is a Node web service, not a static site. Production uses external Turso/libSQL through `@libsql/client`, so it can run on a free Render Web Service without a persistent disk. Set `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN`, HTTPS `APP_ORIGIN`, and a `RATE_LIMIT_SECRET` of at least 32 characters privately in Render. Production never falls back to a local file. Local development still uses `DATABASE_PATH` when Turso is unset. Follow the [Render deployment runbook](docs/RENDER.md); no paid resource is silently provisioned.
 
 The optional AI gateway only arranges approved simulation fragments; it cannot invent prose or alter game state. Grounded local narration works without any API key. Rich generative narration and several advanced simulation features remain explicitly tracked in the status report.

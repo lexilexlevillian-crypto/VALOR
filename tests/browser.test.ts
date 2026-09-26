@@ -35,12 +35,12 @@ test('iPad shell, keyboard login, Creator form, long prose, reduced motion and o
   await page.setViewportSize({width:1180,height:820});
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
   await page.screenshot({path:'artifacts/ipad-landscape.png',fullPage:true});
-  const game=new Game(f.store),timeline=f.store.get<{id:string}>('SELECT id FROM timelines LIMIT 1')!;
-  const room=game.load(timeline.id).entities.find(e=>e.kind==='location')!;
+  const game=new Game(f.store),timeline=(await f.store.get<{id:string}>('SELECT id FROM timelines LIMIT 1'))!;
+  const room=(await game.load(timeline.id)).entities.find(e=>e.kind==='location')!;
   room.data.description=Array.from({length:45},()=> 'This is synthetic test prose, used only to verify long-form Chronicle layout.').join('\n\n');
-  game.edit(f.creator,timeline.id,{revision:game.access(f.creator,timeline.id).t.revision,entity:room},randomUUID());
+  (await game.edit(f.creator,timeline.id,{revision:(await game.access(f.creator,timeline.id)).t.revision,entity:room},randomUUID()));
   const character=validateEntity({id:randomUUID(),kind:'character',name:'Browser test character',visibility:'campaign',data:{playable:true,controllerUserId:f.creator.id,locationId:room.id}});
-  game.edit(f.creator,timeline.id,{revision:game.access(f.creator,timeline.id).t.revision,entity:character},randomUUID());
+  (await game.edit(f.creator,timeline.id,{revision:(await game.access(f.creator,timeline.id)).t.revision,entity:character},randomUUID()));
   await page.getByRole('button',{name:'Chronicle',exact:true}).click();
   await page.getByRole('button',{name:'Continue as Browser test character'}).click();
   await page.getByRole('button',{name:'Look around',exact:true}).click();

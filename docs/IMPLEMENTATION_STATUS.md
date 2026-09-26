@@ -6,7 +6,7 @@ Build: 0.2.0-alpha, 2026-09-26. The owner authorized continuing across systems a
 
 | System | Implemented and exercised | Remaining limits / decisions |
 | --- | --- | --- |
-| 01 Foundation | Durable SQLite migrations, role/tenant boundaries, stable IDs, atomic commands, immutable histories, receipts, outbox, backup/restore | Game events use a separate event table; game outbox delivery integration remains |
+| 01 Foundation | Async Turso/libSQL production storage, local SQLite, unchanged migrations, role/tenant boundaries, stable IDs, atomic commands, immutable histories, receipts, outbox, backup/restore | Game events use a separate event table; game outbox delivery integration remains |
 | 02 Client | Responsive Chronicle, dossier navigation, long prose, structured actions, server state, PWA shell, keyboard/focus/reduced motion | Physical iPad/Safari and screen-reader acceptance; no native App Store binary |
 | 03 AI | Grounded narrator, optional HTTPS gateway, strict source-ID output, no rerolls, timeouts/retries/circuit breaker, campaign/user budgets | Gateway arranges existing fragments only; rich narration, model routing, language intent parsing and HTTP streaming are not complete; no paid provider tested |
 | 04 Knowledge | Separate world truth, knowledge, beliefs and memories; correction/retirement/refresh; private retrieval, lexical plus optional supplied vectors, Story Cards | No embedding service/index or automated long-history summarizer; observer fact values need continued adversarial review |
@@ -23,14 +23,14 @@ Build: 0.2.0-alpha, 2026-09-26. The owner authorized continuing across systems a
 | 15 Saves | Atomic autosaves/manual saves, checksums, immutable parent/child branches, Chronicle preservation, import/export, full DB restore | No thumbnails/comparison diff UI; full snapshots grow with history; retention/compaction and version-upgrade migrations for future save formats remain |
 | 16 Creator | Every current typed entity via forms, NPC search/list, duplicate/archive, stable nested fields, references, epistemics, templates, event trace, dry-run import | Bulk transactions, graphical previews, media packaging, record-level version restore, advanced safe repair tools remain |
 | 17 Quality | Authorization/invariant/adversarial tests, isolated fixture data, AI budgets, browser accessibility, offline/reconnect, large roster benchmark | No multi-day soak, physical-device profiling or full privacy/security audit; AI billing telemetry is estimated |
-| 18 Operations | Production config checks, health endpoint, CI workflow, release metadata, backup/restore rehearsal, Render runbook | Authenticated Render inspection, durable disk validation, live deploy/restart persistence, off-host backups and monitoring remain unverified |
+| 18 Operations | Turso production config checks (no Render disk), awaited startup migrations, health endpoint, CI workflow, full-database import/backup, Render runbook | Live Turso connectivity, Render deploy/restart persistence, off-host backups and monitoring remain unverified |
 
 ## Exact verification evidence
 
 On Windows, Node 24.21.0:
 
 - `npm run check`: passed.
-- `npm test`: 39 passed, 0 failed, about 40.9 seconds.
+- Original integrated-alpha suite: 39 tests. Turso migration adds transaction isolation, complete-table backup, legacy SQLite preservation, configuration, no-fallback and startup-failure regression coverage; 46 tests pass with local libSQL. This is not a live Turso/Render acceptance result.
 - `npm audit --omit=dev --audit-level=high`: 0 vulnerabilities.
 - Browser test: Chromium iPad-sized portrait/landscape and 390px mobile, keyboard sign-in, Creator form save, 3,000+ character prose, reduced motion, offline shell/reconnect; zero axe violations in the checked screens and zero uncaught page errors. Not a physical Safari/VoiceOver certification.
 - Integrated acceptance: author PC/NPC; look; drive/travel/time; NPC schedule; directional social interaction; phone; medicine/injury; witnessed act/report; evidence discovery/case; timed offer; checkpoint; branch; full export/import; no hidden NPC secret leakage.
@@ -49,4 +49,4 @@ Creator accounts can deliberately edit canonical state and hidden content; this 
 
 The selected Render service is `srv-das0ah59fdbs73bbk7hg`, https://valor-uwgb.onrender.com. The owner installed/connected the Render plugin during this task, and its skills are now visible, but its service-management tools have not loaded in this running task. The plugin's Render MCP setup guidance calls for a new Codex task/reload to load its MCP server and complete OAuth when prompted. No paid service, disk, production credentials or live deployment were changed.
 
-Immediate release priority: load the Render connection, inspect that existing service and persistent disk, and complete the documented staging deploy/restart/restore acceptance. Do not treat the alpha as production-complete or skip the remaining feature matrix. After staging is safe, the main gameplay priority is the rich, knowledge-filtered narration/intent layer with explicit action confirmation and adversarial evaluation.
+Immediate release priority: configure external Turso privately on the existing free Render service and complete the documented deploy/restart/restore acceptance without a Render disk. Do not treat the alpha as production-complete or skip the remaining feature matrix. After deployment is verified, the main gameplay priority is the rich, knowledge-filtered narration/intent layer with explicit action confirmation and adversarial evaluation.

@@ -2,7 +2,7 @@
 
 ## Database and migrations
 
-Local default: data/valor.sqlite, excluded from Git. Run npm run migrate before use; startup also verifies/applies migrations. All SQL migrations run transactionally with checksums. Never edit an applied migration. Add a forward-compatible migration for future changes. Startup refuses unknown schema versions and modified migration checksums.
+Local default: data/valor.sqlite, excluded from Git. Production uses external Turso via the official @libsql/client package. Run npm run migrate before use; startup also awaits verification/application of every migration before accepting requests. All SQL migrations run transactionally with checksums. Never edit an applied migration. Add a forward-compatible migration for future changes. Startup refuses unknown schema versions and modified migration checksums; connectivity/authentication failures never create a local fallback database.
 
 001_foundation establishes the durable model, constraints and immutable history triggers. 002_query_indexes adds scoped query indexes. 003_game adds timelines, typed entities, epistemic tables, game events, saves, templates and AI usage. 004_chronicle_lineage preserves historical turns across branches/imports. Tests migrate a populated 001 database forward through all migrations and inspect it from a new Node process.
 
@@ -14,7 +14,7 @@ No destructive down-migration is shipped: losing user history is unacceptable. T
 npm run backup -- ./backups/valor-before-change.sqlite
 ```
 
-The online SQLite backup API captures committed state consistently, including WAL-backed writes. A new destination is required. The command checks database integrity and foreign keys before reporting success. Protect backup directories as carefully as the live database: they include private canon, user information, password hashes and session hashes.
+Run backup on a trusted operator computer with the intended database environment. A libSQL read transaction captures the complete schema and all rows (including rowids that determine history order), then copies them into a new local SQLite file in a transaction. Indexes and immutable-history triggers are restored after the data. The command checks integrity and foreign keys before reporting success and refuses existing destinations. This covers accounts, sessions, lore, story, saves, receipts and all other tables, not just game exports. Protect backups: they contain private canon, user information, password hashes and session hashes. A failed backup must not be used. The snapshot is held in memory; large databases need a separately rehearsed provider-level backup strategy.
 
 A trusted operator should schedule this command and copy verified backups to access-controlled off-host storage. Scheduling, retention duration, encryption/key custody and the destination are deployment decisions; none has been silently provisioned.
 
@@ -23,7 +23,7 @@ Restore rehearsal:
 1. Produce a verified backup at a new path.
 2. Stop the application before switching the live database.
 3. Preserve the current database and associated WAL files for investigation.
-4. Set DATABASE_PATH to the restored copy, run migrations with the intended application version, then start.
+4. For local development, set DATABASE_PATH to the restored copy with both Turso variables unset. For production, provision a separate empty Turso/libSQL database, configure its credentials privately on the operator computer, and run `npm run db:import -- <verified-backup.sqlite>` BEFORE starting the server or running migrations on the destination. The import refuses nonempty destinations. Run migrations with the intended application version, then point the stopped service at that verified database.
 5. Check /healthz and authenticated campaign/record access.
 6. For a real security-incident restore, revoke restored sessions before accepting traffic.
 
@@ -31,7 +31,7 @@ The automated backup tests open independent restored databases, verify records a
 
 ## Configuration and secrets
 
-Production requires NODE_ENV=production, an HTTPS APP_ORIGIN with no path (or Render's RENDER_EXTERNAL_URL), absolute DATABASE_PATH on durable storage, and a random RATE_LIMIT_SECRET of at least 32 characters. HOST defaults to 0.0.0.0 in production; PORT honors the hosting environment. Never put secrets in source, prompts, logs, client bundles or Git.
+Production requires NODE_ENV=production, an HTTPS APP_ORIGIN with no path (or Render's RENDER_EXTERNAL_URL), TURSO_DATABASE_URL (libsql:// or https://), TURSO_AUTH_TOKEN, and a random RATE_LIMIT_SECRET of at least 32 characters. Both Turso variables must be supplied together in any environment. URLs with embedded credentials, query parameters or non-root paths are rejected. DATABASE_PATH is ignored when Turso is configured; there is no absolute-path or persistent-disk requirement. HOST defaults to 0.0.0.0 in production; PORT honors the hosting environment. Never put secrets in source, prompts, logs, client bundles or Git.
 
 The local API binds to 127.0.0.1. No TLS termination is implemented in Node; production must sit behind trusted HTTPS hosting. Forwarded IP headers are deliberately ignored. Behind a shared reverse proxy, per-IP rate limits may apply to all users of that proxy until its exact trust policy is configured and tested. Do not enable blanket proxy trust.
 
@@ -41,20 +41,20 @@ Node uses restrictive umask for server/operator processes. Unix database files a
 
 ## Render boundary
 
-Use a **Web Service**, never Static Site, for this foundation. Expected runtime: Node 24.21.x, npm ci for install, npm start for launch, /healthz for health. SQLite needs a persistent disk and one service instance; ephemeral storage loses the game database on replacement. Do not run multiple replicas or multiple machines against this database. Moving to PostgreSQL would require an explicit migration and concurrency review.
+Use a **Web Service**, never Static Site. Expected runtime: Node 24.21.x, npm ci --omit=dev for install, npm start for launch, /healthz for health. A free single-instance service can keep authoritative state in external Turso without a Render disk. Keep one application instance: narration concurrency guards are process-local and multi-instance operation needs a separate review. Local SQLite is for development, not Render's ephemeral filesystem.
 
-The user supplied https://valor-uwgb.onrender.com and service srv-das0ah59fdbs73bbk7hg. Authenticated management access and persistent storage remain unverified; a public health request timed out. No Render blueprint is applied and no paid resource is provisioned. Follow RENDER.md; the implementation lives on full-game-implementation, without overwriting main or the foundation branch.
+The supplied service is https://valor-uwgb.onrender.com, ID srv-das0ah59fdbs73bbk7hg. This storage migration does not modify Render settings or access a live Turso database. Follow RENDER.md; the implementation lives on full-game-implementation, without overwriting main or the foundation branch. Deployment and live restart persistence still require verification.
 
 ## Logs and failure handling
 
 Request logs include generated request ID, method, route template and status. Never log raw requests, full URLs, command payloads, query strings, narration context or hidden fields. Authentication and privileged changes also have database audit records. A 500 gives the user only a correlation ID and generic error. Backups and migrations fail rather than pretending success.
 
-SIGINT/SIGTERM stop accepting traffic, close the HTTP server, then close SQLite. Host/process failure rolls back uncommitted transactions. Outbox delivery retries until successful; consumers must deduplicate event IDs. There is no public event subscription endpoint.
+SIGINT/SIGTERM stop accepting traffic, close the HTTP server, then close the libSQL client. Uncommitted transactions are rolled back; remote transaction expiry also fails closed. Outbox delivery retries until successful; consumers must deduplicate event IDs. There is no public event subscription endpoint.
 
 ## AI and storage governance
 
 External AI requires operator-configured AI_GATEWAY_URL and AI_GATEWAY_SECRET plus nonzero campaign and per-user token budgets. Only observer-permitted fragments leave the server. Reservations conservatively cover both possible attempts and are not refunded on failure; usage values are estimates, not vendor billing. Each attempt has a 12-second deadline; two attempts maximum, timeline concurrency exclusion and a circuit breaker. Credentials and raw contexts must not be logged. Do not configure a gateway you do not trust with story text. Paid provider behavior has not been live-tested.
 
-Every committed mutation creates an immutable autosave. Snapshots currently include full state and transcript, so long campaigns can grow quadratically. Monitor disk usage and backup duration; no automatic history deletion or retention pruning is implemented. Large production campaigns need snapshot compaction/retention design before general release. Monitor HTTP availability/error rates externally and keep backups off-host; no monitoring account, scheduler, billing or off-host destination has been provisioned.
+Every committed mutation creates an immutable autosave. Snapshots currently include full state and transcript, so long campaigns can grow quadratically. Monitor Turso storage, query/transfer limits and backup duration; no automatic history deletion or retention pruning is implemented. Large production campaigns need snapshot compaction/retention design before general release. Monitor HTTP availability/error rates externally and keep backups off-host; no monitoring account, scheduler, billing or off-host destination has been provisioned.
 
 See IMPLEMENTATION_STATUS.md for per-system coverage and remaining work. Passing local tests does not certify production deployment or physical-device accessibility.

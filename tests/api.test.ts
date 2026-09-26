@@ -17,8 +17,8 @@ test('authentication, HttpOnly sessions, CSRF, expiry, logout and persistence ac
     assert.equal(session.headers['cache-control'],'no-store');
     assert.equal(session.json().csrfToken,auth.csrf);
     const rawToken=auth.cookie.split('=')[1]!;
-    assert.equal(f.store.get<{token_hash:string}>('SELECT token_hash FROM sessions')!.token_hash,hash(rawToken));
-    assert.doesNotMatch(JSON.stringify(f.store.all('SELECT * FROM users')),new RegExp(password.replace(/[.*+?^$\{\}()|[\]\\]/g,'\\$&')));
+    assert.equal((await f.store.get<{token_hash:string}>('SELECT token_hash FROM sessions'))!.token_hash,hash(rawToken));
+    assert.doesNotMatch(JSON.stringify((await f.store.all('SELECT * FROM users'))),new RegExp(password.replace(/[.*+?^$\{\}()|[\]\\]/g,'\\$&')));
     const secondApp=buildApp(f.store,f.settings,false);
     try {assert.equal((await secondApp.inject({url:'/auth/session',headers:{cookie:auth.cookie}})).statusCode,200);}
     finally {await secondApp.close();}
@@ -27,7 +27,7 @@ test('authentication, HttpOnly sessions, CSRF, expiry, logout and persistence ac
     const response=await f.app.inject({method:'POST',url:'/auth/logout',headers:{cookie:auth.cookie,origin:f.settings.origin,'x-csrf-token':auth.csrf}});
     assert.equal(response.statusCode,200);assert.match(String(response.headers['set-cookie']),/Max-Age=0/);
     assert.equal((await f.app.inject({url:'/auth/session',headers:{cookie:auth.cookie}})).statusCode,401);
-    const fresh=await login(f);f.store.run("UPDATE sessions SET expires_at='2000-01-01T00:00:00.000Z'");
+    const fresh=await login(f);(await f.store.run("UPDATE sessions SET expires_at='2000-01-01T00:00:00.000Z'"));
     assert.equal((await f.app.inject({url:'/auth/session',headers:{cookie:fresh.cookie}})).statusCode,401);
   }finally{await f.close();}
 });
@@ -64,7 +64,7 @@ test('API rejects extra authority claims, oversized and malformed bodies, client
     assert.equal(malformed.statusCode,400);
     const valid=await send({scope:f.scope,command});
     assert.equal(valid.statusCode,200,valid.body);
-    assert.equal(f.store.get<{n:number}>('SELECT count(*) n FROM users')!.n,4);
+    assert.equal((await f.store.get<{n:number}>('SELECT count(*) n FROM users'))!.n,4);
     const read=await f.app.inject({url:'/scopes/campaign/'+f.campaign.id+'/records/'+valid.json().id,headers:{cookie:auth.cookie}});
     assert.equal(read.json().name,command.name);
   }finally{await f.close();}
@@ -90,7 +90,7 @@ test('HTTP campaign queries, commands and privileged histories enforce role and 
 test('simultaneous HTTP commands with the same revision commit once, and duplicate delivery returns the receipt',async()=>{
   const f=await fixture();
   try {
-    const auth=await login(f),rec=f.execute({type:'record.create',name:'Concurrency',kind:'test',visibility:'campaign'});
+    const auth=await login(f),rec=(await f.execute({type:'record.create',name:'Concurrency',kind:'test',visibility:'campaign'}));
     const command={type:'record.update',recordId:rec.id,expectedRevision:1,name:'Changed',visibility:'campaign'};
     const request=(idempotencyKey:string)=>f.app.inject({method:'POST',url:'/commands',headers:{cookie:auth.cookie,origin:f.settings.origin,'x-csrf-token':auth.csrf,'idempotency-key':idempotencyKey},payload:{scope:f.scope,command}});
     const firstKey=key(),secondKey=key();
@@ -99,7 +99,7 @@ test('simultaneous HTTP commands with the same revision commit once, and duplica
     const success=results.findIndex(r=>r.statusCode===200);
     const replay=await request(success===0?firstKey:secondKey);
     assert.deepEqual(replay.json(),results[success]!.json());
-    assert.equal(f.store.get<{n:number}>('SELECT count(*) n FROM domain_events WHERE aggregate_id=?',rec.id)!.n,2);
+    assert.equal((await f.store.get<{n:number}>('SELECT count(*) n FROM domain_events WHERE aggregate_id=?',rec.id))!.n,2);
   }finally{await f.close();}
 });
 
@@ -113,8 +113,8 @@ test('login rate limit is durable, per-account and immune to spoofed forwarded h
     const limited=await attempt('3.3.3.3');
     assert.equal(limited.statusCode,429);assert.ok(limited.headers['retry-after']);
     const auth=new Auth(f.store,{...f.settings,loginLimit:2});
-    assert.throws(()=>auth.limit('login-account','nonexistent@example.test',2,900000),/rate_limited/);
-    assert.doesNotMatch(JSON.stringify(f.store.all('SELECT * FROM rate_limits')),/nonexistent|1\.1\.1\.1/);
+    (await assert.rejects(async ()=>(await auth.limit('login-account','nonexistent@example.test',2,900000)),/rate_limited/));
+    assert.doesNotMatch(JSON.stringify((await f.store.all('SELECT * FROM rate_limits'))),/nonexistent|1\.1\.1\.1/);
   }finally{await app.close();await f.close();}
 });
 
@@ -128,7 +128,7 @@ test('logs and internal errors exclude cookies, passwords, raw bodies, query str
     const cookie=String(response.headers['set-cookie']).split(';')[0]!;
     const csrf=response.json().csrfToken;
     await app.inject({url:'/not-a-route?secret=SECRET_QUERY',headers:{cookie,authorization:'Bearer SECRET_AUTH'}});
-    f.store.db.exec("CREATE TRIGGER fail_events BEFORE INSERT ON domain_events BEGIN SELECT RAISE(ABORT,'SECRET_INTERNAL'); END;");
+    (await f.store.exec("CREATE TRIGGER fail_events BEFORE INSERT ON domain_events BEGIN SELECT RAISE(ABORT,'SECRET_INTERNAL'); END;"));
     const error=await app.inject({method:'POST',url:'/commands',headers:{cookie,origin:f.settings.origin,'x-csrf-token':csrf,'idempotency-key':key()},payload:{scope:f.scope,command:{type:'record.create',name:'SECRET_BODY',kind:'test',visibility:'creator'}}});
     assert.equal(error.statusCode,500);
     assert.doesNotMatch(error.body,/SECRET_INTERNAL|SECRET_BODY/);

@@ -1,5 +1,11 @@
 # System 01 architecture
 
+## Current storage implementation
+
+The official `@libsql/client` adapter now serves remote Turso in production and local SQLite in development. Store operations and every database caller are asynchronous. Write transactions use libSQL's write mode (BEGIN IMMEDIATE semantics); an AsyncLocalStorage transaction context and per-Store queue prevent overlapping requests from sharing a transaction. Nested operations reuse the transaction, and the callback must settle before commit. Errors roll back state, receipts, audits and saves together. State loads use read snapshots; persistence batches existing SQL statements to limit network round trips. Schema migrations 001–004 are unchanged and awaited before listening. No local replica, disk-backed production fallback, or client-side token is used.
+
+Turso credentials grant server-side database access; protect them like account data. The original foundation discussion below is historical where it describes OS-only storage boundaries or systems implemented later.
+
 ## Authority
 
 The client supplies authenticated intent, an idempotency key, and expected revision. Server schemas reject unknown properties, including client actor IDs, seeds, outcomes and clocks. Actor identity comes from a database-backed session. All domain writes authorize the actor and scope inside BEGIN IMMEDIATE, validate the command, update projections, append a versioned event and audit entry, queue an outbox notification, and save the response receipt before committing.
