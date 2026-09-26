@@ -53,6 +53,17 @@ Request logs include generated request ID, method, route template and status. Ne
 
 SIGINT/SIGTERM stop accepting traffic, close the HTTP server, then close the libSQL client. Uncommitted transactions are rolled back; remote transaction expiry also fails closed. Outbox delivery retries until successful; consumers must deduplicate event IDs. There is no public event subscription endpoint.
 
+## Durable event worker
+
+The committed game-event outbox can be drained by the authenticated webhook worker:
+
+```sh
+VALOR_EVENT_WEBHOOK_URL=https://trusted.example/events `
+VALOR_EVENT_WEBHOOK_SECRET=<32-or-more-random-characters> `
+VALOR_WORKER_ONCE=1 npm run worker
+```
+
+The worker sends one event per POST with `x-valor-event-id`; consumers must deduplicate that ID. It rejects URLs with credentials, query strings or fragments, requires HTTPS/HTTP explicitly, uses a bounded timeout, leases rows through the existing at-least-once delivery contract, and fails closed when configuration is absent. For a continuously running process omit `VALOR_WORKER_ONCE`; deployment still requires an operator-selected destination, secret, database credentials and external alerting policy.
 ## AI and storage governance
 
 External AI requires either server-only GEMINI_API_KEY (GOOGLE_API_KEY is also accepted), or a trusted AI_GATEWAY_URL and AI_GATEWAY_SECRET, plus nonzero campaign and per-user token budgets. Only observer-permitted fragments and a bounded, knowledge-filtered continuity brief leave the server. Gemini is selected automatically in Chronicle when available; users can choose grounded narration instead. Reservations conservatively cover both possible attempts and are not refunded on failure; usage values are estimates, not vendor billing. Each attempt has a 12-second deadline; two attempts maximum, timeline concurrency exclusion and a circuit breaker. Credentials and raw contexts must not be logged. Do not configure a gateway you do not trust with story text. Real provider behavior has not been live-tested. See SYSTEMS_EXPANSION.md for the current fragment-ordering limitation.

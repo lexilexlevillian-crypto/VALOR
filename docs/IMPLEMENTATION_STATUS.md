@@ -8,7 +8,7 @@ Current expansion: see [LIFECYCLE_SYSTEMS.md](LIFECYCLE_SYSTEMS.md) for migratio
 
 | System | Implemented and exercised | Remaining limits / decisions |
 | --- | --- | --- |
-| 01 Foundation | Async Turso/libSQL, local SQLite, forward migrations through 007, role/tenant boundaries, atomic commands, histories/receipts, leased game-event outbox, full backup/restore | External notification consumer deployment remains |
+| 01 Foundation | Async Turso/libSQL, local SQLite, forward migrations through 007, role/tenant boundaries, atomic commands, histories/receipts, leased game-event outbox, full backup/restore, authenticated webhook worker | External webhook destination, secret provisioning and worker deployment remain |
 | 02 Client | Responsive Chronicle, dossier navigation, long prose, structured actions, server state, PWA shell, keyboard/focus/reduced motion | Physical iPad/Safari and screen-reader acceptance; no native App Store binary |
 | 03 AI | Direct Gemini, trusted gateway, confirmed model-assisted bounded action selection, strict source-ID narration, validated paragraph streaming, no rerolls, shared campaign/user budgets and failure guards | Opt-in source-anchored prose is validated by fragment coverage and protected dialogue; arbitrary natural-language tools remain outside the contract; providers are mocked, not live-tested |
 | 04 Knowledge | Separate truth/knowledge/beliefs/memories, provenance/correction, private retrieval, supplied vectors, Story Cards, bounded extractive continuity brief with repetition suppression | Deterministic local semantic retrieval and supplied vectors are available; no external embedding service or generative long-history summarizer; continued adversarial review required |
@@ -25,7 +25,7 @@ Current expansion: see [LIFECYCLE_SYSTEMS.md](LIFECYCLE_SYSTEMS.md) for migratio
 | 15 Saves | Atomic saves/checksums/branches, immutable compressed deduplicated blocks, old-save compatibility, self-contained exports, backup/restore, comparison and record recovery | No destructive pruning/GC, thumbnails or unlimited-storage promise |
 | 16 Creator | Typed forms/search/references/templates, atomic batches, record restore, authoritative settings, observer preview, read-only diagnostics, image upload and compatibility reports | No unrestricted SQL repair tools or full graphical world editor |
 | 17 Quality | Authorization/invariant/adversarial tests, isolated fixture data, AI budgets, browser accessibility, offline/reconnect, large roster benchmark | No multi-day soak, physical-device profiling or full privacy/security audit; AI billing telemetry is estimated |
-| 18 Operations | Turso/no-disk validation, awaited migrations, health endpoint, CI, full backup/import; existing Render service and public health inspected | Exact release deployment recorded in handoff; live account/save restart, off-host backup scheduling and alerts remain acceptance tasks |
+| 18 Operations | Turso/no-disk validation, awaited migrations, health endpoint, CI, full backup/import; existing Render service and public health inspected; exact current Render deploy recorded | Live account/save restart, off-host backup scheduling and alerts remain acceptance tasks |
 
 ## Exact verification evidence
 
