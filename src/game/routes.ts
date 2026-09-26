@@ -8,10 +8,12 @@ import {NarrativeGateway,GroundedProvider,JsonGatewayProvider} from './ai.ts';
 import type {NarrativeProvider} from './ai.ts';
 import {Readable} from 'node:stream';
 import {geminiFromEnvironment} from './gemini.ts';
+import {IntentGateway} from './ai-intent.ts';
 export function gameRoutes(app:FastifyInstance,game:Game,actor:(r:object)=>Actor,key:(headers:Record<string,unknown>)=>string){
  const providers:NarrativeProvider[]=[new GroundedProvider(),...(process.env.AI_GATEWAY_URL&&process.env.AI_GATEWAY_SECRET?[new JsonGatewayProvider(process.env.AI_GATEWAY_URL,process.env.AI_GATEWAY_SECRET)]:[])];
  const gemini=geminiFromEnvironment();if(gemini)providers.push(gemini);
  const ai=new NarrativeGateway(game,providers);
+ const intent=new IntentGateway(game,gemini?[gemini]:[],ai.inflight);
  const timeline=(r:FastifyRequest)=>z.object({id}).parse(r.params).id;
  const bodyRevision=z.number().int().positive();
  const wrap=async(fn:()=>unknown)=>{try{return await fn();}catch(error){if(error instanceof Fault||error instanceof z.ZodError)throw error;if(error instanceof Error&&/^[a-z_]+$/.test(error.message))throw new Fault(400,error.message);throw error;}};
@@ -21,6 +23,11 @@ export function gameRoutes(app:FastifyInstance,game:Game,actor:(r:object)=>Actor
  app.get('/game/timelines/:id/roster',async r=>(await game.roster(actor(r),timeline(r))));
  app.get('/game/timelines/:id/view',async r=>{const query=z.strictObject({characterId:id}).parse(r.query);return wrap(async ()=>(await game.view(actor(r),timeline(r),query.characterId)));});
  app.get('/game/timelines/:id/creator',async r=>(await game.creator(actor(r),timeline(r))));
+ app.get('/game/timelines/:id/preview',async r=>{const q=z.strictObject({characterId:id}).parse(r.query);return wrap(()=>game.preview(actor(r),timeline(r),q.characterId));});
+ app.get('/game/timelines/:id/diagnostics',async r=>wrap(()=>game.diagnostics(actor(r),timeline(r))));
+ app.get('/game/timelines/:id/media/:mediaId',async(r,reply)=>{const p=z.object({id,mediaId:id}).parse(r.params),q=z.strictObject({characterId:id}).parse(r.query);const asset=await game.media(actor(r),p.id,p.mediaId,q.characterId);return reply.type(asset.mime).header('Content-Disposition','inline').send(asset.bytes);});
+ app.post('/game/timelines/:id/media',{bodyLimit:400000},async r=>{const b=z.strictObject({revision:bodyRevision,entity:z.unknown()}).parse(r.body);const entity=z.object({kind:z.literal('media')}).passthrough().parse(b.entity);return wrap(()=>game.edit(actor(r),timeline(r),{revision:b.revision,entity},key(r.headers)));});
+ app.get('/game/timelines/:id/saves/compatibility',async r=>{const q=z.strictObject({saveId:id}).parse(r.query);return wrap(()=>game.saveCompatibility(actor(r),timeline(r),q.saveId));});
  app.post('/game/timelines/:id/entities',async r=>{const input=z.strictObject({revision:bodyRevision,entity:z.unknown()}).parse(r.body);return wrap(async ()=>(await game.edit(actor(r),timeline(r),input,key(r.headers))));});
  app.post('/game/timelines/:id/entities/bulk',{bodyLimit:2*1024*1024},async r=>{const b=z.strictObject({revision:bodyRevision,entities:z.array(z.unknown()).min(1).max(100)}).parse(r.body);return wrap(()=>game.bulkEdit(actor(r),timeline(r),b,key(r.headers)));});
  app.get('/game/timelines/:id/saves/compare',async r=>{const q=z.strictObject({saveId:id}).parse(r.query);return wrap(()=>game.compareSave(actor(r),timeline(r),q.saveId));});
@@ -31,6 +38,7 @@ export function gameRoutes(app:FastifyInstance,game:Game,actor:(r:object)=>Actor
   return wrap(async ()=>(await game.epistemic(actor(r),timeline(r),b.revision,b,key(r.headers))));
  });
  app.post('/game/timelines/:id/parse',async r=>{const b=z.strictObject({characterId:id,text:z.string().min(1).max(1000)}).parse(r.body);return wrap(async ()=>(await game.parse(actor(r),timeline(r),b.characterId,b.text)));});
+ app.post('/game/timelines/:id/interpret',async r=>{const b=z.strictObject({characterId:id,text:z.string().min(1).max(1000),provider:z.literal('gemini')}).parse(r.body);return intent.propose(actor(r),timeline(r),b.characterId,b.text,b.provider);});
  app.post('/game/timelines/:id/turns',async r=>{const b=z.strictObject({revision:bodyRevision,characterId:id,action:actionSchema,text:z.string().max(1000).optional()}).parse(r.body);return wrap(async ()=>(await game.turn(actor(r),timeline(r),b,key(r.headers))));});
  app.post('/game/timelines/:id/narrate',async r=>{const b=z.strictObject({turnId:id,provider:z.string().max(100).default('grounded')}).parse(r.body);return (await ai.narrate(actor(r),timeline(r),b.turnId,b.provider));});
  app.post('/game/timelines/:id/narrate/stream',async(r,reply)=>{

@@ -8,6 +8,8 @@ Local default: data/valor.sqlite, excluded from Git. Production uses external Tu
 
 No destructive down-migration is shipped: losing user history is unacceptable. To roll back code, first prove it supports the existing schema; otherwise stop the service and restore a verified pre-migration backup into a new database path.
 
+006_snapshot_chunks adds immutable compressed blocks reused by new saves; 007_intent_usage adds shared-budget AI proposal accounting. Existing inline saves are not changed. New save manifests require a build that understands storage version 2. Do not deploy older code and assume it can restore those manifests. Full backups include snapshot_chunks; game exports remain self-contained, including bounded image assets. No save deletion or garbage collection runs automatically.
+
 ## Backups and restore
 
 ```sh
@@ -55,6 +57,8 @@ SIGINT/SIGTERM stop accepting traffic, close the HTTP server, then close the lib
 
 External AI requires either server-only GEMINI_API_KEY (GOOGLE_API_KEY is also accepted), or a trusted AI_GATEWAY_URL and AI_GATEWAY_SECRET, plus nonzero campaign and per-user token budgets. Only observer-permitted fragments and a bounded, knowledge-filtered continuity brief leave the server. Gemini is selected automatically in Chronicle when available; users can choose grounded narration instead. Reservations conservatively cover both possible attempts and are not refunded on failure; usage values are estimates, not vendor billing. Each attempt has a 12-second deadline; two attempts maximum, timeline concurrency exclusion and a circuit breaker. Credentials and raw contexts must not be logged. Do not configure a gateway you do not trust with story text. Real provider behavior has not been live-tested. See SYSTEMS_EXPANSION.md for the current fragment-ordering limitation.
 
-Every committed mutation creates an immutable autosave. Snapshots currently include full state and transcript, so long campaigns can grow quadratically. Monitor Turso storage, query/transfer limits and backup duration; no automatic history deletion or retention pruning is implemented. Large production campaigns need snapshot compaction/retention design before general release. Monitor HTTP availability/error rates externally and keep backups off-host; no monitoring account, scheduler, billing or off-host destination has been provisioned.
+Every committed mutation creates an immutable autosave. New saves deduplicate and compress immutable entity/history blocks, while manifests retain their references and checksums. This reduces repeated storage without deleting history; manifests and growing state still consume storage. Monitor Turso storage, query/transfer limits and backup duration; no automatic history deletion, garbage collection or retention pruning is implemented. Monitor HTTP availability/error rates externally and keep backups off-host; no monitoring account, scheduler, billing or off-host destination has been provisioned.
+
+Gemini interpretation is an explicit client button, not a background job. It sends bounded candidate choices plus user text, accepts only a candidate ID or clarification, and never executes mechanics. Its reservation table is included when checking both campaign and user narration allowances. Failed requests remain reserved. Creator read-only diagnostics expose warning/storage/outbox counts; they do not provide arbitrary SQL or return credentials.
 
 See IMPLEMENTATION_STATUS.md for per-system coverage and remaining work. Passing local tests does not certify production deployment or physical-device accessibility.

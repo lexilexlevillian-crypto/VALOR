@@ -6,6 +6,7 @@ import type {Actor} from '../contracts.ts';
 import type {Effect} from './simulation.ts';
 import {contextBrief} from './context.ts';
 import {narrationPrompt} from './prompts.ts';
+import {usageSql} from './ai-intent.ts';
 export type NarrativeContext={promptVersion:string;instructions:string;fragments:{id:string;text:string}[];dossier?:ReturnType<typeof contextBrief>};
 export interface NarrativeProvider {id:string; arrange(context:NarrativeContext,signal:AbortSignal):Promise<unknown>;estimateTokens?(context:NarrativeContext):number;}
 export class GroundedProvider implements NarrativeProvider {
@@ -54,9 +55,11 @@ export class NarrativeGateway {
   this.inflight.add(timelineId);
   try{
   (await this.game.store.transaction(async ()=>{
-   const used=(await this.game.store.get<{n:number}>('SELECT COALESCE(sum(reserved_tokens),0) n FROM ai_usage u JOIN timelines t ON u.timeline_id=t.id WHERE t.campaign_id=?',t.campaign_id))!.n;
-   const userUsed=(await this.game.store.get<{n:number}>('SELECT COALESCE(sum(reserved_tokens),0) n FROM ai_usage u JOIN timelines t ON u.timeline_id=t.id WHERE t.campaign_id=? AND u.user_id=?',t.campaign_id,actor.id))!.n;
-   if(providerId!=='grounded'){ensure(used+estimated*2<=s.settings.tokenBudget,429,'ai_budget_exceeded');ensure(userUsed+estimated*2<=s.settings.userTokenBudget,429,'ai_user_budget_exceeded');}
+   await this.game.authorizeCharacter(actor,timelineId,turn.character_id);
+   const current=await this.game.load(timelineId);
+   const used=(await this.game.store.get<{n:number}>('SELECT COALESCE(sum(reserved_tokens),0) n FROM ('+usageSql+') u JOIN timelines t ON u.timeline_id=t.id WHERE t.campaign_id=?',t.campaign_id))!.n;
+   const userUsed=(await this.game.store.get<{n:number}>('SELECT COALESCE(sum(reserved_tokens),0) n FROM ('+usageSql+') u JOIN timelines t ON u.timeline_id=t.id WHERE t.campaign_id=? AND u.user_id=?',t.campaign_id,actor.id))!.n;
+   if(providerId!=='grounded'){ensure(used+estimated*2<=current.settings.tokenBudget,429,'ai_budget_exceeded');ensure(userUsed+estimated*2<=current.settings.userTokenBudget,429,'ai_user_budget_exceeded');}
    (await this.game.store.run('INSERT INTO ai_usage VALUES (?,?,?,?,?,?,?, ?,?)',reservationId,timelineId,actor.id,turnId,providerId,providerId==='grounded'?0:estimated*2,0,'pending',new Date().toISOString()));
   }));
   }catch(error){this.inflight.delete(timelineId);throw error;}

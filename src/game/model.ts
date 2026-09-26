@@ -1,13 +1,23 @@
 import {z} from 'zod';
 import {id,name,visibility} from '../contracts.ts';
+import {mediaBytes} from './media.ts';
 const text=z.string().max(16000), short=z.string().max(1000), ref=id.nullable().default(null);
 const cents=z.number().int().min(0).max(100000000000), score=z.number().min(-100).max(100), unit=z.number().min(0).max(100);
 const tags=z.array(z.string().max(80)).max(100).default([]);
 export const attributes=['Strength','Agility','Endurance','Intellect','Perception','Presence','Will'] as const;
 const customField=z.strictObject({id,name,type:z.enum(['text','number','boolean','json']),visibility,value:z.json()});
 const customSection=z.strictObject({id,name,parentId:ref,position:z.number().int().min(0),visibility:visibility.default('creator'),fields:z.array(customField).max(500)});
-const common={description:text.default(''),tags,sections:z.array(customSection).max(200).default([])};
+const common={description:text.default(''),tags,sections:z.array(customSection).max(200).default([]),mediaIds:z.array(id).max(20).default([])};
 const schedule=z.strictObject({id,minute:z.number().int().min(0).max(1439),locationId:id,activity:short,days:z.array(z.number().int().min(0).max(6)).default([0,1,2,3,4,5,6])});
+const condition=z.strictObject({kind:z.enum(['time','location','item','relationship','knowledge','health','quest','evidence']),subjectId:ref,targetId:ref,at:z.iso.datetime().nullable().default(null),threshold:z.number().default(0),negate:z.boolean().default(false)});
+const outcome=z.discriminatedUnion('type',[
+ z.strictObject({type:z.literal('quest'),questId:id,status:z.enum(['active','succeeded','failed','expired'])}),
+ z.strictObject({type:z.literal('reveal'),characterId:id,subjectId:id}),
+ z.strictObject({type:z.literal('notice'),characterId:id,text:short}),
+ z.strictObject({type:z.literal('reputation'),factionId:id,characterId:id,delta:score}),
+ z.strictObject({type:z.literal('housing'),housingId:id,access:z.boolean()}),
+ z.strictObject({type:z.literal('relationship'),relationshipId:id,label:short,operation:z.enum(['add','remove'])})
+]);
 const rules=z.strictObject({
  dieSides:z.number().int().min(2).max(1000),threshold:z.number().min(1).max(10000),
  damage:z.number().min(0).max(100),treatmentMinutes:z.number().int().min(1).max(1440),
@@ -24,7 +34,10 @@ export const settingsSchema=z.strictObject({
  ,weatherSchedule:z.array(z.strictObject({at:z.iso.datetime(),weather:z.enum(['clear','rain','overcast','snow','fog'])})).max(500).default([]),
  holidays:z.array(z.strictObject({date:z.iso.date(),label:name})).max(500).default([]),
  dailyLife:z.strictObject({minutes:z.number().int().min(1).max(1440),hygieneGain:unit}).nullable().default(null),
- healthRules:z.strictObject({infectionPerDay:unit,untreatedSeverityPerDay:unit,withdrawalPerDay:unit,soberingPerHour:unit}).nullable().default(null)
+ healthRules:z.strictObject({infectionPerDay:unit,untreatedSeverityPerDay:unit,withdrawalPerDay:unit,soberingPerHour:unit}).nullable().default(null),
+ calendar:z.strictObject({hemisphere:z.enum(['north','south']),sunriseHour:z.number().int().min(0).max(23),sunsetHour:z.number().int().min(0).max(23)}).nullable().default(null),
+ reproductiveHealth:z.boolean().default(false),npcRouteTravel:z.boolean().default(false),deterministicCatchup:z.boolean().default(false),
+ tactics:z.strictObject({movementMeters:z.number().min(0.1).max(1000),failedChaseVehicleDamage:unit}).nullable().default(null)
 });
 const character=z.strictObject({...common,playable:z.boolean().default(false),controllerUserId:ref,
  aliases:tags,dob:z.iso.date().nullable().default(null),identity:z.record(z.string(),short).default({}),
@@ -38,16 +51,18 @@ const character=z.strictObject({...common,playable:z.boolean().default(false),co
  restrainedBy:ref,goals:tags,fears:tags,mood:short.default(''),activity:short.default(''),heat:z.record(z.string(),unit).default({}),
  dependence:unit.default(0),withdrawal:unit.default(0),lastDoseAt:z.iso.datetime().nullable().default(null),
  schedule:z.array(schedule).max(100).default([]),lastSimulated:z.iso.datetime().nullable().default(null),
- plans:z.array(z.strictObject({id,type:z.enum(['work','socialize','offer','share','travel','crime','care']),targetId:id,auxiliaryId:ref,
+ plans:z.array(z.strictObject({id,type:z.enum(['work','socialize','offer','share','travel','crime','care','message','breakup']),targetId:id,auxiliaryId:ref,
    priority:z.number().int().default(0),cooldownMinutes:z.number().int().min(15).max(10080).default(60),
-   lastRun:z.iso.datetime().nullable().default(null),enabled:z.boolean().default(true)})).max(100).default([]),
- preferences:z.record(z.string(),short).default({}),boundaries:tags
+   lastRun:z.iso.datetime().nullable().default(null),enabled:z.boolean().default(true),text:short.default(''),conditions:z.array(condition).max(32).default([])})).max(100).default([]),
+ preferences:z.record(z.string(),short).default({}),boundaries:tags,
+ journey:z.strictObject({originId:id,destinationId:id,arrivesAt:z.iso.datetime(),activity:short}).nullable().default(null),
+ reproductive:z.strictObject({enabled:z.boolean(),cycleStart:z.iso.datetime().nullable().default(null),cycleDays:z.number().int().min(1).max(400),bleedingDays:z.number().int().min(0).max(100),pregnancyStartedAt:z.iso.datetime().nullable().default(null),pregnancyDays:z.number().int().min(1).max(500),phase:z.enum(['inactive','cycle','menstruation','pregnancy','due']).default('inactive')}).nullable().default(null)
 });
 const location=z.strictObject({...common,parentId:ref,category:z.enum(['city','district','street','building','room','road','outside']).default('room'),
  exits:z.array(z.strictObject({to:id,minutes:z.number().int().min(1).max(10080),modes:z.array(z.enum(['walk','drive','transit','taxi'])).default(['walk']),locked:z.boolean().default(false),keyId:ref,fare:cents.default(0),
- interruption:z.strictObject({locationId:id,afterMinutes:z.number().int().min(1).max(10080),questId:ref,whenWeather:z.enum(['clear','rain','overcast','snow','fog']).nullable().default(null)}).nullable().default(null)})).default([]),
+ interruption:z.strictObject({locationId:id,afterMinutes:z.number().int().min(1).max(10080),questId:ref,whenWeather:z.enum(['clear','rain','overcast','snow','fog']).nullable().default(null)}).nullable().default(null),terrainPenalty:unit.default(0),trafficPenalty:unit.default(0)})).default([]),
  hours:z.strictObject({opens:z.number().int().min(0).max(23),closes:z.number().int().min(0).max(24)}).nullable().default(null),
- discoverable:z.boolean().default(false),ownerId:ref,cover:unit.default(0),weatherExposed:z.boolean().default(false)
+ discoverable:z.boolean().default(false),ownerId:ref,cover:unit.default(0),weatherExposed:z.boolean().default(false),closedDates:z.array(z.iso.date()).max(500).default([])
 });
 const item=z.strictObject({...common,category:z.enum(['object','clothing','weapon','firearm','ammo','medicine','food','drink','substance','key','document','container','phone','armor']).default('object'),
  ownerId:ref,locationId:ref,containerId:ref,quantity:z.number().int().min(0).max(100000).default(1),
@@ -57,7 +72,7 @@ const item=z.strictObject({...common,category:z.enum(['object','clothing','weapo
  magazine:z.number().int().min(0).max(1000).default(0),loaded:z.number().int().min(0).max(1000).default(0),
  proficiency:short.default(''),coverage:tags,battery:unit.default(100),locked:z.boolean().default(false),
  contacts:z.array(z.strictObject({characterId:id,label:name})).default([]),dose:unit.default(0),provenance:text.default(''),dirty:unit.default(0),
- protection:unit.default(1),rangeMeters:z.number().min(0).max(5000).nullable().default(null)
+ protection:unit.default(1),rangeMeters:z.number().min(0).max(5000).nullable().default(null),deceasedId:ref
 });
 const vehicle=z.strictObject({...common,ownerId:ref,locationId:ref,keyId:ref,plate:short.default(''),registration:text.default(''),
  category:z.enum(['car','truck','motorcycle','bus','taxi','transit']).default('car'),fuel:unit.default(100),condition:unit.default(100),
@@ -71,7 +86,7 @@ const relation=z.strictObject({...common,fromId:id,toId:id,labels:tags,attractio
 });
 const injury=z.strictObject({...common,characterId:id,bodyPart:name,category:z.enum(['cut','gunshot','burn','blunt','fracture','internal','infection','illness','overdose','scar','disability']),
  severity:unit,bleeding:unit.default(0),pain:unit.default(0),treated:z.boolean().default(false),permanent:z.boolean().default(false),
- startedAt:z.iso.datetime(),recoveryDays:z.number().min(0).max(10000).default(0),substance:short.default(''),infection:unit.default(0)
+ startedAt:z.iso.datetime(),recoveryDays:z.number().min(0).max(10000).default(0),substance:short.default(''),infection:unit.default(0),modifiers:z.partialRecord(z.enum(attributes),score).default({})
 });
 const lore=z.strictObject({...common,subjectId:ref,source:text.default('Creator'),validFrom:z.iso.datetime().nullable().default(null),
  validUntil:z.iso.datetime().nullable().default(null),links:z.array(id).default([]),priority:z.number().int().default(0),
@@ -81,7 +96,8 @@ const catalog=z.strictObject({...common,category:short.default(''),cost:z.number
  prerequisites:z.array(id).default([]),opposes:z.array(id).default([]),modifiers:z.record(z.string(),z.number().min(-100).max(100)).default({}),permanent:z.boolean().default(false),acquirable:z.boolean().default(true)
 });
 const faction=z.strictObject({...common,category:short.default(''),leaderId:ref,cohesion:unit.default(50),jurisdictionIds:z.array(id).default([]),memberIds:z.array(id).default([]),reputation:z.record(z.string(),score).default({}),treasuryCents:cents.default(0),
- groupPolicy:z.strictObject({intervalMinutes:z.number().int().min(15).max(10080),cohesionStep:score,shareKnowledge:z.boolean(),shareMood:z.boolean()}).nullable().default(null),lastGroupAt:z.iso.datetime().nullable().default(null)});
+ groupPolicy:z.strictObject({intervalMinutes:z.number().int().min(15).max(10080),cohesionStep:score,shareKnowledge:z.boolean(),shareMood:z.boolean()}).nullable().default(null),lastGroupAt:z.iso.datetime().nullable().default(null),
+ dispatchPolicy:z.strictObject({kind:z.enum(['police','ems']),responseMinutes:z.number().int().min(1).max(10080),hospitalId:ref}).nullable().default(null)});
 const business=z.strictObject({...common,locationId:id,ownerId:ref,cash:cents.default(0),stock:z.array(id).default([]),priceMultiplier:z.number().min(0.1).max(10).default(1),
  hours:z.strictObject({opens:z.number().int().min(0).max(23),closes:z.number().int().min(0).max(24)}).default({opens:0,closes:24}),contraband:z.boolean().default(false)
 });
@@ -104,7 +120,7 @@ const watcher=z.strictObject({...common,trigger:z.enum(['time','location','item'
  dueAt:z.iso.datetime().nullable().default(null),threshold:z.number().default(0),effect:z.enum(['activate-quest','fail-quest','reveal-lore','npc-offer']),
  cooldownMinutes:z.number().int().min(1).default(60),lastFired:z.iso.datetime().nullable().default(null),
  conditionMode:z.enum(['all','any']).default('all'),conflictGroup:short.default(''),
- conditions:z.array(z.strictObject({kind:z.enum(['time','location','item','relationship','knowledge','health','quest','evidence']),subjectId:ref,targetId:ref,at:z.iso.datetime().nullable().default(null),threshold:z.number().default(0),negate:z.boolean().default(false)})).max(32).default([]),
+ conditions:z.array(condition).max(32).default([]),
  expiresAt:z.iso.datetime().nullable().default(null),priority:z.number().int().default(0),once:z.boolean().default(true),fired:z.boolean().default(false)});
 const message=z.strictObject({...common,fromId:id,toId:id,phoneId:id,medium:z.enum(['sms','mms','call','voicemail','email']).default('sms'),body:text,at:z.iso.datetime(),read:z.boolean().default(false),status:z.enum(['queued','delivered','read']).default('queued'),
  callState:z.enum(['ringing','active','declined','missed','ended']).nullable().default(null),answeredAt:z.iso.datetime().nullable().default(null),endedAt:z.iso.datetime().nullable().default(null)});
@@ -113,10 +129,17 @@ const recipe=z.strictObject({...common,minutes:z.number().int().min(1).max(1440)
  outputName:name,outputCategory:z.enum(['food','drink']),outputQuantity:z.number().int().min(1).max(10000),outputDose:unit,outputWeight:z.number().min(0).max(1000)});
 const service=z.strictObject({...common,businessId:id,category:z.enum(['clinical','forensic']),minutes:z.number().int().min(1).max(10080),costCents:cents,
  medicineId:ref,severityReduction:unit.default(0),testName:short.default('')});
+const transition=z.strictObject({...common,questId:id,from:z.enum(['dormant','active','succeeded','failed','expired']),to:z.enum(['active','succeeded','failed','expired']),conditions:z.array(condition).min(1).max(32),outcomes:z.array(outcome).max(50).default([]),priority:z.number().int().default(0),firedAt:z.iso.datetime().nullable().default(null)});
+const production=z.strictObject({...common,businessId:id,inputs:z.array(z.strictObject({itemId:id,quantity:z.number().int().min(1).max(10000)})).min(1).max(50),outputId:id,quantity:z.number().int().min(1).max(10000),intervalMinutes:z.number().int().min(1).max(10080),nextAt:z.iso.datetime(),enabled:z.boolean().default(false),runs:z.number().int().min(0).default(0)});
+const dispatch=z.strictObject({...common,agencyId:id,requesterId:id,locationId:id,responderId:ref,patientId:ref,destinationId:ref,report:short,kind:z.enum(['police','ems']),status:z.enum(['queued','enroute','arrived','closed']).default('queued'),dueAt:z.iso.datetime().nullable().default(null),transportConsent:z.boolean().default(false),createdAt:z.iso.datetime()});
+const judgment=z.strictObject({...common,caseId:id,characterId:id,authority:short,verdict:z.enum(['acquitted','convicted']),fineCents:cents.default(0),custodyUntil:z.iso.datetime().nullable().default(null),probationUntil:z.iso.datetime().nullable().default(null),appliedAt:z.iso.datetime().nullable().default(null)});
+const estate=z.strictObject({...common,characterId:id,executorId:id,beneficiaryId:id,authorized:z.boolean().default(false),settledAt:z.iso.datetime().nullable().default(null),funeralAt:z.iso.datetime().nullable().default(null),notified:z.boolean().default(false)});
+const socialRule=z.strictObject({...common,relationshipId:id,label:short,conditions:z.array(condition).max(32).default([]),outcomes:z.array(outcome).max(50),firedAt:z.iso.datetime().nullable().default(null)});
+const media=z.strictObject({...common,ownerId:ref,mime:z.enum(['image/png','image/jpeg','image/webp']),body:z.string().max(349528),alt:short});
 const combat=z.strictObject({...common,participants:z.array(id).min(2),turnIndex:z.number().int().min(0).default(0),round:z.number().int().min(1).default(1),
  active:z.boolean().default(true),cover:z.record(z.string(),unit).default({}),defenses:z.record(z.string(),z.enum(['dodge','block','parry'])).default({}),log:tags,
  positions:z.record(z.string(),z.number().min(0).max(10000)).default({}),blockedLines:z.array(z.strictObject({fromId:id,toId:id})).max(500).default([])});
-export const dataSchemas={character,location,item,vehicle,relationship:relation,injury,lore,storycard:lore,trait:catalog,skill:catalog,faction,business,job,housing,evidence,case:caseSchema,law,quest,watcher,message,combat,recipe,service};
+export const dataSchemas={character,location,item,vehicle,relationship:relation,injury,lore,storycard:lore,trait:catalog,skill:catalog,faction,business,job,housing,evidence,case:caseSchema,law,quest,watcher,message,combat,recipe,service,transition,production,dispatch,judgment,estate,socialRule,media};
 export type Kind=keyof typeof dataSchemas;
 export const kinds=Object.keys(dataSchemas) as [Kind,...Kind[]];
 export const entitySchema=z.strictObject({id,kind:z.enum(kinds),name,visibility, data:z.record(z.string(),z.json()),revision:z.number().int().positive().default(1),archived:z.boolean().default(false)});
@@ -128,6 +151,7 @@ export function data<K extends Kind>(entity:Entity,kind:K):Data<K>{
 }
 export function validateEntity(raw:unknown):Entity{
  const e=entitySchema.parse(raw);e.data=dataSchemas[e.kind].parse(e.data) as Entity['data'];
+ if(e.kind==='media'){const m=data(e,'media');mediaBytes(m.mime,m.body);}
  if(e.kind==='item'){const d=data(e,'item');if(d.loaded>d.magazine)throw new Error('ammo_capacity');if(d.ownerId && (d.locationId||d.containerId))throw new Error('ambiguous_item_location');if(d.locationId&&d.containerId)throw new Error('ambiguous_item_location');}
  const sections=e.data.sections as z.infer<typeof customSection>[];const sectionIds=new Set(sections.map(s=>s.id)),fieldIds=new Set<string>();
  if(sectionIds.size!==sections.length)throw new Error('duplicate_section_id');
@@ -135,6 +159,10 @@ export function validateEntity(raw:unknown):Entity{
  return e;
 }
 export const actionSchema=z.discriminatedUnion('type',[
+ z.strictObject({type:z.literal('request-assistance'),agencyId:id,phoneId:id,report:short,patientId:ref,transportConsent:z.boolean().default(false)}),
+ z.strictObject({type:z.literal('dispatch-response'),dispatchId:id,operation:z.enum(['accept','close','transport'])}),
+ z.strictObject({type:z.literal('settle-estate'),estateId:id}),
+ z.strictObject({type:z.literal('tactical-move'),position:z.number().min(0).max(10000)}),
  z.strictObject({type:z.literal('read-message'),messageId:id,phoneId:id}),
  z.strictObject({type:z.literal('phone-call'),phoneId:id,toId:id}),
  z.strictObject({type:z.literal('call-response'),messageId:id,phoneId:id,response:z.enum(['answer','decline','end'])}),
@@ -158,7 +186,7 @@ export const actionSchema=z.discriminatedUnion('type',[
  z.strictObject({type:z.literal('buy'),businessId:id,itemId:id,payment:z.enum(['cash','bank']).optional()}),z.strictObject({type:z.literal('sell'),businessId:id,itemId:id}),
  z.strictObject({type:z.literal('bank'),businessId:id,operation:z.enum(['deposit','withdraw']),cents:cents.refine(n=>n>0)}),
  z.strictObject({type:z.literal('work'),jobId:id}),z.strictObject({type:z.literal('pay-rent'),housingId:id}),
- z.strictObject({type:z.literal('social'),targetId:id,intent:z.enum(['greet','trust','flirt','date','commit','breakup','intimacy','decline']),consent:z.boolean().default(false)}),
+ z.strictObject({type:z.literal('social'),targetId:id,intent:z.enum(['greet','trust','flirt','date','commit','cohabit','marry','reconcile','breakup','intimacy','decline']),consent:z.boolean().default(false)}),
  z.strictObject({type:z.literal('share'),targetId:id,factId:id}),
  z.strictObject({type:z.literal('check'),attribute:z.enum(attributes),skillId:ref}),
  z.strictObject({type:z.literal('combat'),targetId:id}),
@@ -188,7 +216,7 @@ export type State={clock:string;settings:Settings;entities:Entity[];facts:Fact[]
 export const getEntity=(s:State,id:string,kind?:Kind)=>{const e=s.entities.find(e=>e.id===id&&!e.archived);if(!e||kind&&e.kind!==kind)throw new Error('entity_unavailable');return e;};
 export function refs(e:Entity):string[]{
  const result:string[]=[];const walk=(v:unknown,key='')=>{if(!v)return;if(typeof v==='string'&&((key.endsWith('Id')&&!['controllerUserId','sourceEventId','eventId','parentId'].includes(key))||['parentId','to'].includes(key)&&e.kind==='location'))result.push(v);
- else if(Array.isArray(v)){if(['traits','factionIds','occupants','links','prerequisites','opposes','jurisdictionIds','memberIds','stock','suspectIds','evidenceIds','warrantLocationIds','lawIds','participants'].includes(key))result.push(...v as string[]);else v.forEach(x=>walk(x,key));}
+ else if(Array.isArray(v)){if(['traits','factionIds','occupants','links','prerequisites','opposes','jurisdictionIds','memberIds','stock','suspectIds','evidenceIds','warrantLocationIds','lawIds','participants','mediaIds'].includes(key))result.push(...v as string[]);else v.forEach(x=>walk(x,key));}
  else if(typeof v==='object')for(const[k,x]of Object.entries(v))if(!['sections','history','custody'].includes(k))walk(x,k);};walk(e.data);
  if(e.kind==='character')result.push(...Object.keys(e.data.skills as object));
  return [...new Set(result)].filter(x=>x!==e.id);
@@ -200,14 +228,18 @@ export function validateState(s:State){
  for(const k of s.knowledge)if(!s.facts.some(f=>f.id===k.factId)||!ids.has(k.observerId))throw new Error('invalid_knowledge_reference');
  const byId=new Map(s.entities.map(e=>[e.id,e]));
  const target=(value:unknown,kinds:Kind[])=>{if(value!==null&&value!==undefined){const e=byId.get(String(value));if(!e||!kinds.includes(e.kind))throw new Error('reference_kind_mismatch');}};
- const common:Record<string,Kind[]>={locationId:['location'],homeId:['location'],characterId:['character'],investigatorId:['character'],employeeId:['character'],tenantId:['character'],leaderId:['character'],employerId:['business'],businessId:['business'],medicineId:['item'],agencyId:['faction'],caseId:['case'],phoneId:['item'],keyId:['item'],containerId:['item','vehicle']};
- const arrays:Record<string,Kind[]>={traits:['trait'],factionIds:['faction'],occupants:['character'],jurisdictionIds:['location'],memberIds:['character'],stock:['item'],suspectIds:['character'],evidenceIds:['evidence'],warrantLocationIds:['location'],lawIds:['law'],participants:['character']};
+ const common:Record<string,Kind[]>={locationId:['location'],homeId:['location'],characterId:['character'],investigatorId:['character'],employeeId:['character'],tenantId:['character'],leaderId:['character'],employerId:['business'],businessId:['business'],medicineId:['item'],agencyId:['faction'],caseId:['case'],phoneId:['item'],keyId:['item'],containerId:['item','vehicle'],questId:['quest'],outputId:['item'],responderId:['character'],requesterId:['character'],patientId:['character'],executorId:['character'],beneficiaryId:['character'],relationshipId:['relationship'],destinationId:['location']};
+ const arrays:Record<string,Kind[]>={traits:['trait'],factionIds:['faction'],occupants:['character'],jurisdictionIds:['location'],memberIds:['character'],stock:['item'],suspectIds:['character'],evidenceIds:['evidence'],warrantLocationIds:['location'],lawIds:['law'],participants:['character'],mediaIds:['media']};
  for(const e of s.entities){
   for(const [key,kinds]of Object.entries(common))target(e.data[key],kinds);
   for(const [key,kinds]of Object.entries(arrays))for(const value of (e.data[key]??[]) as unknown[])target(value,kinds);
   if(['relationship','message'].includes(e.kind)){target(e.data.fromId,['character']);target(e.data.toId,['character']);}
   if(e.kind==='location'){target(e.data.parentId,['location']);for(const exit of data(e,'location').exits){target(exit.to,['location']);target(exit.keyId,['item']);if(exit.interruption){target(exit.interruption.locationId,['location']);target(exit.interruption.questId,['quest']);if(exit.interruption.afterMinutes>exit.minutes)throw new Error('interruption_after_arrival');}}}
   if(e.kind==='character'){for(const skillId of Object.keys(data(e,'character').skills))target(skillId,['skill']);for(const entry of data(e,'character').schedule)target(entry.locationId,['location']);}
+  if(e.kind==='character'){const c=data(e,'character');if(c.journey){target(c.journey.originId,['location']);target(c.journey.destinationId,['location']);}if(c.reproductive&&c.reproductive.bleedingDays>c.reproductive.cycleDays)throw new Error('invalid_cycle');}
+  if(e.kind==='faction')target(data(e,'faction').dispatchPolicy?.hospitalId,['location']);
+  if(e.kind==='production'){const p=data(e,'production');if(new Set(p.inputs.map(i=>i.itemId)).size!==p.inputs.length||p.inputs.some(i=>i.itemId===p.outputId))throw new Error('invalid_production_inputs');for(const i of p.inputs)target(i.itemId,['item']);}
+  if(e.kind==='transition'||e.kind==='socialRule')for(const o of data(e,e.kind).outcomes){if(o.type==='quest')target(o.questId,['quest']);if(o.type==='housing')target(o.housingId,['housing']);if(o.type==='relationship')target(o.relationshipId,['relationship']);if(o.type==='reputation')target(o.factionId,['faction']);if('characterId'in o)target(o.characterId,['character']);}
   if(e.kind==='recipe'){const recipe=data(e,'recipe');if(new Set(recipe.inputs.map(i=>i.itemId)).size!==recipe.inputs.length)throw new Error('duplicate_recipe_input');for(const input of recipe.inputs)target(input.itemId,['item']);}
   if(e.kind==='combat'){const c=data(e,'combat');for(const key of Object.keys(c.positions))if(!c.participants.includes(key))throw new Error('position_not_participant');for(const line of c.blockedLines)if(!c.participants.includes(line.fromId)||!c.participants.includes(line.toId))throw new Error('line_not_participant');}
  }

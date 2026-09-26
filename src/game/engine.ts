@@ -6,7 +6,7 @@ import {ensure} from '../contracts.ts';
 import type {Actor} from '../contracts.ts';
 import {actionSchema,data,entitySchema,getEntity,refs,settingsSchema,validateEntity,validateState} from './model.ts';
 import type {Action,Entity,State} from './model.ts';
-import {observerView,retrieve,observe,fact} from './epistemics.ts';
+import {observerView,retrieve,observe,fact,visible} from './epistemics.ts';
 import {resolveAction} from './actions.ts';
 import type {Effect} from './simulation.ts';
 import {skillNames,traitGroups} from './catalog.ts';
@@ -14,6 +14,8 @@ import type {InStatement,InValue} from '@libsql/client';
 import {contextBrief} from './context.ts';
 import {proposeIntent} from './intent.ts';
 import type {IntentProposal} from './intent.ts';
+import {encodeSnapshot,decodeSnapshot} from './snapshots.ts';
+import {mediaBytes} from './media.ts';
 type Timeline={id:string;campaign_id:string;parent_id:string|null;parent_save_id:string|null;name:string;revision:number;clock:string;settings_json:string};
 type Mutation<T>={result:T;effects?:Effect[];draws?:number;characterId?:string;turnText?:string};
 const now=()=>new Date().toISOString();
@@ -88,6 +90,23 @@ export class Game {
  async view(actor:Actor,id:string,characterId:string){const {t,access}=(await this.access(actor,id));const s=(await this.load(id));this.controlled(actor,s,characterId,access.role);
   return {timeline:{id:t.id,name:t.name,revision:t.revision},...observerView(s,characterId),turns:(await this.transcript(id)).filter(turn=>turn.character_id===characterId&&turn.user_id===actor.id).slice(-100)};}
  async creator(actor:Actor,id:string){const {t}=(await this.access(actor,id,true));return {timeline:t,...(await this.load(id)),references:(await this.store.all('SELECT entity_id,target_id FROM entity_links WHERE timeline_id=?',id))};}
+ async preview(actor:Actor,id:string,characterId:string){await this.access(actor,id,true);const s=await this.load(id);getEntity(s,characterId,'character');return observerView(s,characterId);}
+ async media(actor:Actor,id:string,mediaId:string,characterId:string){
+  const {access}=await this.access(actor,id),s=await this.load(id);this.controlled(actor,s,characterId,access.role);const entity=getEntity(s,mediaId,'media');ensure(visible(s,entity,characterId),404,'media_unavailable');const m=data(entity,'media');return {mime:m.mime,bytes:mediaBytes(m.mime,m.body)};
+ }
+ async diagnostics(actor:Actor,id:string){
+  return this.store.transaction(async()=>{
+   const {t}=await this.access(actor,id,true),s=await this.load(id);validateState(s);
+   const warnings:string[]=[];
+   if(s.entities.some(e=>e.kind==='character'&&!e.data.playable&&(e.data.schedule as unknown[]).length)&&!s.settings.npcRouteTravel)warnings.push('legacy_schedule_teleport_mode');
+   if(s.settings.tokenBudget===0||s.settings.userTokenBudget===0)warnings.push('external_ai_budget_disabled');
+   if(!s.settings.rules)warnings.push('resolution_rules_unconfigured');
+   const saves=await this.store.get<{n:number;bytes:number}>('SELECT count(*) n,COALESCE(sum(length(snapshot_json)),0) bytes FROM saves WHERE timeline_id=?',id);
+   const outbox=await this.store.get<{n:number}>('SELECT count(*) n FROM game_outbox o JOIN game_events e ON e.id=o.event_id WHERE e.timeline_id=? AND o.delivered_at IS NULL',id);
+   return {revision:t.revision,valid:true,entities:s.entities.length,facts:s.facts.length,saves,pendingNotifications:outbox!.n,warnings};
+  },'read');
+ }
+ async saveCompatibility(actor:Actor,id:string,saveId:string){await this.access(actor,id,true);const saved=await this.savedSnapshot(id,saveId);saved.state.entities=saved.state.entities.map(validateEntity);validateState(saved.state);return {valid:true,version:1,revision:saved.revision,entities:saved.state.entities.length,transcriptTurns:saved.transcript.length};}
  private async mutate<T extends object>(actor:Actor,id:string,expectedRevision:number,key:string,body:unknown,type:string,creator:boolean,fn:(s:State,eventId:string,seed:string,role:string)=>Mutation<T>|Promise<Mutation<T>>){
   keySchema.parse(key);
   return (await this.store.transaction(async ()=>{
@@ -151,7 +170,7 @@ export class Game {
  }
  private async savedSnapshot(id:string,saveId:string){
   const row=await this.store.get<{snapshot_json:string;checksum:string;revision:number}>('SELECT snapshot_json,checksum,revision FROM saves WHERE id=? AND timeline_id=?',saveId,id);
-  ensure(row,404,'save_unavailable');const raw=JSON.parse(row.snapshot_json);
+  ensure(row,404,'save_unavailable');const raw=await decodeSnapshot(this.store,JSON.parse(row.snapshot_json));
   ensure(checksum(raw)===row.checksum,409,'corrupt_save');return {revision:row.revision,...snapshotSchema.parse(raw)};
  }
  async compareSave(actor:Actor,id:string,saveId:string){
@@ -207,7 +226,8 @@ export class Game {
  }
  private async saveInternal(actor:Actor,id:string,name:string,s:State,revision:number,automatic=false){
   const saveId=randomUUID(),snapshot={version:1,state:s,transcript:(await this.transcript(id))};
-  (await this.store.run('INSERT INTO saves VALUES (?,?,?,?,?,?,?,?,?)',saveId,id,name,revision,JSON.stringify(snapshot),checksum(snapshot),actor.id,now(),automatic?1:0));return saveId;
+  const stored=await encodeSnapshot(this.store,snapshot);
+  (await this.store.run('INSERT INTO saves VALUES (?,?,?,?,?,?,?,?,?)',saveId,id,name,revision,JSON.stringify(stored),checksum(snapshot),actor.id,now(),automatic?1:0));return saveId;
  }
  async save(actor:Actor,id:string,name:string){return this.store.transaction(async()=>{const {t,access}=await this.access(actor,id);ensure(access.role!=='observer',403,'forbidden');const saveId=await this.saveInternal(actor,id,name,await this.load(id),t.revision);await this.audit(actor,t.campaign_id,'save.created',saveId);return {id:saveId};});}
  async saves(actor:Actor,id:string){const {access}=(await this.access(actor,id));return (await this.store.all('SELECT id,name,revision,created_at,automatic FROM saves WHERE timeline_id=? AND (?=1 OR created_by=?) ORDER BY rowid DESC LIMIT 100',id,privileged(access.role)?1:0,actor.id));}
@@ -215,7 +235,7 @@ export class Game {
   return (await this.store.transaction(async ()=>{
    const {t,access}=(await this.access(actor,id));ensure(access.role!=='observer',403,'forbidden');
    const save=(await this.store.get<{snapshot_json:string;checksum:string;revision:number}>('SELECT * FROM saves WHERE id=? AND timeline_id=? AND (?=1 OR created_by=?)',saveId,id,privileged(access.role)?1:0,actor.id));ensure(save,404,'save_unavailable');
-   const snapshot=JSON.parse(save.snapshot_json);ensure(checksum(snapshot)===save.checksum,409,'corrupt_save');
+   const snapshot=await decodeSnapshot(this.store,JSON.parse(save.snapshot_json));ensure(checksum(snapshot)===save.checksum,409,'corrupt_save');
    const parsed=snapshotSchema.parse(snapshot),childId=randomUUID();
    (await this.store.run('INSERT INTO timelines(id,campaign_id,parent_id,parent_save_id,name,revision,clock,settings_json,created_at) VALUES (?,?,?,?,?,?,?,?,?)',childId,t.campaign_id,id,saveId,name,1,parsed.state.clock,JSON.stringify(parsed.state.settings),now()));
    (await this.persist(childId,parsed.state));(await this.restoreTranscript(childId,parsed.transcript));(await this.audit(actor,t.campaign_id,'timeline.branched',childId));
@@ -224,8 +244,9 @@ export class Game {
  }
  async export(actor:Actor,id:string){(await this.access(actor,id,true));const payload={version:1,state:(await this.load(id)),transcript:(await this.transcript(id))};return {payload,checksum:checksum(payload)};}
  async validateImport(actor:Actor,id:string,raw:unknown){
-  (await this.access(actor,id,true));const bundle=z.strictObject({payload:snapshotSchema,checksum:z.string().length(64)}).parse(raw);
-  ensure(checksum(bundle.payload)===bundle.checksum,400,'import_checksum_mismatch');
+  (await this.access(actor,id,true));const envelope=z.strictObject({payload:z.unknown(),checksum:z.string().length(64)}).parse(raw);
+  ensure(checksum(envelope.payload)===envelope.checksum,400,'import_checksum_mismatch');
+  const bundle={payload:snapshotSchema.parse(envelope.payload)};
   const state=bundle.payload.state;state.entities=state.entities.map(validateEntity);validateState(state);
   const turnIds=new Set<string>();
   for(const turn of bundle.payload.transcript){ensure(!turnIds.has(turn.id),400,'duplicate_transcript_id');turnIds.add(turn.id);ensure(state.entities.some(e=>e.id===turn.character_id&&e.kind==='character'&&e.data.playable),400,'invalid_transcript_character');}

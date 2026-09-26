@@ -2,6 +2,8 @@
 
 This is an implementation checkpoint, not a claim that all 18 systems are production-complete.
 
+Historical checkpoint: several gaps below were subsequently implemented in [LIFECYCLE_SYSTEMS.md](LIFECYCLE_SYSTEMS.md). Use that guide and IMPLEMENTATION_STATUS.md for the current feature and acceptance matrix.
+
 ## Gemini on the existing Render service
 
 VALOR reads `GEMINI_API_KEY` (preferred) or `GOOGLE_API_KEY` from the server environment. If the key is already in Render under either name, do not copy it into source or chat. `GEMINI_MODEL` selects the model; the default is `gemini-3.8-flash`. The client receives only the provider ID, never the key. The adapter uses Google's documented [GenerateContent structured-output API](https://ai.google.dev/gemini-api/docs/generate-content/structured-output?hl=en) and [model identifier](https://ai.google.dev/gemini-api/docs/models).

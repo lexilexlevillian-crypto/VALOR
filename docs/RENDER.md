@@ -4,6 +4,8 @@ Target: [valor-uwgb.onrender.com](https://valor-uwgb.onrender.com). [Service das
 
 This build stores production data in external Turso/libSQL using the official `@libsql/client`. It does not require a Render disk. Publishing the branch is not proof of a successful live deployment.
 
+Inspection on 2026-09-26 confirmed auto-deploy from `full-game-implementation` and the preceding published build live. Existing commands are `npm ci && npm run check` and `npm start`; the service runtime label is Python and its health-check path is blank. The intended configuration below uses Node and `/healthz`; those dashboard settings were not silently changed. See the latest handoff for the new commit's deployment result.
+
 ## Existing service settings
 
 Confirm the repository, branch and deploy commit before changing the service. Preserve and back up any existing game database before changing storage.
@@ -58,4 +60,4 @@ Keep your existing API key private in Render as `GEMINI_API_KEY` or `GOOGLE_API_
 
 Free Render services can sleep and have usage limits; local files are ephemeral, and free instances do not provide shell access. That is why account provisioning and backups run from a trusted computer connected to Turso. See [free-service limitations](https://render.com/docs/free). External database persistence does not guarantee unlimited free hosting or production-grade availability.
 
-No live credentials, service settings, paid resources or live database contents were changed by this implementation. Live Turso connectivity and deployment/restart acceptance remain separate verification steps.
+No live credentials, service settings or paid resources were changed by this implementation. Code pushes to the configured branch automatically deploy and apply awaited forward migrations. Public health/deploy checks do not substitute for authenticated account/save persistence, remote restore rehearsal or real Gemini usage acceptance.

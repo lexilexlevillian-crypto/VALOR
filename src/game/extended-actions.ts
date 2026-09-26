@@ -8,6 +8,45 @@ export function extendedAction(s:State,actorId:string,pc:Data<'character'>,actio
  const output=(text:string)=>emit(effects,text,[actorId],action.type,actorId);
  const phone=(id:string)=>{const item=getEntity(s,id,'item'),p=data(item,'item');requireCondition(p.category==='phone'&&p.ownerId===actorId&&!p.locked&&p.battery>0,'phone_unavailable');return item;};
  switch(action.type){
+  case 'request-assistance':{
+   phone(action.phoneId);requireCondition(pc.locationId,'location_required');
+   const agency=getEntity(s,action.agencyId,'faction'),a=data(agency,'faction');
+   requireCondition(visible(s,agency,actorId)&&a.dispatchPolicy&&a.jurisdictionIds.includes(pc.locationId!),'dispatch_unavailable');
+   requireCondition(!s.entities.some(e=>e.kind==='dispatch'&&!e.archived&&e.data.requesterId===actorId&&e.data.agencyId===agency.id&&e.data.status!=='closed'),'dispatch_already_pending');
+   if(action.patientId){const patient=getEntity(s,action.patientId,'character');requireCondition(patient.data.locationId===pc.locationId&&visible(s,patient,actorId),'patient_not_present');}
+   const responder=s.entities.filter(e=>e.kind==='character'&&!e.archived&&a.memberIds.includes(e.id)&&!e.data.playable&&e.data.condition==='conscious'&&!s.entities.some(call=>call.kind==='dispatch'&&call.data.responderId===e.id&&['enroute','arrived'].includes(String(call.data.status)))).sort((x,y)=>x.id.localeCompare(y.id))[0];
+   const call=add(s,'dispatch','Assistance request',{agencyId:agency.id,requesterId:actorId,locationId:pc.locationId,responderId:responder?.id??null,patientId:action.patientId,destinationId:a.dispatchPolicy!.hospitalId,report:action.report,kind:a.dispatchPolicy!.kind,status:responder?'enroute':'queued',dueAt:responder?new Date(Date.parse(s.clock)+a.dispatchPolicy!.responseMinutes*60000).toISOString():null,transportConsent:action.patientId===actorId&&action.transportConsent,createdAt:s.clock},'owner');
+   if(responder){s.beliefs.push({id:crypto.randomUUID(),observerId:responder.id,proposition:action.report,confidence:0.5,source:'dispatch:'+call.id,at:s.clock,correctedBy:null});fact(s,call.id,'request-received',true,eventId,[actorId,responder.id]);}
+   output(responder?'Assistance requested; a responder is en route.':'Assistance requested; awaiting an available responder.');return 0;
+  }
+  case 'dispatch-response':{
+   const entity=getEntity(s,action.dispatchId,'dispatch'),d=data(entity,'dispatch'),agency=data(getEntity(s,d.agencyId,'faction'),'faction');
+   if(action.operation==='accept'){
+    requireCondition(d.status==='queued'&&agency.memberIds.includes(actorId)&&agency.dispatchPolicy,'dispatch_authority_required');
+    requireCondition(!s.entities.some(e=>e.kind==='dispatch'&&!e.archived&&e.data.responderId===actorId&&['enroute','arrived'].includes(String(e.data.status))),'responder_busy');
+    d.responderId=actorId;d.status='enroute';d.dueAt=new Date(Date.parse(s.clock)+agency.dispatchPolicy!.responseMinutes*60000).toISOString();
+    s.beliefs.push({id:crypto.randomUUID(),observerId:actorId,proposition:d.report,confidence:0.5,source:'dispatch:'+entity.id,at:s.clock,correctedBy:null});
+   }else if(action.operation==='close'){
+    requireCondition([d.requesterId,d.responderId].includes(actorId),'dispatch_authority_required');d.status='closed';
+   }else{
+    requireCondition(d.kind==='ems'&&d.status==='arrived'&&d.patientId&&d.destinationId,'transport_unavailable');
+    const patient=getEntity(s,d.patientId!,'character');
+    requireCondition([d.patientId,d.responderId].includes(actorId)&&patient.data.locationId===d.locationId&&pc.locationId===d.locationId,'transport_authority_required');
+    requireCondition(patient.data.condition!=='dead'&&(actorId===patient.id||d.transportConsent||patient.data.condition==='unconscious'),'patient_consent_required');
+    if(patient.id===actorId)pc.locationId=d.destinationId;else patient.data.locationId=d.destinationId;
+    d.status='closed';fact(s,entity.id,'hospital-transport',{patientId:patient.id,destinationId:d.destinationId},eventId,[patient.id,actorId]);
+   }
+   entity.data=d as Entity['data'];output('Assistance status: '+d.status+'.');return 1;
+  }
+  case 'settle-estate':{
+   const entity=getEntity(s,action.estateId,'estate'),e=data(entity,'estate');requireCondition(e.authorized&&e.executorId===actorId&&!e.settledAt,'estate_authority_required');
+   const deceased=getEntity(s,e.characterId,'character'),recipient=getEntity(s,e.beneficiaryId,'character');requireCondition(deceased.data.condition==='dead'&&recipient.data.condition!=='dead'&&recipient.id!==deceased.id,'estate_not_available');
+   const beneficiary=recipient.id===actorId?pc:data(recipient,'character');beneficiary.cash+=Number(deceased.data.cash);beneficiary.bank+=Number(deceased.data.bank);deceased.data.cash=0;deceased.data.bank=0;
+   const remains=new Set(s.entities.filter(x=>x.kind==='item'&&x.data.deceasedId===deceased.id).map(x=>x.id));
+   for(const item of s.entities.filter(x=>x.kind==='item'&&!x.archived&&(x.data.ownerId===deceased.id||remains.has(String(x.data.containerId))))){item.data.ownerId=recipient.id;item.data.locationId=null;item.data.containerId=null;item.data.equipped=false;}
+   for(const vehicle of s.entities.filter(x=>x.kind==='vehicle'&&!x.archived&&x.data.ownerId===deceased.id))vehicle.data.ownerId=recipient.id;
+   if(recipient.id!==actorId)recipient.data=beneficiary as Entity['data'];e.settledAt=s.clock;entity.data=e as Entity['data'];fact(s,entity.id,'estate-settled',true,eventId,[actorId,recipient.id]);output('The authorized estate transfer is recorded.');return 0;
+  }
   case 'read-message':{
    phone(action.phoneId);const message=getEntity(s,action.messageId,'message'),m=data(message,'message');
    requireCondition(m.toId===actorId&&m.status!=='queued'&&visible(s,message,actorId),'message_unavailable');

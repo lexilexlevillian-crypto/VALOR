@@ -1,6 +1,7 @@
 import {randomUUID} from 'node:crypto';
 import {data,getEntity} from './model.ts';
 import type {Entity,State} from './model.ts';
+import {calendarView} from './calendar.ts';
 export function observe(s:State,observerId:string,factId:string,source:string) {
  getEntity(s,observerId,'character');
  if(!s.facts.some(f=>f.id===factId))throw new Error('fact_unavailable');
@@ -23,6 +24,10 @@ export function visible(s:State,e:Entity,observerId:string):boolean{
  if(e.id===observerId)return true;
  if(e.kind==='location'&&e.id===observer.locationId)return true;
  if(e.visibility==='creator')return false;
+ if(['transition','production','socialRule'].includes(e.kind))return false;
+ if(e.kind==='dispatch')return e.data.requesterId===observerId||e.data.responderId===observerId||e.data.patientId===observerId;
+ if(e.kind==='estate')return e.data.executorId===observerId||e.data.beneficiaryId===observerId;
+ if(e.kind==='judgment')return e.data.characterId===observerId&&!!e.data.appliedAt;
  if(e.kind==='message'){const d=data(e,'message');return d.fromId===observerId||d.toId===observerId&&d.status!=='queued';}
  if(e.kind==='relationship'){const d=data(e,'relationship');return !d.secret&&(d.fromId===observerId||d.toId===observerId);}
  if(e.kind==='injury')return e.data.characterId===observerId;
@@ -43,6 +48,8 @@ export function visible(s:State,e:Entity,observerId:string):boolean{
 }
 export function project(s:State,e:Entity,observerId:string):Entity {
  const copy=structuredClone(e);
+ if(e.kind==='media')delete copy.data.body;
+ copy.data.mediaIds=((e.data.mediaIds??[]) as string[]).filter(id=>{const media=s.entities.find(e=>e.id===id&&e.kind==='media');return media&&visible(s,media,observerId);});
  if(e.kind==='case'&&e.data.investigatorId!==observerId){copy.name='Case notice';copy.data={stage:e.data.stage!,bailAmountCents:e.data.bailAmountCents??null};return copy;}
  const own=e.id===observerId||e.data.ownerId===observerId;
  if(e.kind==='character'&&!own){
@@ -52,7 +59,9 @@ export function project(s:State,e:Entity,observerId:string):Entity {
   for(const k of ['secrets','instructions','hiddenSolution','embedding','pending','preferences','goals','fears','heat','forensicFindings'])delete copy.data[k];
   if(e.kind==='relationship'){for(const k of ['attraction','desire','affection','trust','respect','attachment','familiarity','jealousy','resentment','fear','loyalty','dependency'])delete copy.data[k];}
   if(!own)for(const k of ['cash','contacts','serial','registration','stock','suspectIds','custody','schedule','lastSimulated','mood'])delete copy.data[k];
-  if(e.kind==='faction')for(const k of ['memberIds','reputation','treasuryCents','groupPolicy','lastGroupAt'])delete copy.data[k];
+  if(e.kind==='faction')for(const k of ['memberIds','reputation','treasuryCents','groupPolicy','lastGroupAt','dispatchPolicy'])delete copy.data[k];
+  if(e.kind==='quest')delete copy.data.branches;
+  if(e.kind==='character'&&!s.settings.reproductiveHealth)delete copy.data.reproductive;
   if(e.kind==='combat'){const allowed=new Set(s.entities.filter(entity=>visible(s,entity,observerId)).map(entity=>entity.id));copy.data.participants=(e.data.participants as string[]).filter(id=>allowed.has(id));copy.data.positions=Object.fromEntries(Object.entries(e.data.positions??{}).filter(([id])=>allowed.has(id))) as never;delete copy.data.blockedLines;}
   if(e.kind==='character')delete copy.data.plans;
   if(e.kind==='location')copy.data.exits=(copy.data.exits as {to:string;interruption?:unknown}[]).filter(exit=>s.entities.some(target=>target.id===exit.to&&visible(s,target,observerId))).map(({interruption,...route})=>route) as never;
@@ -68,7 +77,7 @@ export function project(s:State,e:Entity,observerId:string):Entity {
 export function observerView(s:State,observerId:string){
  const entities=s.entities.filter(e=>visible(s,e,observerId)).map(e=>project(s,e,observerId));
  const factIds=new Set(s.knowledge.filter(k=>k.observerId===observerId).map(k=>k.factId));
- return {clock:s.clock,settings:{needs:s.settings.needs,fuel:s.settings.fuel,romance:s.settings.romance,intimacy:s.settings.intimacy,intensity:s.settings.intensity,weather:s.settings.weather,rulesConfigured:s.settings.rules!==null},
+ return {clock:s.clock,calendar:calendarView(s),settings:{needs:s.settings.needs,fuel:s.settings.fuel,romance:s.settings.romance,intimacy:s.settings.intimacy,intensity:s.settings.intensity,weather:s.settings.weather,rulesConfigured:s.settings.rules!==null},
  entities,facts:s.facts.filter(f=>factIds.has(f.id)&&!f.retiredAt),
  beliefs:s.beliefs.filter(b=>b.observerId===observerId),
  memories:s.memories.filter(m=>m.observerId===observerId).map(m=>({...m,currentSalience:Math.max(0,m.salience-(Date.parse(s.clock)-Date.parse(m.at))/86400000*m.decayPerDay)}))};

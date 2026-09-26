@@ -1,7 +1,7 @@
 import {randomUUID} from 'node:crypto';
 import {data,getEntity} from './model.ts';
 import type {Action,Entity,State} from './model.ts';
-import {atLocation,add,advance,emit,isOpen} from './simulation.ts';
+import {atLocation,add,advance,emit,isOpen,timeParts} from './simulation.ts';
 import type {Effect} from './simulation.ts';
 import {fact,observe,remember,visible} from './epistemics.ts';
 import {randomSource} from '../random.ts';
@@ -19,7 +19,7 @@ export function resolveAction(s:State,actorId:string,action:Action,eventId:strin
  const canCommunicate=(target:Entity)=>target.data.locationId===pc.locationId&&!!pc.locationId||s.entities.some(e=>e.kind==='item'&&e.data.category==='phone'&&e.data.ownerId===actorId&&!e.data.locked&&Number(e.data.battery)>0&&(e.data.contacts as {characterId:string}[]).some(c=>c.characterId===target.id));
  const roll=(attribute:keyof typeof pc.attributes,skillId:string|null=null,difficulty?:number)=>{
   const rule=requireRule(s);const die=rng.integer(rule.dieSides)+1,skill=skillId?(pc.skills[skillId]??0):0;
-  const modifier=pc.traits.reduce((n,id)=>n+Number(data(getEntity(s,id,'trait'),'trait').modifiers[attribute]??0),0);
+  const modifier=pc.traits.reduce((n,id)=>n+Number(data(getEntity(s,id,'trait'),'trait').modifiers[attribute]??0),0)+s.entities.filter(e=>e.kind==='injury'&&!e.archived&&e.data.characterId===actorId).reduce((n,e)=>n+Number(data(e,'injury').modifiers[attribute]??0),0);
   const target=difficulty??rule.threshold,total=die+pc.attributes[attribute]+skill+modifier;
   say('Check: '+total+' against '+target+'. '+(total>=target?'Success.':'Failure.'),'check');
   return total>=target;
@@ -27,7 +27,7 @@ export function resolveAction(s:State,actorId:string,action:Action,eventId:strin
  const activeCombat=()=>s.entities.find(e=>e.kind==='combat'&&!e.archived&&e.data.active&&(e.data.participants as string[]).includes(actorId));
  const combatTurn=()=>{const combat=activeCombat();assert(combat,'combat_not_active');const d=data(combat!,'combat');assert(d.participants[d.turnIndex]===actorId,'not_your_turn');return combat!;};
  if(activeCombat()&&!['look','say','surrender'].includes(action.type)){
-  assert(['attack','defend','grapple','restrain','disarm','shove','flee','reload','cover','consume','treat'].includes(action.type),'use_combat_action_or_flee');
+  assert(['attack','defend','grapple','restrain','disarm','shove','flee','reload','cover','consume','treat','tactical-move'].includes(action.type),'use_combat_action_or_flee');
   combatTurn();
  }
  const hurt=(target:Entity,amount:number,category:'gunshot'|'blunt',part:string)=>{
@@ -58,6 +58,7 @@ export function resolveAction(s:State,actorId:string,action:Action,eventId:strin
   const exit=location.exits.find(e=>e.to===destination.id&&e.modes.includes(mode));assert(exit,'route_unavailable');
   if(exit!.locked)assert(exit!.keyId&&s.entities.some(e=>e.id===exit!.keyId&&e.data.ownerId===actorId),'route_locked');
   assert(isOpen(data(destination,'location').hours,s),'destination_closed');
+  assert(!data(destination,'location').closedDates.includes(timeParts(s.clock,s.settings.timezone).date),'destination_closed');
   assert(pc.cash>=exit!.fare,'insufficient_funds');
   const interruption=exit!.interruption&&(!exit!.interruption.whenWeather||exit!.interruption.whenWeather===s.settings.weather)?exit!.interruption:null;
   const arrival=interruption?getEntity(s,interruption.locationId,'location'):destination,travelMinutes=interruption?.afterMinutes??exit!.minutes;
@@ -162,7 +163,7 @@ export function resolveAction(s:State,actorId:string,action:Action,eventId:strin
  }
  case 'social':{
   const target=getEntity(s,action.targetId,'character');nearby(target);assert(target.id!==actorId,'invalid_target');
-  const romantic=['flirt','date','commit','intimacy'].includes(action.intent);
+  const romantic=['flirt','date','commit','cohabit','marry','reconcile','intimacy'].includes(action.intent);
   assert(!pc.boundaries.includes(action.intent)&&!(target.data.boundaries as string[]).includes(action.intent),'boundary_declined');
   if(romantic){assert(s.settings.romance,'romance_disabled');assert(action.consent,'explicit_consent_required');
    const adult=(dob:unknown)=>typeof dob==='string'&&(Date.parse(s.clock)-Date.parse(dob))/31557600000>=18;
@@ -173,8 +174,8 @@ export function resolveAction(s:State,actorId:string,action:Action,eventId:strin
   if(!relation)relation=add(s,'relationship',target.name+' → '+actor.name,{fromId:target.id,toId:actorId,secret:false},'campaign');
   const r=data(relation,'relationship');
   assert(!r.boundaries.includes(action.intent),'boundary_declined');
-  if(['date','commit','intimacy'].includes(action.intent)){assert(r.pending===action.intent,'reciprocal_consent_required');r.pending='';r.labels=[...new Set([...r.labels,action.intent])];}
-  if(action.intent==='breakup')r.labels=r.labels.filter(x=>!['date','commit','intimacy'].includes(x));
+  if(['date','commit','cohabit','marry','reconcile','intimacy'].includes(action.intent)){assert(r.pending===action.intent,'reciprocal_consent_required');r.pending='';r.labels=[...new Set([...r.labels,action.intent])];}
+  if(action.intent==='breakup')r.labels=r.labels.filter(x=>!['date','commit','cohabit','marry','reconcile','intimacy'].includes(x));
   if(action.intent==='decline')r.pending='';
   r.familiarity=Math.min(100,r.familiarity+1-r.inertia);r.history.push({at:s.clock,eventId,label:action.intent});relation.data=r as Entity['data'];
   // Never assign an emotion or a relationship meter to the player.
@@ -190,6 +191,7 @@ export function resolveAction(s:State,actorId:string,action:Action,eventId:strin
   const order=[actor,target].sort((a,b)=>Number(b.data.attributes&& (b.data.attributes as Record<string,number>).Agility)-Number(a.data.attributes&&(a.data.attributes as Record<string,number>).Agility)||a.id.localeCompare(b.id));
   add(s,'combat','Conflict',{participants:order.map(e=>e.id)},'campaign');say('Conflict begins. Initiative is recorded.');break;
  }
+ case 'tactical-move':{const combat=combatTurn(),c=data(combat,'combat');assert(s.settings.tactics&&c.positions[actorId]!==undefined,'configure_tactical_movement_first');assert(Math.abs(action.position-c.positions[actorId]!)<=s.settings.tactics!.movementMeters,'movement_out_of_range');c.positions[actorId]=action.position;combat.data=c as Entity['data'];say('Tactical position updated.');minutes=1;break;}
  case 'attack':{
   const rule=requireRule(s),combat=combatTurn(),target=getEntity(s,action.targetId,'character');nearby(target);assert((combat.data.participants as string[]).includes(target.id)&&target.id!==actorId,'invalid_combat_target');
   const tactical=data(combat,'combat');
@@ -225,7 +227,10 @@ export function resolveAction(s:State,actorId:string,action:Action,eventId:strin
   const route=location.exits.find(e=>e.to===action.destinationId&&!e.locked&&e.modes.includes(action.vehicleId?'drive':'walk'));
   assert(route,'route_unavailable');const destination=getEntity(s,action.destinationId,'location');assert(visible(s,destination,actorId),'destination_unknown');
   if(action.vehicleId){const vehicle=getEntity(s,action.vehicleId,'vehicle'),v=data(vehicle,'vehicle');nearby(vehicle);assert(v.ownerId===actorId&&v.condition>0,'vehicle_access_denied');if(s.settings.fuel){assert(v.fuel>=route!.minutes/10,'insufficient_fuel');v.fuel-=route!.minutes/10;}v.locationId=destination.id;vehicle.data=v as Entity['data'];}
-  const success=roll(action.vehicleId?'Perception':'Agility');
+  const driving=s.entities.find(e=>e.kind==='skill'&&e.name.toLowerCase()==='driving');
+  const vehiclePenalty=action.vehicleId?(100-Number(getEntity(s,action.vehicleId,'vehicle').data.condition))/10:0;
+  const success=roll(action.vehicleId?'Perception':'Agility',action.vehicleId?driving?.id??null:null,requireRule(s).threshold+route!.terrainPenalty+(action.vehicleId?route!.trafficPenalty+vehiclePenalty:0));
+  if(action.vehicleId){const vehicle=getEntity(s,action.vehicleId,'vehicle'),v=data(vehicle,'vehicle');assert(v.occupants.every(id=>id===actorId||!getEntity(s,id,'character').data.playable),'passenger_consent_required');for(const id of v.occupants)if(id!==actorId)getEntity(s,id,'character').data.locationId=destination.id;if(!success&&s.settings.tactics)vehicle.data.condition=Math.max(0,v.condition-s.settings.tactics.failedChaseVehicleDamage);}
   arrivalId=destination.id;pc.locationId=null;target.data.locationId=destination.id;minutes=route!.minutes;
   if(success)target.data.fatigue=Math.min(100,Number(target.data.fatigue)+10);
   say(success?'The pursuit closes the distance.':'The pursued character maintains separation.');fact(s,target.id,'chase',{pursuerId:actorId,closed:success},eventId,atLocation(s,destination.id).map(e=>e.id));break;
@@ -306,7 +311,7 @@ export function resolveAction(s:State,actorId:string,action:Action,eventId:strin
  if(arrivalId){actor.data.locationId=arrivalId;fact(s,arrivalId,'visited',true,eventId,[actorId]);}
  // Non-player initiative is deterministic; it never supplies an action for a playable character.
  const combat=activeCombat();
- if(combat&&['combat','attack','defend','grapple','restrain','disarm','shove','reload','cover','consume','treat','say','flee'].includes(action.type)){
+ if(combat&&['combat','attack','defend','grapple','restrain','disarm','shove','reload','cover','consume','treat','say','flee','tactical-move'].includes(action.type)){
   const c=data(combat,'combat');if(action.type!=='combat'){c.turnIndex=(c.turnIndex+1)%c.participants.length;if(c.turnIndex===0)c.round++;}
   let steps=0;
   while(steps++<c.participants.length){

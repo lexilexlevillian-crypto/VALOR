@@ -3,6 +3,7 @@ import {data,getEntity,validateEntity} from './model.ts';
 import type {Entity,State} from './model.ts';
 import {fact,observe,remember} from './epistemics.ts';
 import {matchesCondition} from './conditions.ts';
+import {advanceLifecycle,startNpcJourney,finishNpcJourney} from './lifecycle.ts';
 export type Effect={id:string;text:string;observers:string[];type:string;subjectId:string};
 export function emit(effects:Effect[],text:string,observers:string[],type:string,subjectId:string){effects.push({id:randomUUID(),text,observers:[...new Set(observers)],type,subjectId});}
 export function atLocation(s:State,locationId:string|null){return s.entities.filter(e=>e.kind==='character'&&!e.archived&&e.data.locationId===locationId&&locationId&&e.data.condition==='conscious');}
@@ -23,6 +24,13 @@ export function isOpen(hours:{opens:number;closes:number}|null,s:State){
  return hours.closes>hours.opens?h>=hours.opens&&h<hours.closes:h>=hours.opens||h<hours.closes;
 }
 export function advance(s:State,minutes:number,eventId:string,effects:Effect[],playerId:string){
+ if(s.settings.deterministicCatchup&&minutes>1){
+  const cost=minutes*Math.max(1,s.entities.filter(e=>!e.archived&&['character','watcher','production','transition','socialRule'].includes(e.kind)).length);
+  if(cost>200000)throw new Error('catchup_work_budget_exceeded_use_shorter_wait');
+  for(let minute=0;minute<minutes;minute++)advanceStep(s,1,eventId,effects,playerId);
+ }else advanceStep(s,minutes,eventId,effects,playerId);
+}
+function advanceStep(s:State,minutes:number,eventId:string,effects:Effect[],playerId:string){
  const start=Date.parse(s.clock),end=start+minutes*60000,npcs=s.entities.filter(e=>e.kind==='character'&&!e.archived&&!e.data.playable);
  if(npcs.length>s.settings.npcBudget)throw new Error('npc_budget_exceeded');
  const slots:{at:number;minute:number;day:number}[]=[];
@@ -33,12 +41,16 @@ export function advance(s:State,minutes:number,eventId:string,effects:Effect[],p
   let previousLocation=d.locationId;
   for(const parts of slots){
    if(!d.schedule.length)break;
+   if(s.settings.npcRouteTravel)finishNpcJourney(s,npc,d,parts.at,eventId,effects);
    const due=d.schedule.filter(x=>x.minute===parts.minute&&x.days.includes(parts.day)).sort((a,b)=>a.id.localeCompare(b.id));
-   for(const entry of due){const location=getEntity(s,entry.locationId,'location');d.locationId=location.id;d.activity=entry.activity;
+   for(const entry of due){const location=getEntity(s,entry.locationId,'location');
+    if(s.settings.npcRouteTravel){if(d.locationId===location.id)d.activity=entry.activity;else startNpcJourney(s,npc,d,location.id,parts.at,entry.activity);continue;}
+    d.locationId=location.id;d.activity=entry.activity;
     const observers=atLocation(s,location.id).filter(e=>e.data.playable).map(e=>e.id);
     if(observers.length)emit(effects,npc.name+' arrives and begins '+entry.activity+'.',observers,'npc.schedule',npc.id);
    }
   }
+  if(s.settings.npcRouteTravel)finishNpcJourney(s,npc,d,end,eventId,effects);
   d.lastSimulated=new Date(end).toISOString();npc.data=d as Entity['data'];npc.revision++;
   if(previousLocation!==d.locationId)fact(s,npc.id,'location',d.locationId,eventId,atLocation(s,d.locationId).map(e=>e.id));
  }
@@ -77,7 +89,7 @@ export function advance(s:State,minutes:number,eventId:string,effects:Effect[],p
    wound.data=injury as Entity['data'];
   }
   if(d.blood<=0){d.condition='dead';const observers=atLocation(s,d.locationId).map(e=>e.id);fact(s,character.id,'death',{at:s.clock},eventId,observers);emit(effects,character.name+' has died.',observers,'death',character.id);
-   const remains=add(s,'item','Remains of '+character.name,{category:'container',locationId:d.locationId,capacity:100000,provenance:eventId},'campaign');
+   const remains=add(s,'item','Remains of '+character.name,{category:'container',locationId:d.locationId,capacity:100000,provenance:eventId,deceasedId:character.id},'campaign');
    for(const item of s.entities.filter(e=>e.kind==='item'&&!e.archived&&e.data.ownerId===character.id)){item.data.ownerId=null;item.data.containerId=remains.id;item.data.equipped=false;}
   }else if(d.blood<20)d.condition='unconscious';
   character.data=d as Entity['data'];
@@ -140,12 +152,26 @@ export function advance(s:State,minutes:number,eventId:string,effects:Effect[],p
   const plans=[...d.plans].filter(p=>p.enabled).sort((a,b)=>b.priority-a.priority||a.id.localeCompare(b.id));
   for(const plan of plans){
    if(d.preferences[plan.type]==='off')continue;
+   if(!plan.conditions.every(c=>matchesCondition(s,c)))continue;
    if(!plan.lastRun)plan.lastRun=new Date(start).toISOString();
    const interval=Math.max(minInterval,plan.cooldownMinutes),previous=Date.parse(plan.lastRun);
    const due=Math.floor((end-previous)/(interval*60000));if(due<1)continue;
    const target=s.entities.find(e=>e.id===plan.targetId&&!e.archived);if(!target)continue;
    const observers=atLocation(s,d.locationId).filter(e=>e.data.playable).map(e=>e.id);
    let performed=false;
+   if(plan.type==='message'&&target.kind==='character'&&plan.text){
+    const device=s.entities.find(e=>e.kind==='item'&&!e.archived&&e.data.ownerId===npc.id&&e.data.category==='phone'&&!e.data.locked&&Number(e.data.battery)>0&&(e.data.contacts as {characterId:string}[]).some(c=>c.characterId===target.id));
+    if(device){const delivered=s.entities.some(e=>e.kind==='item'&&!e.archived&&e.data.ownerId===target.id&&e.data.category==='phone'&&Number(e.data.battery)>0);
+     const message=add(s,'message','Message from '+npc.name,{fromId:npc.id,toId:target.id,phoneId:device.id,medium:'sms',body:plan.text,at:s.clock,status:delivered?'delivered':'queued'},'owner');
+     device.data.battery=Number(device.data.battery)-1;fact(s,message.id,'communication',{fromId:npc.id,toId:target.id,medium:'sms'},eventId,delivered?[npc.id,target.id]:[npc.id]);
+     if(delivered){s.beliefs.push({id:randomUUID(),observerId:target.id,proposition:plan.text,confidence:0.5,source:'message:'+message.id,at:s.clock,correctedBy:null});emit(effects,npc.name+': '+plan.text,[target.id],'npc.message',message.id);}performed=true;
+    }
+   }
+   if(plan.type==='breakup'&&target.kind==='relationship'&&target.data.fromId===npc.id){
+    const r=data(target,'relationship');if(r.labels.some(label=>['date','commit','cohabit','marry','intimacy'].includes(label))){r.labels=r.labels.filter(label=>!['date','commit','cohabit','marry','intimacy'].includes(label));r.pending='';r.history.push({at:s.clock,eventId,label:'NPC ended relationship'});target.data=r as Entity['data'];
+     const recipient=getEntity(s,r.toId,'character');if(recipient.data.locationId===d.locationId&&d.locationId){fact(s,target.id,'relationship-ended',true,eventId,[npc.id,recipient.id]);emit(effects,npc.name+' ends the relationship.',[recipient.id],'npc.relationship',npc.id);}performed=true;
+    }
+   }
    if(plan.type==='work'&&target.kind==='job'){
     const job=data(target,'job'),employer=getEntity(s,job.employerId,'business'),business=data(employer,'business');
     const elapsed=Math.floor(due*interval/job.minutesPerShift)*job.minutesPerShift;
@@ -159,7 +185,7 @@ export function advance(s:State,minutes:number,eventId:string,effects:Effect[],p
     emit(effects,npc.name+' begins a conversation.',observers,'npc.social',npc.id);performed=true;
    }
    if(plan.type==='offer'&&target.kind==='relationship'&&target.data.fromId===npc.id){
-    const r=data(target,'relationship'),recipient=getEntity(s,r.toId,'character'),intent=r.tags.find(t=>['date','commit','intimacy'].includes(t));
+    const r=data(target,'relationship'),recipient=getEntity(s,r.toId,'character'),intent=r.tags.find(t=>['date','commit','cohabit','marry','reconcile','intimacy'].includes(t));
     const adult=(dob:unknown)=>typeof dob==='string'&&(end-Date.parse(dob))/31557600000>=18;
     if(intent&&s.settings.romance&&adult(d.dob)&&adult(recipient.data.dob)&&recipient.data.locationId===d.locationId&&!r.pending&&!r.boundaries.includes(intent)&&!d.boundaries.includes(intent)&&!(recipient.data.boundaries as string[]).includes(intent)&&d.preferences.romance!=='off'&&(recipient.data.preferences as Record<string,string>).romance!=='off'&&(intent!=='intimacy'||s.settings.intimacy==='fade-to-black')){
      r.pending=intent;target.data=r as Entity['data'];
@@ -179,14 +205,15 @@ export function advance(s:State,minutes:number,eventId:string,effects:Effect[],p
    }
    if(plan.type==='travel'&&target.kind==='location'&&d.locationId&&target.id!==d.locationId){
     const current=data(getEntity(s,d.locationId,'location'),'location'),route=current.exits.find(e=>e.to===target.id&&e.modes.includes('walk')&&!e.locked);
-    if(route&&route.minutes<=minutes&&isOpen(data(target,'location').hours,s)){d.locationId=target.id;fact(s,npc.id,'location',target.id,eventId,atLocation(s,target.id).map(e=>e.id));performed=true;}
+    if(s.settings.npcRouteTravel){performed=startNpcJourney(s,npc,d,target.id,Math.max(start,previous+interval*60000),'travel');finishNpcJourney(s,npc,d,end,eventId,effects);}
+    else if(route&&route.minutes<=minutes&&isOpen(data(target,'location').hours,s)){d.locationId=target.id;fact(s,npc.id,'location',target.id,eventId,atLocation(s,target.id).map(e=>e.id));performed=true;}
    }
    if(plan.type==='crime'&&target.kind==='law'&&d.locationId){
     const law=data(target,'law');if(law.jurisdictionIds.includes(d.locationId)){const witnesses=atLocation(s,d.locationId).map(e=>e.id);fact(s,npc.id,'alleged-act',{lawId:target.id},eventId,witnesses);performed=true;emit(effects,'A witnessed incident involving '+npc.name+' is recorded.',observers,'npc.crime',npc.id);}
    }
    if(plan.type==='care'&&target.kind==='injury'&&s.settings.rules){
     const injury=data(target,'injury'),patient=getEntity(s,injury.characterId,'character'),medicine=plan.auxiliaryId?s.entities.find(e=>e.id===plan.auxiliaryId):null;
-    if(!injury.treated&&patient.data.condition!=='dead'&&patient.data.locationId===d.locationId&&medicine?.kind==='item'&&medicine.data.ownerId===npc.id&&medicine.data.category==='medicine'&&Number(medicine.data.quantity)>0&&minutes>=s.settings.rules.treatmentMinutes){
+    if(!injury.treated&&patient.data.condition!=='dead'&&patient.data.locationId===d.locationId&&medicine?.kind==='item'&&medicine.data.ownerId===npc.id&&medicine.data.category==='medicine'&&Number(medicine.data.quantity)>0&&due*interval>=s.settings.rules.treatmentMinutes){
      medicine.data.quantity=Number(medicine.data.quantity)-1;injury.treated=true;injury.bleeding=0;target.data=injury as Entity['data'];performed=true;emit(effects,npc.name+' provides first aid.',observers,'npc.care',npc.id);
     }
    }
@@ -194,4 +221,5 @@ export function advance(s:State,minutes:number,eventId:string,effects:Effect[],p
   }
   npc.data=d as Entity['data'];
  }
+ advanceLifecycle(s,start,end,eventId,effects);
 }

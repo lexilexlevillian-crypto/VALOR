@@ -13,6 +13,7 @@ test('iPad shell, keyboard login, Creator form, long prose, reduced motion and o
  let narrationRequests=0;
  await page.route('**/game/catalog',async route=>{const response=await route.fetch(),catalog=await response.json();catalog.providers=['grounded','gemini'];await route.fulfill({response,json:catalog});});
  await page.route('**/narrate',async route=>{assert.equal(route.request().postDataJSON().provider,'gemini');narrationRequests++;await route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:'test_provider_unavailable'})});});
+ await page.route('**/interpret',async route=>{assert.equal(route.request().postDataJSON().provider,'gemini');await route.fulfill({json:{action:{type:'wait',minutes:1},requiresConfirmation:true}});});
  try{
   const address=await f.app.listen({host:'127.0.0.1',port:0});
   // Origin is deployment configuration, not a header supplied by browser code.
@@ -58,6 +59,10 @@ test('iPad shell, keyboard login, Creator form, long prose, reduced motion and o
   await page.locator('.turn').nth(1).waitFor();
   assert.equal((await game.access(f.creator,timeline.id)).t.revision,beforeProposal+1);
   assert.equal(narrationRequests,2,'each committed turn tries the selected provider once; failures do not reroll');
+  const beforeAI=(await game.access(f.creator,timeline.id)).t.revision;
+  await page.getByLabel('Your explicit action').fill('Please wait a moment.');await page.getByRole('button',{name:'Ask Gemini to interpret',exact:true}).click();
+  await page.getByRole('heading',{name:'Review Gemini proposal'}).waitFor();assert.equal((await game.access(f.creator,timeline.id)).t.revision,beforeAI);
+  await page.getByRole('button',{name:'Cancel proposal',exact:true}).click();assert.equal((await game.access(f.creator,timeline.id)).t.revision,beforeAI);
   assert.deepEqual((await new AxeBuilder({page}).analyze()).violations.map(v=>v.id),[]);
   await page.screenshot({path:'artifacts/chronicle.png'});
   await page.setViewportSize({width:390,height:844});
