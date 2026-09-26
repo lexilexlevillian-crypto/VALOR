@@ -25,7 +25,7 @@ const rules=z.strictObject({
  bleedPerMinute:z.number().min(0).max(10)
 });
 export const settingsSchema=z.strictObject({
- needs:z.boolean().default(false),fuel:z.boolean().default(false),weather:z.enum(['clear','rain','overcast','snow','fog']).default('clear'),
+ needs:z.boolean().default(false),fuel:z.boolean().default(false),weather:z.enum(['clear','rain','overcast','snow','fog']).default('clear'),narrationMode:z.enum(['grounded','anchored-prose']).default('grounded'),
  romance:z.boolean().default(false),intimacy:z.enum(['off','fade-to-black']).default('off'),
  intensity:z.enum(['restrained','grounded']).default('restrained'),difficulty:z.enum(['custom','narrative']).default('custom'),
  rules:rules.nullable().default(null),tokenBudget:z.number().int().min(0).max(1000000).default(0),userTokenBudget:z.number().int().min(0).max(1000000).default(0),

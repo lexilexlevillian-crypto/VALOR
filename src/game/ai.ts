@@ -5,13 +5,14 @@ import {ensure} from '../contracts.ts';
 import type {Actor} from '../contracts.ts';
 import type {Effect} from './simulation.ts';
 import {contextBrief} from './context.ts';
-import {narrationPrompt} from './prompts.ts';
+import {anchoredNarrationPrompt,narrationPrompt} from './prompts.ts';
 import {usageSql} from './ai-intent.ts';
-export type NarrativeContext={promptVersion:string;instructions:string;fragments:{id:string;text:string}[];dossier?:ReturnType<typeof contextBrief>};
+export type NarrativeMode='grounded'|'anchored-prose';
+export type NarrativeContext={promptVersion:string;instructions:string;mode?:NarrativeMode;protectedIds?:string[];fragments:{id:string;text:string}[];dossier?:ReturnType<typeof contextBrief>};
 export interface NarrativeProvider {id:string; arrange(context:NarrativeContext,signal:AbortSignal):Promise<unknown>;estimateTokens?(context:NarrativeContext):number;}
 export class GroundedProvider implements NarrativeProvider {
  id='grounded';
- async arrange(context:NarrativeContext){return {order:context.fragments.map(f=>f.id)};}
+ async arrange(context:NarrativeContext){return context.mode==='anchored-prose'?{paragraphs:context.fragments.map(f=>({sourceIds:[f.id],text:f.text}))}:{order:context.fragments.map(f=>f.id)};}
 }
 // Optional trusted JSON gateway; credentials are operator environment only, never campaign data.
 export class JsonGatewayProvider implements NarrativeProvider {
@@ -26,8 +27,21 @@ export class JsonGatewayProvider implements NarrativeProvider {
   return JSON.parse(Buffer.concat(chunks).toString('utf8'));
  }
 }
-const output=z.strictObject({order:z.array(z.uuid()).max(200)});
+const output=z.strictObject({order:z.array(z.uuid()).max(200)});const anchoredOutput=z.strictObject({paragraphs:z.array(z.strictObject({sourceIds:z.array(z.uuid()).min(1).max(50),text:z.string().min(1).max(4000)})).max(200)});
+export function validateAnchoredNarration(raw:unknown,context:NarrativeContext){
+ const result=anchoredOutput.parse(raw),allowed=new Map(context.fragments.map(f=>[f.id,f.text])),used=new Set<string>();
+ const paragraphs=result.paragraphs.map(paragraph=>{
+  for(const id of paragraph.sourceIds){ensure(allowed.has(id),400,'invalid_narrative_sources');used.add(id);}
+  return paragraph.text.trim();
+ });
+ ensure(used.size===allowed.size&&[...allowed.keys()].every(id=>used.has(id)),400,'incomplete_narrative_sources');
+ const narration=paragraphs.join('\n\n');
+ for(const id of context.protectedIds??[]){const text=allowed.get(id);ensure(text!==undefined&&narration.includes(text),400,'player_dialogue_not_preserved');}
+ ensure(Buffer.byteLength(narration)<=24000,400,'narration_too_large');
+ return narration;
+}
 export function validateNarration(raw:unknown,context:NarrativeContext){
+ if(context.mode==='anchored-prose')return validateAnchoredNarration(raw,context);
  const result=output.parse(raw),allowed=new Set(context.fragments.map(f=>f.id));
  ensure(result.order.length===allowed.size&&new Set(result.order).size===allowed.size&&result.order.every(id=>allowed.has(id)),400,'invalid_narrative_sources');
  // Model strings are never accepted as facts, player dialogue or instructions.
@@ -43,7 +57,8 @@ export class NarrativeGateway {
   (await this.game.authorizeCharacter(actor,timelineId,turn.character_id));
   const provider=this.providers.get(providerId);ensure(provider,400,'provider_unavailable');
   const s=(await this.game.load(timelineId));
-  const context:NarrativeContext={promptVersion:narrationPrompt.version,instructions:narrationPrompt.instructions,fragments:(JSON.parse(turn.permitted_json) as Effect[]).map(f=>({id:f.id,text:f.text}))};
+  const effects=JSON.parse(turn.permitted_json) as Effect[],prompt=s.settings.narrationMode==='anchored-prose'?anchoredNarrationPrompt:narrationPrompt;
+  const context:NarrativeContext={promptVersion:prompt.version,instructions:prompt.instructions,mode:s.settings.narrationMode,protectedIds:effects.filter(f=>f.type==='player.dialogue'&&f.subjectId===turn.character_id).map(f=>f.id),fragments:effects.map(f=>({id:f.id,text:f.text}))};
   const room=s.settings.contextTokens-Buffer.byteLength(JSON.stringify(context))-528;
   if(room>=256)context.dossier=contextBrief(s,turn.character_id,'',Math.min(room,2000));
   const contextSize=Buffer.byteLength(JSON.stringify(context))+512;

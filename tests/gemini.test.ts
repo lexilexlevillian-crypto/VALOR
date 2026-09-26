@@ -2,7 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {GeminiProvider,geminiFromEnvironment} from '../src/game/gemini.ts';
-import {validateNarration} from '../src/game/ai.ts';
+import {validateAnchoredNarration,validateNarration} from '../src/game/ai.ts';
 import type {IntentContext} from '../src/game/ai-intent.ts';
 const context={promptVersion:'test',instructions:'Only order allowed IDs.',fragments:[{id:randomUUID(),text:'The authored consequence.'}]};
 test('Gemini uses server-side header credentials, configured model and a bounded structured response',async()=>{
@@ -36,4 +36,14 @@ test('Gemini rejects errors, oversized or incomplete output and cannot introduce
  await assert.rejects(()=>provider(Response.json({candidates:[{finishReason:'MAX_TOKENS',content:{parts:[{text:'{}'}]}}]})).arrange(context,AbortSignal.timeout(1000)),/incomplete/);
  const raw=await provider(Response.json({candidates:[{finishReason:'STOP',content:{parts:[{text:JSON.stringify({order:context.fragments.map(f=>f.id),text:'invented player consent'})}]}}]})).arrange(context,AbortSignal.timeout(1000));
  assert.throws(()=>validateNarration(raw,context));
+});
+
+
+test('anchored prose cites every simulation fragment and preserves player dialogue',()=>{
+ const dialogue={id:randomUUID(),text:'I stay right here.'},consequence={id:randomUUID(),text:'Time passes.'};
+ const anchored={mode:'anchored-prose' as const,promptVersion:'anchored-prose-v1',instructions:'',protectedIds:[dialogue.id],fragments:[dialogue,consequence]};
+ const raw={paragraphs:[{sourceIds:[consequence.id],text:'The minute passes.'},{sourceIds:[dialogue.id],text:'I stay right here.'}]};
+ assert.equal(validateAnchoredNarration(raw,anchored),'The minute passes.\n\nI stay right here.');
+ assert.throws(()=>validateAnchoredNarration({paragraphs:[{sourceIds:[consequence.id],text:'The minute passes.'}]},anchored),/incomplete_narrative_sources/);
+ assert.throws(()=>validateAnchoredNarration({paragraphs:[{sourceIds:[consequence.id],text:'The minute passes.'},{sourceIds:[dialogue.id],text:'You decide to leave.'}]},anchored),/player_dialogue_not_preserved/);
 });

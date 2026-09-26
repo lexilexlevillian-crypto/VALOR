@@ -2,6 +2,7 @@ import {randomUUID} from 'node:crypto';
 import {data,getEntity} from './model.ts';
 import type {Entity,State} from './model.ts';
 import {calendarView} from './calendar.ts';
+import {cosine,embedText} from './embedding.ts';
 export function observe(s:State,observerId:string,factId:string,source:string) {
  getEntity(s,observerId,'character');
  if(!s.facts.some(f=>f.id===factId))throw new Error('fact_unavailable');
@@ -84,6 +85,7 @@ export function observerView(s:State,observerId:string){
 }
 export function retrieve(s:State,observerId:string,query:string,limit=12,queryEmbedding:number[]=[]){
  const view=observerView(s,observerId),terms=query.toLowerCase().split(/\W+/).filter(Boolean);
+ const localQuery=queryEmbedding.length?queryEmbedding:embedText(query);
  const now=Date.parse(s.clock),location=data(getEntity(s,observerId),'character').locationId;
  const rows=view.entities.filter(e=>['lore','storycard'].includes(e.kind)).filter(e=>{
   const d=data(getEntity(s,e.id),e.kind as 'lore'|'storycard');
@@ -91,10 +93,10 @@ export function retrieve(s:State,observerId:string,query:string,limit=12,queryEm
    (!d.activation||(!d.activation.locationId||d.activation.locationId===location)&&(!d.activation.characterId||d.activation.characterId===observerId)&&(!d.activation.keywords.length||d.activation.keywords.some(k=>query.toLowerCase().includes(k.toLowerCase()))));
  }).map(e=>{
   const source=data(getEntity(s,e.id),e.kind as 'lore'|'storycard');
-  let semantic=0;if(queryEmbedding.length&&source.embedding.length===queryEmbedding.length){
-   const dot=queryEmbedding.reduce((n,v,i)=>n+v*source.embedding[i]!,0),norm=Math.hypot(...queryEmbedding)*Math.hypot(...source.embedding);semantic=norm?dot/norm:0;}
+  const candidateEmbedding=source.embedding.length===localQuery.length?source.embedding:embedText(source.description+' '+(source.tags as string[]).join(' '),localQuery.length);
+  const semantic=cosine(localQuery,candidateEmbedding);
   const body=(e.name+' '+e.data.description+' '+(e.data.tags as string[]).join(' ')).toLowerCase();
-  return {id:e.id,name:e.name,text:e.data.description,source:source.source,score:terms.filter(t=>body.includes(t)).length+semantic+source.priority};
+  return {id:e.id,name:e.name,text:e.data.description,source:source.source,score:terms.filter(t=>body.includes(t)).length+Math.max(0,semantic)+source.priority};
  }).sort((a,b)=>b.score-a.score||a.id.localeCompare(b.id)).slice(0,Math.min(limit,50));
  return {sources:rows,beliefs:view.beliefs.filter(b=>terms.some(t=>b.proposition.toLowerCase().includes(t))).slice(0,limit),
  memories:view.memories.filter(m=>m.currentSalience>0).sort((a,b)=>b.currentSalience-a.currentSalience).slice(0,limit),

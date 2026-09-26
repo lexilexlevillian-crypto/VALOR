@@ -28,7 +28,7 @@ Use actual UUIDs and an idempotency key. Returns `{revision,eventId,narration,pe
 
 `POST /game/timelines/:id/narrate` with `{turnId,provider}` may arrange already-approved fragments. It never runs simulation again. External providers can return only a permutation of permitted source IDs; arbitrary prose/tool instructions fail validation and fall back to grounded text. There is no externally exposed streaming HTTP endpoint yet.
 
-`GET /game/timelines/:id/context?characterId=UUID&query=...` returns observer-filtered lexical retrieval with authored priorities, relevant memories and corrected beliefs. The retrieval function additionally supports supplied vectors; the HTTP endpoint does not call an embedding provider.
+`GET /game/timelines/:id/context?characterId=UUID&query=...` returns observer-filtered lexical plus deterministic local semantic retrieval with authored priorities, relevant memories and corrected beliefs. Creator-supplied vectors remain supported; the HTTP endpoint does not call an external embedding provider. Narration remains grounded by default; Creator settings may opt into source-anchored prose whose paragraphs cite every committed simulation fragment.
 
 ## Creator and debugging
 

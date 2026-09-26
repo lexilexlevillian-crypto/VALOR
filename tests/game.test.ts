@@ -54,6 +54,8 @@ test('observer filtering, custom sections and four epistemic layers prevent hidd
   assert.match(view,/Possibly false/);assert.match(view,/subjective recollection/);
   const search=retrieve((await f.game.load(f.timeline.id)),f.pc,'classified visible',10,[1,0]);
   assert.ok(search.sources.some(e=>e.id===known));assert.ok(!search.sources.some(e=>e.id===secret));
+  const localSearch=retrieve((await f.game.load(f.timeline.id)),f.pc,'visible note',10);
+  assert.ok(localSearch.sources.some(e=>e.id===known),'local deterministic embeddings should rank semantically related lore');
   (await assert.rejects(async ()=>(await f.game.creator(f.player,f.timeline.id)),/forbidden/));
   (await assert.rejects(async ()=>(await f.game.view(f.other,f.timeline.id,f.pc)),/not_found/));
  }finally{await f.close();}
