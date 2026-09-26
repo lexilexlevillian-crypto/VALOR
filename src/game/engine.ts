@@ -11,6 +11,9 @@ import {resolveAction} from './actions.ts';
 import type {Effect} from './simulation.ts';
 import {skillNames,traitGroups} from './catalog.ts';
 import type {InStatement,InValue} from '@libsql/client';
+import {contextBrief} from './context.ts';
+import {proposeIntent} from './intent.ts';
+import type {IntentProposal} from './intent.ts';
 type Timeline={id:string;campaign_id:string;parent_id:string|null;parent_save_id:string|null;name:string;revision:number;clock:string;settings_json:string};
 type Mutation<T>={result:T;effects?:Effect[];draws?:number;characterId?:string;turnText?:string};
 const now=()=>new Date().toISOString();
@@ -97,6 +100,7 @@ export class Game {
    const revision=t.revision+1;
    (await this.store.run('UPDATE timelines SET revision=? WHERE id=?',revision,id));
    (await this.store.run('INSERT INTO game_events VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',eventId,id,revision,actor.id,action.characterId??null,type,JSON.stringify(body),JSON.stringify(action.effects??[]),seed,action.draws??0,s.clock,now()));
+   await this.store.run('INSERT INTO game_outbox(event_id,created_at) VALUES (?,?)',eventId,now());
    if(action.characterId){
     const permitted=(action.effects??[]).filter(e=>e.observers.includes(action.characterId!));
     const narration=permitted.map(e=>e.text).join('\n\n')||'The action is recorded.';
@@ -112,6 +116,11 @@ export class Game {
  async edit(actor:Actor,id:string,input:{revision:number;entity:unknown},key:string){
   const entity=validateEntity(input.entity);
   return (await this.mutate(actor,id,input.revision,key,input,'creator.entity',true,async s=>{
+   await this.applyEntity(id,s,entity);
+   return {result:{entityId:entity.id}};
+  }));
+ }
+ private async applyEntity(id:string,s:State,entity:Entity){
    const previous=s.entities.find(e=>e.id===entity.id);ensure(!previous||previous.kind===entity.kind,400,'entity_kind_immutable');
    if(entity.kind==='character'&&entity.data.controllerUserId)ensure((await this.store.get('SELECT user_id FROM memberships WHERE campaign_id=(SELECT campaign_id FROM timelines WHERE id=?) AND user_id=?',id,String(entity.data.controllerUserId))),400,'controller_not_member');
    if(entity.kind==='character'){
@@ -122,8 +131,45 @@ export class Game {
    }
    if(entity.archived)ensure(!s.entities.some(e=>!e.archived&&e.id!==entity.id&&refs(e).includes(entity.id)),409,'entity_has_active_references');
    if(previous)s.entities[s.entities.indexOf(previous)]=entity;else s.entities.push(entity);
-   return {result:{entityId:entity.id}};
-  }));
+ }
+ async bulkEdit(actor:Actor,id:string,input:{revision:number;entities:unknown[]},key:string){
+  const entities=z.array(entitySchema).min(1).max(100).parse(input.entities).map(validateEntity);
+  ensure(new Set(entities.map(e=>e.id)).size===entities.length,400,'duplicate_entity_id');
+  return this.mutate(actor,id,input.revision,key,input,'creator.bulk',true,async s=>{
+   // Put the complete candidate set in a staging state so references can cross batch entries.
+   const staged=structuredClone(s);
+   for(const entity of entities){const i=staged.entities.findIndex(e=>e.id===entity.id);if(i<0)staged.entities.push(entity);else staged.entities[i]=entity;}
+   validateState(staged);
+   for(const entity of entities){
+    const old=s.entities.find(e=>e.id===entity.id);
+    const candidate={...staged,entities:staged.entities.filter(e=>e.id!==entity.id)};
+    if(old)candidate.entities.push(old);
+    await this.applyEntity(id,candidate,entity);
+   }
+   s.entities=staged.entities;return {result:{entityIds:entities.map(e=>e.id)}};
+  });
+ }
+ private async savedSnapshot(id:string,saveId:string){
+  const row=await this.store.get<{snapshot_json:string;checksum:string;revision:number}>('SELECT snapshot_json,checksum,revision FROM saves WHERE id=? AND timeline_id=?',saveId,id);
+  ensure(row,404,'save_unavailable');const raw=JSON.parse(row.snapshot_json);
+  ensure(checksum(raw)===row.checksum,409,'corrupt_save');return {revision:row.revision,...snapshotSchema.parse(raw)};
+ }
+ async compareSave(actor:Actor,id:string,saveId:string){
+  return this.store.transaction(async()=>{
+   await this.access(actor,id,true);const saved=await this.savedSnapshot(id,saveId),current=await this.load(id);
+   const old=new Map(saved.state.entities.map(e=>[e.id,e])),fresh=new Map(current.entities.map(e=>[e.id,e]));
+   return {saveRevision:saved.revision,savedClock:saved.state.clock,currentClock:current.clock,
+    added:current.entities.filter(e=>!old.has(e.id)).map(e=>({id:e.id,name:e.name,kind:e.kind})),
+    removed:saved.state.entities.filter(e=>!fresh.has(e.id)).map(e=>({id:e.id,name:e.name,kind:e.kind})),
+    changed:current.entities.filter(e=>old.has(e.id)&&checksum(old.get(e.id))!==checksum(e)).map(e=>({id:e.id,name:e.name,kind:e.kind}))};
+  },'read');
+ }
+ async restoreEntity(actor:Actor,id:string,input:{revision:number;saveId:string;entityId:string},key:string){
+  return this.mutate(actor,id,input.revision,key,input,'creator.restore',true,async s=>{
+   const saved=await this.savedSnapshot(id,input.saveId),entity=saved.state.entities.find(e=>e.id===input.entityId);
+   ensure(entity,404,'entity_unavailable');await this.applyEntity(id,s,validateEntity(entity));
+   return {result:{entityId:entity.id,sourceSaveId:input.saveId}};
+  });
  }
  async configure(actor:Actor,id:string,revision:number,settings:unknown,key:string){
   const parsed=settingsSchema.parse(settings);new Intl.DateTimeFormat('en-US',{timeZone:parsed.timezone});
@@ -155,16 +201,9 @@ export class Game {
   }));
  }
  async authorizeCharacter(actor:Actor,id:string,characterId:string){const {access}=(await this.access(actor,id));this.controlled(actor,(await this.load(id)),characterId,access.role);}
- async parse(actor:Actor,id:string,characterId:string,text:string):Promise<{action:Action|null;clarification?:string}>{
+ async parse(actor:Actor,id:string,characterId:string,text:string):Promise<IntentProposal>{
   const {access}=(await this.access(actor,id)),s=(await this.load(id));this.controlled(actor,s,characterId,access.role);
-  const input=text.trim();
-  if(/^look$/i.test(input))return {action:{type:'look'}};
-  const wait=/^(wait|sleep)\s+(\d+)(?:\s+minutes?)?$/i.exec(input);
-  if(wait)return {action:actionSchema.parse({type:wait[1]!.toLowerCase(),minutes:Number(wait[2])})};
-  const say=/^say\s+([\s\S]+)$/i.exec(input);if(say)return {action:{type:'say',text:say[1]!}};
-  const go=/^(?:go|travel)\s+(?:to\s+)?(.+)$/i.exec(input);
-  if(go){const matches=s.entities.filter(e=>e.kind==='location'&&!e.archived&&e.name.toLowerCase()===go[1]!.toLowerCase()&&observerView(s,characterId).entities.some(v=>v.id===e.id));if(matches.length===1)return {action:{type:'travel',destinationId:matches[0]!.id,mode:'walk',vehicleId:null}};}
-  return {action:null,clarification:'Choose an explicit action below, or enter “look”, “wait 10”, “sleep 60”, “say …”, or “go to [known location]”. No action has been taken.'};
+  return proposeIntent(s,characterId,text);
  }
  private async saveInternal(actor:Actor,id:string,name:string,s:State,revision:number,automatic=false){
   const saveId=randomUUID(),snapshot={version:1,state:s,transcript:(await this.transcript(id))};
@@ -201,7 +240,7 @@ export class Game {
    (await this.audit(actor,t.campaign_id,'timeline.imported',child));(await this.saveInternal(actor,child,'Import origin',state,1,true));return {id:child};}));
  }
  async history(actor:Actor,id:string){(await this.access(actor,id,true));return (await this.store.all('SELECT * FROM game_events WHERE timeline_id=? ORDER BY rowid DESC LIMIT 100',id));}
- async context(actor:Actor,id:string,characterId:string,query:string){const {access}=(await this.access(actor,id));const s=(await this.load(id));this.controlled(actor,s,characterId,access.role);return retrieve(s,characterId,query);}
+ async context(actor:Actor,id:string,characterId:string,query:string){const {access}=(await this.access(actor,id));const s=(await this.load(id));this.controlled(actor,s,characterId,access.role);return {...retrieve(s,characterId,query),brief:contextBrief(s,characterId,query,s.settings.contextTokens)};}
  async template(actor:Actor,id:string,name:string){
   const {t}=(await this.access(actor,id,true)),campaign=(await this.store.get<{source_world_id:string}>('SELECT source_world_id FROM campaigns WHERE id=?',t.campaign_id))!;
   (await this.domain.access(actor,{type:'world',id:campaign.source_world_id},true));const bundle=(await this.export(actor,id)),templateId=randomUUID();

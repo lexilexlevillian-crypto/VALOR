@@ -5,13 +5,14 @@ import {atLocation,add,advance,emit,isOpen} from './simulation.ts';
 import type {Effect} from './simulation.ts';
 import {fact,observe,remember,visible} from './epistemics.ts';
 import {randomSource} from '../random.ts';
+import {extendedAction} from './extended-actions.ts';
 const requireRule=(s:State)=>{if(!s.settings.rules)throw new Error('configure_resolution_rules_first');return s.settings.rules;};
 const assert=(ok:unknown,code:string)=>{if(!ok)throw new Error(code);};
 export function resolveAction(s:State,actorId:string,action:Action,eventId:string,seed:string){
  const actor=getEntity(s,actorId,'character');let pc=data(actor,'character');const effects:Effect[]=[];
  const rng=randomSource(seed);let minutes=0;let arrivalId:string|null=null;
  assert(pc.condition==='conscious','character_cannot_act');
- assert(!pc.restrainedBy||['look','say','wait','surrender'].includes(action.type),'character_restrained');
+ assert(!pc.restrainedBy||['look','say','wait','surrender','pay-bail'].includes(action.type),'character_restrained');
  const say=(text:string,type:string=action.type,subjectId=actorId,observers=[actorId])=>emit(effects,text,observers,type,subjectId);
  const nearby=(target:Entity)=>{assert(target.data.locationId===pc.locationId&&pc.locationId&&visible(s,target,actorId),'target_not_present');};
  const owned=(id:string)=>{const item=getEntity(s,id,'item');assert(item.data.ownerId===actorId&&visible(s,item,actorId),'item_not_owned');return item;};
@@ -58,18 +59,21 @@ export function resolveAction(s:State,actorId:string,action:Action,eventId:strin
   if(exit!.locked)assert(exit!.keyId&&s.entities.some(e=>e.id===exit!.keyId&&e.data.ownerId===actorId),'route_locked');
   assert(isOpen(data(destination,'location').hours,s),'destination_closed');
   assert(pc.cash>=exit!.fare,'insufficient_funds');
+  const interruption=exit!.interruption&&(!exit!.interruption.whenWeather||exit!.interruption.whenWeather===s.settings.weather)?exit!.interruption:null;
+  const arrival=interruption?getEntity(s,interruption.locationId,'location'):destination,travelMinutes=interruption?.afterMinutes??exit!.minutes;
   if(action.type==='flee'&&!roll('Agility')){say('The escape attempt fails.');minutes=1;break;}
   pc.cash-=exit!.fare;
   if(mode==='drive'){
    const vehicle=getEntity(s,action.type==='travel'?action.vehicleId??'':'','vehicle'),d=data(vehicle,'vehicle');nearby(vehicle);
    assert(d.ownerId===actorId||d.keyId&&s.entities.some(e=>e.id===d.keyId&&e.data.ownerId===actorId),'vehicle_access_denied');
-   assert(d.condition>0,'vehicle_disabled');if(s.settings.fuel){assert(d.fuel>=exit!.minutes/10,'insufficient_fuel');d.fuel-=exit!.minutes/10;}
+   assert(d.condition>0,'vehicle_disabled');if(s.settings.fuel){assert(d.fuel>=travelMinutes/10,'insufficient_fuel');d.fuel-=travelMinutes/10;}
    assert(d.occupants.every(id=>id===actorId||!getEntity(s,id,'character').data.playable),'passenger_consent_required');
-   for(const id of d.occupants)getEntity(s,id,'character').data.locationId=destination.id;
-   d.locationId=destination.id;vehicle.data=d as Entity['data'];
+   for(const id of d.occupants)getEntity(s,id,'character').data.locationId=arrival.id;
+   d.locationId=arrival.id;vehicle.data=d as Entity['data'];
   }
-  arrivalId=destination.id;pc.locationId=null;minutes=exit!.minutes;
-  say('Arrival: '+destination.name+'.','travel',destination.id);
+  arrivalId=arrival.id;pc.locationId=null;minutes=travelMinutes;
+  if(interruption?.questId)getEntity(s,interruption.questId,'quest').data.status='active';
+  say((interruption?'Travel interrupted at: ':'Arrival: ')+arrival.name+'.','travel',arrival.id);
   const combat=activeCombat();if(combat)combat.data.active=false;break;
  }
  case 'take':{
@@ -91,10 +95,13 @@ export function resolveAction(s:State,actorId:string,action:Action,eventId:strin
  case 'equip':{const item=owned(action.itemId);item.data.equipped=action.equipped;say(item.name+(action.equipped?' equipped.':' unequipped.'));break;}
  case 'conceal':{const item=owned(action.itemId);item.data.concealed=action.concealed;say(item.name+(action.concealed?' concealed.':' made visible.'));minutes=1;break;}
  case 'store':case 'retrieve':{
-  const container=getEntity(s,action.containerId,'item'),c=data(container,'item');assert(c.category==='container'&&!c.locked,'container_unavailable');
-  assert(visible(s,container,actorId)&&(c.ownerId===actorId||c.locationId===pc.locationId&&pc.locationId),'container_access_denied');
+  const container=getEntity(s,action.containerId);assert(['item','vehicle'].includes(container.kind),'container_unavailable');
+  const vehicle=container.kind==='vehicle'?data(container,'vehicle'):null,c=container.kind==='item'?data(container,'item'):null;
+  assert(vehicle?!vehicle.locked:c?.category==='container'&&!c.locked,'container_unavailable');
+  const owner=vehicle?.ownerId??c?.ownerId,location=vehicle?.locationId??c?.locationId,capacity=vehicle?.trunkCapacity??c?.capacity??0;
+  assert(visible(s,container,actorId)&&(vehicle?location===pc.locationId&&pc.locationId&&(owner===actorId||vehicle.keyId&&s.entities.some(e=>e.id===vehicle.keyId&&e.data.ownerId===actorId)):owner===actorId||location===pc.locationId&&pc.locationId),'container_access_denied');
   const item=getEntity(s,action.itemId,'item'),d=data(item,'item');assert(item.id!==container.id,'containment_cycle');
-  if(action.type==='store'){owned(item.id);const used=s.entities.filter(e=>e.kind==='item'&&e.data.containerId===container.id).reduce((n,e)=>n+Number(e.data.weight)*Number(e.data.quantity),0);assert(used+d.weight*d.quantity<=c.capacity,'container_capacity');d.ownerId=null;d.locationId=null;d.containerId=container.id;d.equipped=false;}
+  if(action.type==='store'){owned(item.id);const used=s.entities.filter(e=>e.kind==='item'&&!e.archived&&e.data.containerId===container.id).reduce((n,e)=>n+Number(e.data.weight)*Number(e.data.quantity),0);assert(used+d.weight*d.quantity<=capacity,'container_capacity');d.ownerId=null;d.locationId=null;d.containerId=container.id;d.equipped=false;}
   else{assert(d.containerId===container.id&&visible(s,item,actorId),'item_not_in_container');d.containerId=null;d.ownerId=actorId;}
   item.data=d as Entity['data'];say(item.name+(action.type==='store'?' stored.':' retrieved.'));minutes=1;break;
  }
@@ -108,7 +115,7 @@ export function resolveAction(s:State,actorId:string,action:Action,eventId:strin
   const item=owned(action.itemId),d=data(item,'item');assert(d.quantity>0&&['food','drink','substance','medicine'].includes(d.category),'not_consumable');
   if(d.category==='food')pc.hunger=Math.max(0,pc.hunger-d.dose);
   if(d.category==='drink')pc.thirst=Math.max(0,pc.thirst-d.dose);
-  if(d.category==='substance'){pc.intoxication=Math.min(100,pc.intoxication+d.dose);if(pc.intoxication===100)add(s,'injury','Substance reaction',{characterId:actorId,bodyPart:'systemic',category:'overdose',severity:100,startedAt:s.clock},'owner');}
+  if(d.category==='substance'){pc.lastDoseAt=s.clock;pc.withdrawal=0;pc.intoxication=Math.min(100,pc.intoxication+d.dose);if(pc.intoxication===100)add(s,'injury','Substance reaction',{characterId:actorId,bodyPart:'systemic',category:'overdose',severity:100,startedAt:s.clock},'owner');}
   d.quantity--;item.data=d as Entity['data'];say(item.name+' consumed.');minutes=1;break;
  }
  case 'treat':{
@@ -156,6 +163,7 @@ export function resolveAction(s:State,actorId:string,action:Action,eventId:strin
  case 'social':{
   const target=getEntity(s,action.targetId,'character');nearby(target);assert(target.id!==actorId,'invalid_target');
   const romantic=['flirt','date','commit','intimacy'].includes(action.intent);
+  assert(!pc.boundaries.includes(action.intent)&&!(target.data.boundaries as string[]).includes(action.intent),'boundary_declined');
   if(romantic){assert(s.settings.romance,'romance_disabled');assert(action.consent,'explicit_consent_required');
    const adult=(dob:unknown)=>typeof dob==='string'&&(Date.parse(s.clock)-Date.parse(dob))/31557600000>=18;
    assert(adult(pc.dob)&&adult(target.data.dob),'adult_age_verification_required');
@@ -184,15 +192,18 @@ export function resolveAction(s:State,actorId:string,action:Action,eventId:strin
  }
  case 'attack':{
   const rule=requireRule(s),combat=combatTurn(),target=getEntity(s,action.targetId,'character');nearby(target);assert((combat.data.participants as string[]).includes(target.id)&&target.id!==actorId,'invalid_combat_target');
+  const tactical=data(combat,'combat');
+  assert(!tactical.blockedLines.some(line=>line.fromId===actorId&&line.toId===target.id||line.fromId===target.id&&line.toId===actorId),'line_of_fire_blocked');
   let category:'gunshot'|'blunt'='blunt',skillId:string|null=null,penalty=0;
   if(action.weaponId){const weapon=owned(action.weaponId),w=data(weapon,'item');assert(['weapon','firearm'].includes(w.category)&&w.condition>0,'weapon_unavailable');
+   if(w.rangeMeters!==null){assert(tactical.positions[actorId]!==undefined&&tactical.positions[target.id]!==undefined,'tactical_positions_required');assert(Math.abs(tactical.positions[actorId]!-tactical.positions[target.id]!)<=w.rangeMeters,'target_out_of_range');}
    if(w.category==='firearm'){assert(w.loaded>0,'empty_firearm');w.loaded--;category='gunshot';weapon.data=w as Entity['data'];add(s,'evidence','Spent casing',{locationId:pc.locationId,objectId:weapon.id,sourceEventId:eventId},'knowledge');}
    const skill=s.entities.find(e=>e.kind==='skill'&&e.name===w.proficiency);skillId=skill?.id??null;if(!skillId||!pc.skills[skillId])penalty=rule.unfamiliarPenalty;
   }
   const c=data(combat,'combat'),cover=c.cover[target.id]??0,defense=c.defenses[target.id]?2:0;
   if(roll(category==='gunshot'?'Perception':'Strength',skillId,rule.threshold+cover+defense+penalty)){
    const armor=s.entities.filter(e=>e.kind==='item'&&e.data.ownerId===target.id&&e.data.equipped&&e.data.category==='armor'&&(e.data.coverage as string[]).includes(action.bodyPart));
-   const amount=Math.max(0,rule.damage-armor.reduce((n,e)=>n+Number(e.data.condition)/100,0));hurt(target,amount,category,action.bodyPart);say('The attack causes an externally visible injury.','injury',target.id);
+   const amount=Math.max(0,rule.damage-armor.reduce((n,e)=>n+data(e,'item').protection*Number(e.data.condition)/100,0));if(amount>0){hurt(target,amount,category,action.bodyPart);say('The attack causes an externally visible injury.','injury',target.id);}else say('Authored protection prevents injury.');
   }else say('The attack does not connect.');
   delete c.defenses[target.id];combat.data=c as Entity['data'];minutes=1;break;
  }
@@ -279,6 +290,7 @@ export function resolveAction(s:State,actorId:string,action:Action,eventId:strin
   }
   // Warrants are Creator-authored legal decisions; an officer cannot self-issue one.
   assert(action.operation!=='warrant','creator_judicial_authorization_required');
+  assert(action.operation!=='bail','use_authorized_bail_payment');
   const allowed:Record<string,string[]>={investigate:['reported','investigating'],search:['investigating','warrant'],arrest:['investigating','warrant'],booking:['arrest'],jail:['booking'],bail:['jail'],interrogation:['arrest','booking','jail','bail','interrogation'],charge:['investigating','interrogation','jail','bail'],trial:['charged'],sentence:['trial'],probation:['sentenced'],parole:['sentenced'],close:['reported','investigating','warrant','charged','trial','sentenced','probation','parole']};
   assert(allowed[action.operation]?.includes(c.stage),'illegal_case_transition');
   if(action.operation==='charge')assert(c.evidenceIds.length>0,'supporting_evidence_required');
@@ -287,6 +299,7 @@ export function resolveAction(s:State,actorId:string,action:Action,eventId:strin
   if(stages[action.operation])c.stage=stages[action.operation] as typeof c.stage;
   file.data=c as Entity['data'];say('Case action recorded: '+action.operation+'.');minutes=5;break;
  }
+ default:minutes=extendedAction(s,actorId,pc,action,eventId,effects);
  }
  actor.data=pc as Entity['data'];
  if(minutes>0)advance(s,minutes,eventId,effects,actorId);

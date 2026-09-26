@@ -10,6 +10,9 @@ test('iPad shell, keyboard login, Creator form, long prose, reduced motion and o
  const f=await fixture(),browser=await chromium.launch({headless:true});
  const context=await browser.newContext({viewport:{width:820,height:1180},isMobile:true,hasTouch:true,reducedMotion:'reduce'});
  const page=await context.newPage();const errors:string[]=[];page.on('pageerror',e=>errors.push(e.message));
+ let narrationRequests=0;
+ await page.route('**/game/catalog',async route=>{const response=await route.fetch(),catalog=await response.json();catalog.providers=['grounded','gemini'];await route.fulfill({response,json:catalog});});
+ await page.route('**/narrate',async route=>{assert.equal(route.request().postDataJSON().provider,'gemini');narrationRequests++;await route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:'test_provider_unavailable'})});});
  try{
   const address=await f.app.listen({host:'127.0.0.1',port:0});
   // Origin is deployment configuration, not a header supplied by browser code.
@@ -46,6 +49,15 @@ test('iPad shell, keyboard login, Creator form, long prose, reduced motion and o
   await page.getByRole('button',{name:'Look around',exact:true}).click();
   await page.locator('.turn .prose').waitFor();
   assert.ok((await page.locator('.turn .prose').textContent())!.length>3000);
+  const beforeProposal=(await game.access(f.creator,timeline.id)).t.revision;
+  await page.getByLabel('Your explicit action').fill('wait 1');
+  await page.getByRole('button',{name:'Review action',exact:false}).click();
+  await page.getByRole('button',{name:'Confirm this action',exact:true}).waitFor();
+  assert.equal((await game.access(f.creator,timeline.id)).t.revision,beforeProposal);
+  await page.getByRole('button',{name:'Confirm this action',exact:true}).click();
+  await page.locator('.turn').nth(1).waitFor();
+  assert.equal((await game.access(f.creator,timeline.id)).t.revision,beforeProposal+1);
+  assert.equal(narrationRequests,2,'each committed turn tries the selected provider once; failures do not reroll');
   assert.deepEqual((await new AxeBuilder({page}).analyze()).violations.map(v=>v.id),[]);
   await page.screenshot({path:'artifacts/chronicle.png'});
   await page.setViewportSize({width:390,height:844});

@@ -1,5 +1,5 @@
 const $=(tag,attrs={},...children)=>{const e=document.createElement(tag);for(const[k,v]of Object.entries(attrs)){if(k.startsWith('on'))e.addEventListener(k.slice(2).toLowerCase(),v);else if(k==='class')e.className=v;else if(k==='text')e.textContent=v;else if(k==='value')e.value=v;else if(k==='checked')e.checked=v;else if(v!==false&&v!=null)e.setAttribute(k,v===true?'':v);}for(const child of children.flat())if(child!=null)e.append(child instanceof Node?child:document.createTextNode(String(child)));return e;};
-const S={user:null,csrf:'',campaign:null,timeline:null,character:null,view:null,creator:null,catalog:null,page:'Campaigns',busy:false,online:navigator.onLine};
+const S={user:null,csrf:'',campaign:null,timeline:null,character:null,view:null,creator:null,catalog:null,narrator:null,page:'Campaigns',busy:false,online:navigator.onLine};
 const app=document.querySelector('#app'),notice=document.querySelector('#notice');
 let noticeTimer;
 function notify(message){notice.textContent=message;clearTimeout(noticeTimer);noticeTimer=setTimeout(()=>notice.textContent='',9000);}
@@ -48,6 +48,7 @@ async function render(){
  if(!S.character)return roster();
  S.view=await api(endpoint('view')+'?characterId='+S.character.id);
  if(!S.catalog)S.catalog=await api('/game/catalog');
+ if(!S.narrator)S.narrator=S.catalog.providers.includes('gemini')?'gemini':'grounded';
  if(S.page==='Chronicle')return chronicle();
  return dossier();
 }
@@ -77,23 +78,38 @@ async function act(action,text){
  if(!navigator.onLine)throw new Error('Reconnect before taking an action.');
  const key=crypto.randomUUID();
  const payload={revision:S.view.timeline.revision,characterId:S.character.id,action,...(text?{text}:{})};
- await api(endpoint('turns'),payload,'POST',key);await render();
+ const result=await api(endpoint('turns'),payload,'POST',key);
+ if(S.narrator&&S.narrator!=='grounded')try{await api(endpoint('narrate'),{turnId:result.eventId,provider:S.narrator});}catch(error){notify('Turn saved. Grounded narration retained: '+error.message);}
+ await render();
 }
 function chronicle(){
  const view=S.view,pc=view.entities.find(e=>e.id===S.character.id),location=view.entities.find(e=>e.id===pc?.data.locationId);
  const prose=$('div',{},title('Chronicle.','VALOR / '+S.character.name.toUpperCase()),$('div',{class:'scene'},$('span',{},location?.name??'LOCATION UNASSIGNED'),$('time',{datetime:view.clock},new Date(view.clock).toLocaleString())));
  if(!view.turns.length)prose.append($('div',{class:'empty'},$('h3',{},'A blank page. An open city.'),$('p',{},'Your first action starts the chronicle. Look around, speak in your own words, or choose a known destination.')));
- for(const turn of view.turns)prose.append($('article',{class:'turn'},$('div',{class:'input'},'› '+turn.input_text),$('div',{class:'prose'},turn.narration)));
+ const provider=$('select',{},...(S.catalog.providers??['grounded']).map(id=>$('option',{value:id,selected:id===S.narrator},id)));
+ provider.addEventListener('change',()=>{S.narrator=provider.value;});
+ prose.append(field('Narration provider',provider));
+ for(const turn of view.turns){
+  const text=$('div',{class:'prose'},turn.narration);
+  prose.append($('article',{class:'turn'},$('div',{class:'input'},'› '+turn.input_text),text,button('Rebuild narration without rerolling',async()=>{
+   const response=await fetch(endpoint('narrate/stream'),{method:'POST',credentials:'same-origin',headers:{'content-type':'application/json','x-csrf-token':S.csrf},body:JSON.stringify({turnId:turn.id,provider:provider.value})});
+   if(!response.ok){const error=await response.json();throw new Error(String(error.error??'Narration unavailable').replaceAll('_',' '));}
+   const reader=response.body.getReader(),decoder=new TextDecoder();let pending='',paragraphs=[];
+   while(true){const chunk=await reader.read();pending+=decoder.decode(chunk.value??new Uint8Array(),{stream:!chunk.done});const lines=pending.split('\n');pending=lines.pop();for(const line of lines){if(!line)continue;const event=JSON.parse(line);if(event.type==='paragraph'){paragraphs.push(event.text);text.textContent=paragraphs.join('\n\n');}}if(chunk.done)break;}
+   notify('Narration updated. Mechanics were not rerolled.');
+  })));
+ }
  const composer=$('textarea',{placeholder:'What do you do? Try “look”, “wait 10”, or “say …”.','aria-label':'Your explicit action',maxlength:1000});
- const form=$('form',{class:'composer',onsubmit:e=>{e.preventDefault();run(async()=>{const text=composer.value;const parsed=await api(endpoint('parse'),{characterId:S.character.id,text});if(!parsed.action)return notify(parsed.clarification);await act(parsed.action,text);});}},
- field('YOUR NEXT ACTION',composer),$('div',{class:'actions'},$('button',{type:'submit',class:'primary',disabled:!S.online},'Commit action →'),button('Look around',()=>act({type:'look'})),button('Wait 10 min',()=>act({type:'wait',minutes:10}))));
- prose.append(form,universalActions());
+ const proposal=$('section',{class:'card','aria-live':'polite'});
+ const form=$('form',{class:'composer',onsubmit:e=>{e.preventDefault();run(async()=>{const text=composer.value;const parsed=await api(endpoint('parse'),{characterId:S.character.id,text});proposal.replaceChildren();if(!parsed.action)return notify(parsed.clarification);proposal.append($('h3',{},'Review proposed action'),$('p',{},'Nothing has happened yet. Confirm only if this matches your intention.'),renderValue(parsed.action),button('Confirm this action',()=>act(parsed.action,text),true),button('Cancel proposal',()=>proposal.replaceChildren()));});}},
+ field('YOUR NEXT ACTION',composer),$('div',{class:'actions'},$('button',{type:'submit',class:'primary',disabled:!S.online},'Review action →'),button('Look around',()=>act({type:'look'})),button('Wait 10 min',()=>act({type:'wait',minutes:10}))));
+ prose.append(form,proposal,universalActions());
  const aside=$('aside',{class:'scene-aside','aria-label':'Current scene'},$('h2',{},'Current dossier'),$('h3',{},S.character.name),$('p',{},pc?.data.description??''),$('div',{class:'badge'},pc?.data.condition??'Unknown'),$('h3',{},'Known surroundings'));
  for(const e of view.entities.filter(e=>e.kind==='character'&&e.id!==S.character.id))aside.append($('p',{},e.name));
  aside.append($('h3',{},'Routes'),...((location?.data.exits??[]).map(exit=>{const dest=view.entities.find(e=>e.id===exit.to);return dest?button(dest.name+' · '+exit.minutes+' min',()=>act({type:'travel',destinationId:dest.id,mode:'walk',vehicleId:null})):null;})),button('Change character',()=>{S.character=null;return roster();}));
  frame($('div',{class:'chronicle-layout'},prose,aside));
 }
-const pageKinds={'Character':['character'],'Inventory':['item'],'Equipment':['item'],'Phone':['item','message'],'Map':['location'],'Relationships':['relationship'],'Journal / Cases':['quest','case','evidence'],'Lore':['lore','storycard'],'Skills / Traits':['skill','trait'],'Health':['injury'],'Vehicles':['vehicle'],'Jobs / Money':['job','business','housing'],'Combat':['combat'],'Search / Loot':['item','evidence']};
+const pageKinds={'Character':['character'],'Inventory':['item'],'Equipment':['item'],'Phone':['item','message'],'Map':['location'],'Relationships':['relationship'],'Journal / Cases':['quest','case','evidence'],'Lore':['lore','storycard'],'Skills / Traits':['skill','trait'],'Health':['injury'],'Vehicles':['vehicle'],'Jobs / Money':['job','business','housing','recipe'],'Combat':['combat'],'Search / Loot':['item','evidence']};
 function dossier(){
  const content=$('div',{},title(S.page+'.','VALOR / DOSSIER'));
  let rows=S.view.entities.filter(e=>(pageKinds[S.page]??[]).includes(e.kind));
@@ -211,6 +227,8 @@ async function creator(){
  const factSubject=choose('Subject / observer',S.creator.entities.filter(e=>!e.archived)),layer=$('select',{},...['truth','knowledge','belief','memory','correct-belief','retire-truth','refresh-memory'].map(l=>$('option',{value:l},l))),text=$('textarea',{}),factId=input(''),recordId=input('');
  content.append($('details',{},$('summary',{},'World truth, knowledge, beliefs and memories'),$('form',{onsubmit:e=>{e.preventDefault();run(async()=>{await api(endpoint('epistemic'),{revision:S.creator.timeline.revision,layer:layer.value,subjectId:factSubject.querySelector('select').value,text:text.value,...(factId.value?{factId:factId.value}:{}),...(recordId.value?{recordId:recordId.value}:{})});await creator();});}},field('Layer',layer),factSubject,field('Authored proposition / memory',text),field('Fact UUID (knowledge, correction or retirement)',factId),field('Belief / memory UUID (correction or refresh)',recordId),$('button',{type:'submit'},'Record explicitly')),renderValue({facts:S.creator.facts,beliefs:S.creator.beliefs,memories:S.creator.memories})));
  content.append($('details',{},$('summary',{},'Developer event history'),button('Load authorized event trace',async()=>{const result=await api(endpoint('history'));content.append($('pre',{},JSON.stringify(result,null,2)));})));
+ const batch=$('textarea',{'aria-label':'Creator entity batch JSON',placeholder:'Paste an array of complete entity records (maximum 100).',maxlength:2*1024*1024});
+ content.append($('details',{},$('summary',{},'Atomic bulk editing'),$('p',{},'Advanced tool: all records are validated and committed together, or none are changed. References may point to other records in the same batch. The current timeline revision prevents stale overwrites.'),batch,button('Commit validated batch',async()=>{const entities=JSON.parse(batch.value);if(!Array.isArray(entities)||!entities.length||entities.length>100)throw new Error('Supply 1–100 complete records.');await api(endpoint('entities/bulk'),{revision:S.creator.timeline.revision,entities});notify('Batch committed.');await creator();})));
  frame(content);
 }
 async function saves(){
@@ -219,6 +237,11 @@ async function saves(){
  content.append($('h2',{},'Timelines'),$('div',{class:'actions'},...timelines.map(t=>button(t.name+(t.id===S.timeline.id?' · current':''),async()=>{S.timeline=t;S.character=null;S.page='Chronicle';await render();}))));
  for(const save of list)content.append($('article',{class:'card'},$('div',{class:'section-head'},$('div',{},$('h3',{},save.name),$('small',{},'Revision '+save.revision+' · '+new Date(save.created_at).toLocaleString())),button('Create timeline from here',async()=>{S.timeline=await api(endpoint('branch'),{saveId:save.id,name:branchName.value});S.character=null;S.page='Chronicle';await render();}))));
  if(['creator','admin'].includes(S.campaign.role)){
+  const comparison=$('section',{class:'card'});
+  content.append($('details',{},$('summary',{},'Compare or recover individual records'),$('p',{},'Comparison and record recovery are Creator-only. Recovery creates a new audited revision; the old save and parent timeline remain intact.'),...list.map(save=>button('Compare '+save.name,async()=>{
+   const diff=await api(endpoint('saves/compare')+'?saveId='+save.id);comparison.replaceChildren(renderValue(diff));
+   for(const record of diff.changed)comparison.append(button('Restore '+record.name+' from this save',async()=>{const current=await api(endpoint('creator'));await api(endpoint('entities/restore'),{revision:current.timeline.revision,saveId:save.id,entityId:record.id});notify('Record restored as a new revision.');await saves();}));
+  })),comparison));
   const upload=$('input',{type:'file',accept:'.json,application/json'});let bundle;
   const result=$('p',{role:'status'});
   const templates=await api(endpoint('templates'));
@@ -229,12 +252,14 @@ async function saves(){
  frame(content);
 }
 async function settings(){
+ if(!S.catalog)S.catalog=await api('/game/catalog');
  const creatorRole=['creator','admin'].includes(S.campaign.role),content=$('div',{},title('Settings.','VALOR / CAMPAIGN POLICY'));
  if(!creatorRole){content.append($('p',{},'Campaign settings are controlled by its Creator.'));frame(content);return;}
  const state=await api(endpoint('creator'));let draft=structuredClone(state.settings);
  content.append($('p',{},'Resolution rules are deliberately unset until you author them. The current resolver uses a die plus the selected attribute and skill against the authored threshold. Mature scenes are disabled by default; enabled intimacy fades to black.'));
  const schema={type:'object',properties:{needs:{type:'boolean'},fuel:{type:'boolean'},weather:{enum:['clear','rain','overcast','snow','fog']},romance:{type:'boolean'},intimacy:{enum:['off','fade-to-black']},intensity:{enum:['restrained','grounded']},difficulty:{enum:['custom','narrative']},traitBudget:{type:'number',minimum:0,maximum:1000},tokenBudget:{type:'integer',minimum:0,maximum:1000000},contextTokens:{type:'integer',minimum:256,maximum:16000},timezone:{type:'string'},npcBudget:{type:'integer',minimum:1,maximum:10000},rules:{anyOf:[{type:'object',properties:{dieSides:{type:'integer',minimum:2,maximum:1000},threshold:{type:'number',minimum:1},damage:{type:'number',minimum:0,maximum:100},treatmentMinutes:{type:'integer',minimum:1,maximum:1440},recoveryPerDay:{type:'number',minimum:0,maximum:100},unfamiliarPenalty:{type:'number',minimum:0,maximum:100},bleedPerMinute:{type:'number',minimum:0,maximum:10}}},{type:'null'}]}}};
  schema.properties.userTokenBudget={type:'integer',minimum:0,maximum:1000000};
+ if(S.catalog.settings)Object.assign(schema,S.catalog.settings);
  content.append($('section',{class:'card'},schemaEditor(schema,draft,v=>draft=v),button('Save campaign settings',async()=>{await api(endpoint('settings'),{revision:state.timeline.revision,settings:draft});notify('Settings saved.');await settings();},true)));
  frame(content);
 }

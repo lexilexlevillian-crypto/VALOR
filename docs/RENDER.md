@@ -40,9 +40,13 @@ npm run db:import -- <verified-existing-database.sqlite>
 
 Import only targets an EMPTY database and preserves all tables, accounts, hashes, saves, story, lore, rowids, constraints, indexes and immutable triggers. Never delete an existing Turso database to make the import pass. Use a separate empty destination and verify it before switching the service. Large databases require a separately rehearsed migration because copying holds a snapshot in memory and is subject to remote transaction limits.
 
-For a new game, no import is needed. Startup creates the schema. Provision the first Creator from a trusted local computer using the README's private process-environment credential instructions and `npm run user:create`, with the SAME Turso configuration as Render. No default account or public registration is added. Clear bootstrap credentials afterward.
+For a new game, no import is needed. Startup creates the schema. Provision the first Creator from a trusted local computer using the README's private process-environment credential instructions and `npm run user:create`, with the SAME Turso configuration as Render. Public signup creates players only; it cannot create a Creator. No default account is added. Clear bootstrap credentials afterward.
 
 Back up from that operator computer with `npm run backup -- ./backups/valor-UNIQUE.sqlite` and protect the result off-host. A backup inside Render's ephemeral filesystem is not durable. See [operations](OPERATIONS.md) for restore rehearsals.
+
+## Optional Gemini narration
+
+Keep your existing API key private in Render as `GEMINI_API_KEY` or `GOOGLE_API_KEY`. `GEMINI_MODEL` optionally selects a model; see [Gemini setup and limits](SYSTEMS_EXPANSION.md). Never copy the real key into source or chat. Both campaign and user AI budgets default to zero and must be deliberately configured in Settings before paid requests are allowed. Chronicle selects Gemini automatically when configured, with a grounded opt-out and failure fallback. The server currently accepts only ordering of approved fragments, not arbitrary generated prose.
 
 ## Deployment acceptance
 

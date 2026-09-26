@@ -26,14 +26,14 @@ export function visible(s:State,e:Entity,observerId:string):boolean{
  if(e.kind==='message'){const d=data(e,'message');return d.fromId===observerId||d.toId===observerId&&d.status!=='queued';}
  if(e.kind==='relationship'){const d=data(e,'relationship');return !d.secret&&(d.fromId===observerId||d.toId===observerId);}
  if(e.kind==='injury')return e.data.characterId===observerId;
- if(e.kind==='case')return e.data.investigatorId===observerId;
+ if(e.kind==='case')return e.data.investigatorId===observerId||(e.data.suspectIds as string[]).includes(observerId)&&['jail','bail','charged','trial','sentenced','probation','parole'].includes(String(e.data.stage));
  if(e.kind==='evidence')return (e.data.discoveredBy as string[]).includes(observerId);
  if(e.kind==='watcher')return false;
  if(e.kind==='character')return e.data.locationId===observer.locationId&&observer.locationId!==null||knows(s,observerId,e.id);
  if(e.kind==='item'){
   if(e.data.ownerId===observerId)return true;
   if(e.data.concealed)return false;
-  if(e.data.containerId){const container=s.entities.find(c=>c.id===e.data.containerId&&!c.archived);return !!container&&!container.data.locked&&visible(s,container,observerId);}
+  if(e.data.containerId){const container=s.entities.find(c=>c.id===e.data.containerId&&!c.archived);if(container?.kind==='vehicle'&&(container.data.locationId!==observer.locationId||container.data.ownerId!==observerId&&!s.entities.some(key=>key.id===container.data.keyId&&!key.archived&&key.data.ownerId===observerId)))return false;return !!container&&!container.data.locked&&visible(s,container,observerId);}
   if(e.data.locationId===observer.locationId&&observer.locationId!==null)return true;
   return s.entities.some(b=>!b.archived&&b.data.locationId===observer.locationId&&observer.locationId!==null&&b.id===e.data.ownerId&&(b.kind==='business'&&(b.data.stock as string[]).includes(e.id)||b.kind==='character'&&e.data.equipped&&visible(s,b,observerId)));
  }
@@ -43,17 +43,19 @@ export function visible(s:State,e:Entity,observerId:string):boolean{
 }
 export function project(s:State,e:Entity,observerId:string):Entity {
  const copy=structuredClone(e);
+ if(e.kind==='case'&&e.data.investigatorId!==observerId){copy.name='Case notice';copy.data={stage:e.data.stage!,bailAmountCents:e.data.bailAmountCents??null};return copy;}
  const own=e.id===observerId||e.data.ownerId===observerId;
  if(e.kind==='character'&&!own){
   const d=data(e,'character'),actor=data(getEntity(s,observerId),'character');
   copy.data={description:d.description,appearance:d.appearance,identity:{pronouns:d.identity.pronouns??''},locationId:d.locationId===actor.locationId?d.locationId:null,condition:d.condition};
  }else{
-  for(const k of ['secrets','instructions','hiddenSolution','embedding','pending','preferences','goals','fears','heat'])delete copy.data[k];
+  for(const k of ['secrets','instructions','hiddenSolution','embedding','pending','preferences','goals','fears','heat','forensicFindings'])delete copy.data[k];
   if(e.kind==='relationship'){for(const k of ['attraction','desire','affection','trust','respect','attachment','familiarity','jealousy','resentment','fear','loyalty','dependency'])delete copy.data[k];}
   if(!own)for(const k of ['cash','contacts','serial','registration','stock','suspectIds','custody','schedule','lastSimulated','mood'])delete copy.data[k];
-  if(e.kind==='faction')for(const k of ['memberIds','reputation'])delete copy.data[k];
+  if(e.kind==='faction')for(const k of ['memberIds','reputation','treasuryCents','groupPolicy','lastGroupAt'])delete copy.data[k];
+  if(e.kind==='combat'){const allowed=new Set(s.entities.filter(entity=>visible(s,entity,observerId)).map(entity=>entity.id));copy.data.participants=(e.data.participants as string[]).filter(id=>allowed.has(id));copy.data.positions=Object.fromEntries(Object.entries(e.data.positions??{}).filter(([id])=>allowed.has(id))) as never;delete copy.data.blockedLines;}
   if(e.kind==='character')delete copy.data.plans;
-  if(e.kind==='location')copy.data.exits=(copy.data.exits as {to:string}[]).filter(exit=>s.entities.some(target=>target.id===exit.to&&visible(s,target,observerId))) as never;
+  if(e.kind==='location')copy.data.exits=(copy.data.exits as {to:string;interruption?:unknown}[]).filter(exit=>s.entities.some(target=>target.id===exit.to&&visible(s,target,observerId))).map(({interruption,...route})=>route) as never;
  }
  const sections=(copy.data.sections??[]) as {id:string;parentId:string|null;visibility?:string;fields:{visibility:string}[]}[];
  // Custom section containers reveal only those fields explicitly allowed to this observer.
