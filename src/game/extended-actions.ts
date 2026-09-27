@@ -4,6 +4,7 @@ import {visible,fact} from './epistemics.ts';
 import {add,emit,isOpen} from './simulation.ts';
 import type {Effect} from './simulation.ts';
 import {vehicleOperational} from './vehicle.ts';
+import {lawResponseMinutes} from './policy.ts';
 const requireCondition=(ok:unknown,code:string)=>{if(!ok)throw new Error(code);};
 export function extendedAction(s:State,actorId:string,pc:Data<'character'>,action:Action,eventId:string,effects:Effect[]):number{
  const output=(text:string)=>emit(effects,text,[actorId],action.type,actorId);
@@ -16,7 +17,7 @@ export function extendedAction(s:State,actorId:string,pc:Data<'character'>,actio
    requireCondition(!s.entities.some(e=>e.kind==='dispatch'&&!e.archived&&e.data.requesterId===actorId&&e.data.agencyId===agency.id&&e.data.status!=='closed'),'dispatch_already_pending');
    if(action.patientId){const patient=getEntity(s,action.patientId,'character');requireCondition(patient.data.locationId===pc.locationId&&visible(s,patient,actorId),'patient_not_present');}
    const responder=s.entities.filter(e=>e.kind==='character'&&!e.archived&&a.memberIds.includes(e.id)&&!e.data.playable&&e.data.condition==='conscious'&&!s.entities.some(call=>call.kind==='dispatch'&&call.data.responderId===e.id&&['enroute','arrived'].includes(String(call.data.status)))).sort((x,y)=>x.id.localeCompare(y.id))[0];
-   const call=add(s,'dispatch','Assistance request',{agencyId:agency.id,requesterId:actorId,locationId:pc.locationId,responderId:responder?.id??null,patientId:action.patientId,destinationId:a.dispatchPolicy!.hospitalId,report:action.report,kind:a.dispatchPolicy!.kind,status:responder?'enroute':'queued',dueAt:responder?new Date(Date.parse(s.clock)+a.dispatchPolicy!.responseMinutes*60000).toISOString():null,transportConsent:action.patientId===actorId&&action.transportConsent,createdAt:s.clock},'owner');
+   const responseMinutes=a.dispatchPolicy!.kind==='police'?lawResponseMinutes(s,agency.id,a.dispatchPolicy!.responseMinutes):a.dispatchPolicy!.responseMinutes,call=add(s,'dispatch','Assistance request',{agencyId:agency.id,requesterId:actorId,locationId:pc.locationId,responderId:responder?.id??null,patientId:action.patientId,destinationId:a.dispatchPolicy!.hospitalId,report:action.report,kind:a.dispatchPolicy!.kind,status:responder?'enroute':'queued',dueAt:responder?new Date(Date.parse(s.clock)+responseMinutes*60000).toISOString():null,transportConsent:action.patientId===actorId&&action.transportConsent,createdAt:s.clock},'owner');
    if(responder){s.beliefs.push({id:crypto.randomUUID(),observerId:responder.id,proposition:action.report,confidence:0.5,source:'dispatch:'+call.id,at:s.clock,correctedBy:null});fact(s,call.id,'request-received',true,eventId,[actorId,responder.id]);}
    output(responder?'Assistance requested; a responder is en route.':'Assistance requested; awaiting an available responder.');return 0;
   }
@@ -25,7 +26,7 @@ export function extendedAction(s:State,actorId:string,pc:Data<'character'>,actio
    if(action.operation==='accept'){
     requireCondition(d.status==='queued'&&agency.memberIds.includes(actorId)&&agency.dispatchPolicy,'dispatch_authority_required');
     requireCondition(!s.entities.some(e=>e.kind==='dispatch'&&!e.archived&&e.data.responderId===actorId&&['enroute','arrived'].includes(String(e.data.status))),'responder_busy');
-    d.responderId=actorId;d.status='enroute';d.dueAt=new Date(Date.parse(s.clock)+agency.dispatchPolicy!.responseMinutes*60000).toISOString();
+    d.responderId=actorId;d.status='enroute';const responseMinutes=d.kind==='police'?lawResponseMinutes(s,d.agencyId,agency.dispatchPolicy!.responseMinutes):agency.dispatchPolicy!.responseMinutes;d.dueAt=new Date(Date.parse(s.clock)+responseMinutes*60000).toISOString();
     s.beliefs.push({id:crypto.randomUUID(),observerId:actorId,proposition:d.report,confidence:0.5,source:'dispatch:'+entity.id,at:s.clock,correctedBy:null});
    }else if(action.operation==='close'){
     requireCondition([d.requesterId,d.responderId].includes(actorId),'dispatch_authority_required');d.status='closed';

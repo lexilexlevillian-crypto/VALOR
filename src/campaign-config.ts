@@ -49,6 +49,10 @@ function merge(base:Record<string,unknown>,patch:Record<string,unknown>):Record<
 export function resolveCampaignConfig(defaults:unknown,overrides:unknown):CampaignConfig{
  const base=campaignConfigSchema.parse(defaults),patch=campaignConfigOverridesSchema.parse(overrides);
  const resolved=campaignConfigSchema.parse(merge(base as unknown as Record<string,unknown>,patch as unknown as Record<string,unknown>));
+ if(resolved.calendar.firstDayOfWeek>=resolved.calendar.daysPerWeek)throw new Error('invalid_calendar_week');
+ if(resolved.calendar.id!=='gregorian'&&!resolved.calendar.months.length)throw new Error('custom_calendar_months_required');
+ if(new Set(resolved.calendar.months.map(m=>m.id)).size!==resolved.calendar.months.length)throw new Error('duplicate_calendar_month');
+ if(resolved.contentRating==='general'&&resolved.matureContent!=='off')throw new Error('general_rating_requires_mature_content_off');
  try{new Intl.DateTimeFormat('en-US',{timeZone:resolved.timezone});}catch{throw new Error('invalid_timezone');}
  return resolved;
 }

@@ -10,8 +10,10 @@ export type CheckRecord={id:string;eventId:string;characterId:string;checkDefini
 import {extendedAction} from './extended-actions.ts';
 import {damageVehicle,vehicleOperational,vehiclePenalty as vehiclePenaltyFor} from './vehicle.ts';
 const requireRule=(s:State)=>{if(!s.settings.rules)throw new Error('configure_resolution_rules_first');return s.settings.rules;};
+import {enforceActionPolicy,injuryRate} from './policy.ts';
 const assert=(ok:unknown,code:string)=>{if(!ok)throw new Error(code);};
 export function resolveAction(s:State,actorId:string,action:Action,eventId:string,seed:string){
+ enforceActionPolicy(s,action);
  const actor=getEntity(s,actorId,'character');let pc=data(actor,'character');const effects:Effect[]=[];
  const rng=randomSource(seed);let minutes=0;let arrivalId:string|null=null;
  assert(pc.condition==='conscious','character_cannot_act');
@@ -64,10 +66,11 @@ export function resolveAction(s:State,actorId:string,action:Action,eventId:strin
   combatTurn();
  }
  const hurt=(target:Entity,amount:number,category:'gunshot'|'blunt',part:string)=>{
-  const wounds=add(s,'injury',category+' injury',{characterId:target.id,bodyPart:part,category,severity:amount,pain:amount,bleeding:category==='gunshot'?amount/10:0,startedAt:s.clock},'owner');
+  const scaled=Math.max(0,amount*injuryRate(s));
+  const wounds=add(s,'injury',category+' injury',{characterId:target.id,bodyPart:part,category,severity:scaled,pain:scaled,bleeding:category==='gunshot'?scaled/10:0,startedAt:s.clock},'owner');
   const witnesses=atLocation(s,pc.locationId).map(e=>e.id);
   fact(s,target.id,'injury',{injuryId:wounds.id,category,bodyPart:part},eventId,witnesses);
-  const td=data(target,'character');if(amount>=100){td.condition='unconscious';target.data=td as Entity['data'];}
+  const td=data(target,'character');if(scaled>=100){td.condition='unconscious';target.data=td as Entity['data'];}
  };
  switch(action.type){
  case 'look':{
@@ -88,15 +91,16 @@ export function resolveAction(s:State,actorId:string,action:Action,eventId:strin
   const location=data(getEntity(s,pc.locationId!,'location'),'location'),destination=getEntity(s,action.destinationId,'location');
   assert(visible(s,destination,actorId)||data(destination,'location').discoverable,'destination_unknown');
   const mode=action.type==='travel'?action.mode:'walk';
-  const exit=location.exits.find(e=>e.to===destination.id&&e.modes.includes(mode));assert(exit,'route_unavailable');
-  if(exit!.locked)assert(exit!.keyId&&s.entities.some(e=>e.id===exit!.keyId&&e.data.ownerId===actorId),'route_locked');
+  const abstraction=action.type==='flee'?'exact':s.settings.campaign?.travelAbstraction??'route',exit=location.exits.find(e=>e.to===destination.id&&e.modes.includes(mode));
+  if(abstraction!=='abstract')assert(exit,'route_unavailable');
+  if(exit?.locked)assert(exit.keyId&&s.entities.some(e=>e.id===exit.keyId&&e.data.ownerId===actorId),'route_locked');
   assert(isOpen(data(destination,'location').hours,s),'destination_closed');
   assert(!data(destination,'location').closedDates.includes(timeParts(s.clock,s.settings.timezone).date),'destination_closed');
-  assert(pc.cash>=exit!.fare,'insufficient_funds');
-  const interruption=exit!.interruption&&(!exit!.interruption.whenWeather||exit!.interruption.whenWeather===s.settings.weather)?exit!.interruption:null;
-  const arrival=interruption?getEntity(s,interruption.locationId,'location'):destination,travelMinutes=interruption?.afterMinutes??exit!.minutes;
+  const fare=exit?.fare??0;assert(pc.cash>=fare,'insufficient_funds');
+  const interruption=exit?.interruption&&(!exit.interruption.whenWeather||exit.interruption.whenWeather===s.settings.weather)?exit.interruption:null;
+  const arrival=interruption?getEntity(s,interruption.locationId,'location'):destination,travelMinutes=interruption?.afterMinutes??exit?.minutes??30;
   if(action.type==='flee'&&!roll('Agility')){say('The escape attempt fails.');minutes=1;break;}
-  pc.cash-=exit!.fare;
+  pc.cash-=fare;
   if(mode==='drive'){
    const vehicle=getEntity(s,action.type==='travel'?action.vehicleId??'':'','vehicle'),d=data(vehicle,'vehicle');nearby(vehicle);
    assert(d.ownerId===actorId||d.keyId&&s.entities.some(e=>e.id===d.keyId&&e.data.ownerId===actorId),'vehicle_access_denied');

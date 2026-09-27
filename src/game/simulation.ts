@@ -5,6 +5,7 @@ import {fact,observe,remember} from './epistemics.ts';
 import {matchesCondition} from './conditions.ts';
 import {advanceLifecycle,startNpcJourney,finishNpcJourney} from './lifecycle.ts';
 import {authoredCompatibility} from './compatibility.ts';
+import {injuryRate,needsRate} from './policy.ts';
 export type Effect={id:string;text:string;observers:string[];type:string;subjectId:string};
 export function emit(effects:Effect[],text:string,observers:string[],type:string,subjectId:string){effects.push({id:randomUUID(),text,observers:[...new Set(observers)],type,subjectId});}
 export function atLocation(s:State,locationId:string|null){return s.entities.filter(e=>e.kind==='character'&&!e.archived&&e.data.locationId===locationId&&locationId&&e.data.condition==='conscious');}
@@ -69,22 +70,23 @@ function advanceStep(s:State,minutes:number,eventId:string,effects:Effect[],play
    if(message.body)s.beliefs.push({id:randomUUID(),observerId:message.toId,proposition:message.body,confidence:0.5,source:'message:'+entity.id,at:s.clock,correctedBy:null});
   }
  }
+ const needsMultiplier=needsRate(s),injuryMultiplier=injuryRate(s);
  for(const character of s.entities.filter(e=>e.kind==='character'&&!e.archived)){
   const d=data(character,'character');if(d.condition==='dead')continue;
   if(s.settings.healthRules){const rules=s.settings.healthRules;
    d.intoxication=Math.max(0,d.intoxication-rules.soberingPerHour*minutes/60);
    if(d.dependence>0&&d.lastDoseAt)d.withdrawal=Math.min(100,d.withdrawal+rules.withdrawalPerDay*minutes/1440*d.dependence/100);
   }
-  if(s.settings.needs){d.hunger=Math.min(100,d.hunger+minutes/60);d.thirst=Math.min(100,d.thirst+minutes/30);d.fatigue=Math.min(100,d.fatigue+minutes/120);d.hygiene=Math.max(0,d.hygiene-minutes/240);}
+  if(s.settings.needs&&needsMultiplier>0){d.hunger=Math.min(100,d.hunger+minutes/60*needsMultiplier);d.thirst=Math.min(100,d.thirst+minutes/30*needsMultiplier);d.fatigue=Math.min(100,d.fatigue+minutes/120*needsMultiplier);d.hygiene=Math.max(0,d.hygiene-minutes/240*needsMultiplier);}
   const wounds=s.entities.filter(e=>e.kind==='injury'&&!e.archived&&e.data.characterId===character.id);
   for(const wound of wounds){
    const injury=data(wound,'injury');
    if(s.settings.healthRules&&!injury.treated&&!injury.permanent){
-    injury.infection=Math.min(100,injury.infection+s.settings.healthRules.infectionPerDay*minutes/1440);
-    injury.severity=Math.min(100,injury.severity+s.settings.healthRules.untreatedSeverityPerDay*minutes/1440);
+    injury.infection=Math.min(100,injury.infection+s.settings.healthRules.infectionPerDay*minutes/1440*injuryMultiplier);
+    injury.severity=Math.min(100,injury.severity+s.settings.healthRules.untreatedSeverityPerDay*minutes/1440*injuryMultiplier);
    }
    if(s.settings.rules){
-    d.blood=Math.max(0,d.blood-injury.bleeding*s.settings.rules.bleedPerMinute*minutes);
+    d.blood=Math.max(0,d.blood-injury.bleeding*s.settings.rules.bleedPerMinute*minutes*injuryMultiplier);
     if(injury.treated&&!injury.permanent){injury.severity=Math.max(0,injury.severity-s.settings.rules.recoveryPerDay*minutes/1440);if(injury.severity===0)wound.archived=true;}
    }
    wound.data=injury as Entity['data'];

@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { Store } from './db.ts';
 import { Domain } from './domain.ts';
-import { Auth, credentials, csrfFor } from './auth.ts';
+import { Auth, credentials, recoveryCredentials, csrfFor } from './auth.ts';
 import { Fault, ensure, envelopeSchema, id, name, scopeSchema } from './contracts.ts';
 import type { Actor, Scope } from './contracts.ts';
 import type { Config } from './config.ts';
@@ -36,8 +36,8 @@ export function buildApp(store:Store,settings:Config,logging:boolean|{write(chun
     const unsafe=!['GET','HEAD','OPTIONS'].includes(request.method);
     if(unsafe)ensure(request.headers.origin===settings.origin,403,'origin_rejected');
     if((path==='/healthz' || path==='/' || publicAssets.has(path??'')) && (request.method==='GET' || request.method==='HEAD'))return;
-    if((path==='/auth/login' || path==='/auth/signup') && request.method==='POST') {
-      (await auth.limit('login-ip',request.ip,settings.loginLimit*3,900000));
+    if((path==='/auth/login' || path==='/auth/signup' || path==='/auth/password/recover') && request.method==='POST') {
+      (await auth.limit(path==='/auth/password/recover'?'recovery-ip':'login-ip',request.ip,settings.loginLimit*3,900000));
       return;
     }
     const token=tokenFrom(request.headers.cookie);
@@ -90,6 +90,11 @@ export function buildApp(store:Store,settings:Config,logging:boolean|{write(chun
     reply.code(201).header('Set-Cookie',cookie(result.token,settings.sessionHours*3600));
     return {user:result.user,csrfToken:result.csrfToken};
   });
+  app.post('/auth/password/recover',async(request)=>{
+    const input=recoveryCredentials.parse(request.body);
+    await auth.limit('recovery-account',input.email,settings.loginLimit,900000);
+    return auth.recoverPassword(input.email,input.recoveryKey,input.newPassword,request.id);
+  });
   app.get('/auth/session',async(request)=>({user:actor(request),csrfToken:csrfFor(tokenFrom(request.headers.cookie)!)}));
   app.post('/auth/logout',async(request,reply)=>{
     (await auth.logout(tokenFrom(request.headers.cookie)!,actor(request)));
@@ -140,7 +145,7 @@ export function buildApp(store:Store,settings:Config,logging:boolean|{write(chun
     return (await store.get("SELECT c.id AS campaign_id,c.name,c.starting_at,c.timezone,m.role,t.id AS timeline_id,t.name AS timeline_name,t.revision,t.clock,(SELECT ge.id FROM game_entities ge WHERE ge.timeline_id=t.id AND ge.kind='character' AND ge.archived_at IS NULL AND json_extract(ge.data_json,'$.playable')=1 AND json_extract(ge.data_json,'$.controllerUserId')=? ORDER BY ge.updated_at DESC,ge.id LIMIT 1) AS character_id,(SELECT ge.name FROM game_entities ge WHERE ge.timeline_id=t.id AND ge.kind='character' AND ge.archived_at IS NULL AND json_extract(ge.data_json,'$.playable')=1 AND json_extract(ge.data_json,'$.controllerUserId')=? ORDER BY ge.updated_at DESC,ge.id LIMIT 1) AS character_name FROM campaigns c JOIN memberships m ON m.campaign_id=c.id LEFT JOIN timelines t ON t.campaign_id=c.id AND t.archived_at IS NULL WHERE m.user_id=? AND c.archived_at IS NULL AND t.id IS NOT NULL ORDER BY COALESCE((SELECT MAX(created_at) FROM game_events ev WHERE ev.timeline_id=t.id),t.created_at,c.updated_at) DESC,t.id LIMIT 1",user.id,user.id,user.id))??null;
   });  app.get('/campaigns',async(request)=>{
     const after=cursor(request.query);
-    return {items:(await store.all('SELECT c.id,c.name,c.starting_at,c.timezone,c.revision,m.role FROM campaigns c JOIN memberships m ON m.campaign_id=c.id WHERE m.user_id=? AND c.archived_at IS NULL AND c.id>? ORDER BY c.id LIMIT 100',actor(request).id,after))};
+    return {items:(await store.all('SELECT c.id,c.name,c.source_world_id AS sourceWorldId,c.starting_at,c.timezone,c.revision,m.role FROM campaigns c JOIN memberships m ON m.campaign_id=c.id WHERE m.user_id=? AND c.archived_at IS NULL AND c.id>? ORDER BY c.id LIMIT 100',actor(request).id,after))};
   });
   app.get('/campaigns/:campaignId/config',async(request)=>{
     const p=z.strictObject({campaignId:id}).parse(request.params);

@@ -20,6 +20,8 @@ import {mediaBytes} from './media.ts';
 import {defaultCampaignConfig,parseStoredCampaignConfig,resolveCampaignConfig} from '../campaign-config.ts';
 import {buildFoundationProjections} from '../foundation-projections.ts';
 import {auditJson,ensureJsonBytes} from '../security.ts';
+import {canonSourceSchema,canonSnapshotSchema} from './canon.ts';
+import type {CanonSource} from './canon.ts';
 type Timeline={id:string;campaign_id:string;parent_id:string|null;parent_save_id:string|null;name:string;revision:number;clock:string;settings_json:string};
 type Mutation<T>={result:T;effects?:Effect[];draws?:number;checks?:CheckRecord[];characterId?:string;turnText?:string};
 const now=()=>new Date().toISOString();
@@ -51,7 +53,7 @@ const packageInputSchema=z.strictObject({
  definition:z.unknown()
 });
 const transcriptSchema=z.strictObject({id:z.uuid(),character_id:z.uuid(),user_id:z.uuid(),input_text:z.string().max(1000),narration:z.string().max(200000),narration_status:z.string().max(100),created_at:z.iso.datetime(),source_event_id:z.uuid()});
-const snapshotSchema=z.strictObject({version:z.literal(1),transcript:z.array(transcriptSchema).default([]),state:z.strictObject({clock:z.iso.datetime(),settings:settingsSchema,entities:z.array(entitySchema).max(20000),
+const snapshotSchema=z.strictObject({version:z.literal(1),worldHistory:z.array(z.strictObject({eventId:z.uuid(),canonRevisionId:z.uuid().nullable(),configuration:z.json()})).default([]),transcript:z.array(transcriptSchema).default([]),state:z.strictObject({canon:canonSourceSchema.nullable().optional(),clock:z.iso.datetime(),settings:settingsSchema,entities:z.array(entitySchema).max(20000),
  facts:z.array(z.strictObject({id:z.uuid(),subjectId:z.uuid(),predicate:z.string().max(160),value:z.json(),eventId:z.uuid(),at:z.iso.datetime(),retiredAt:z.iso.datetime().nullable()})),
  knowledge:z.array(z.strictObject({observerId:z.uuid(),factId:z.uuid(),source:z.string(),at:z.iso.datetime()})),
  beliefs:z.array(z.strictObject({id:z.uuid(),observerId:z.uuid(),proposition:z.string().max(16000),confidence:z.number().min(0).max(1),source:z.string(),at:z.iso.datetime(),correctedBy:z.uuid().nullable()})),
@@ -74,12 +76,26 @@ export class Game {
    const existing=(await this.store.get<{id:string}>('SELECT id FROM timelines WHERE campaign_id=? AND parent_id IS NULL ORDER BY created_at LIMIT 1',campaignId));if(existing)return existing;
    const campaign=(await this.store.get<{starting_at:string;timezone:string;defaults_json:string;overrides_json:string}>('SELECT c.starting_at,c.timezone,cc.defaults_json,cc.overrides_json FROM campaigns c JOIN campaign_configurations cc ON cc.campaign_id=c.id WHERE c.id=?',campaignId))!;
    const stored=campaign.defaults_json?parseStoredCampaignConfig({defaults_json:campaign.defaults_json,overrides_json:campaign.overrides_json,revision:1,schema_version:1}):{defaults:defaultCampaignConfig(campaign.starting_at,campaign.timezone),overrides:{},revision:1,schemaVersion:1};
-   const resolved=resolveCampaignConfig(stored.defaults,stored.overrides),id=randomUUID(),settings=settingsSchema.parse({timezone:resolved.timezone});
+   const resolved=resolveCampaignConfig(stored.defaults,stored.overrides),id=randomUUID(),settings=settingsSchema.parse({campaign:resolved,timezone:resolved.timezone,needs:resolved.needsIntensity!=='off',intensity:resolved.injuryIntensity==='restrained'?'restrained':'grounded'});
    (await this.store.run('INSERT INTO timelines(id,campaign_id,name,clock,settings_json,created_at) VALUES (?,?,?,?,?,?)',id,campaignId,'Original timeline',resolved.startAt,JSON.stringify(settings),now()));
    const binding=await this.store.get<{canon_revision_id:string}>('SELECT canon_revision_id FROM campaign_canon_bindings WHERE campaign_id=?',campaignId);
    if(binding)await this.store.run('INSERT INTO timeline_canon_bindings VALUES (?,?,?)',id,binding.canon_revision_id,now());
    (await this.audit(actor,campaignId,'timeline.created',id));return {id};
   }));
+ }
+ async canon(id:string):Promise<CanonSource|null>{
+  const portable=await this.store.get<{source_json:string}>('SELECT source_json FROM timeline_canon_sources WHERE timeline_id=?',id);
+  if(portable)return canonSourceSchema.nullable().parse(JSON.parse(portable.source_json));
+  const binding=await this.store.get<{canon_revision_id:string;world_id:string}>('SELECT b.canon_revision_id,r.world_id FROM timeline_canon_bindings b JOIN canon_revisions r ON r.id=b.canon_revision_id WHERE b.timeline_id=?',id);
+  if(!binding)return null;
+  const records=await this.store.all<{snapshot_json:string}>('SELECT snapshot_json FROM canon_revision_records WHERE revision_id=? ORDER BY record_id',binding.canon_revision_id);
+  return {revisionId:binding.canon_revision_id,worldId:binding.world_id,records:records.map(r=>canonSnapshotSchema.parse(JSON.parse(r.snapshot_json)))};
+ }
+ private async pinCanon(id:string,source:CanonSource|null){await this.store.run('INSERT INTO timeline_canon_sources VALUES (?,?)',id,JSON.stringify(source));}
+ private async worldHistory(id:string){
+  const inherited=await this.store.get<{history_json:string}>('SELECT history_json FROM timeline_world_history WHERE timeline_id=?',id);
+  const rows=await this.store.all<{event_id:string;canon_revision_id:string|null;configuration_json:string}>('SELECT w.* FROM event_world_context w JOIN game_events e ON e.id=w.event_id WHERE e.timeline_id=? ORDER BY e.rowid',id);
+  return [...(inherited?JSON.parse(inherited.history_json):[]),...rows.map(r=>({eventId:r.event_id,canonRevisionId:r.canon_revision_id,configuration:JSON.parse(r.configuration_json)}))];
  }
  async load(id:string):Promise<State>{
   return this.store.transaction(async()=>{
@@ -89,7 +105,7 @@ export class Game {
   const knowledge=(await this.store.all<Record<string,string>>('SELECT * FROM character_knowledge WHERE timeline_id=?',id)).map(r=>({observerId:r.observer_id!,factId:r.fact_id!,source:r.source!,at:r.learned_at!}));
   const beliefs=(await this.store.all<Record<string,unknown>>('SELECT * FROM character_beliefs WHERE timeline_id=?',id)).map(r=>({id:r.id as string,observerId:r.observer_id as string,proposition:r.proposition as string,confidence:r.confidence as number,source:r.source as string,at:r.updated_at as string,correctedBy:r.corrected_by as string|null}));
   const memories=(await this.store.all<Record<string,unknown>>('SELECT * FROM character_memories WHERE timeline_id=?',id)).map(r=>({id:r.id as string,observerId:r.observer_id as string,text:r.text as string,salience:r.salience as number,decayPerDay:r.decay_per_day as number,eventId:r.source_event_id as string,at:r.created_at as string,private:!!r.private}));
-  return {clock:t.clock,settings:settingsSchema.parse(JSON.parse(t.settings_json)),entities,facts,knowledge,beliefs,memories};
+  return {canon:await this.canon(id),clock:t.clock,settings:settingsSchema.parse(JSON.parse(t.settings_json)),entities,facts,knowledge,beliefs,memories};
   },'read');
  }
  async persist(id:string,s:State){
@@ -230,13 +246,15 @@ export class Game {
    if(receipt){ensure(receipt.body_hash===checksum(body),409,'idempotency_conflict');return JSON.parse(receipt.result_json);}
    ensure(t.revision===expectedRevision,409,'revision_conflict');
    const s=(await this.load(id)),eventId=randomUUID(),seed=randomBytes(32).toString('hex');
+   const beforeDeath=s.settings.campaign?.saveBehavior.branchOnDeath?structuredClone(s):null;
    const action=await fn(s,eventId,seed,access.role);(await this.persist(id,s));
    const revision=t.revision+1;
    (await this.store.run('UPDATE timelines SET revision=? WHERE id=?',revision,id));
    (await this.store.run('INSERT INTO game_events VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',eventId,id,revision,actor.id,action.characterId??null,type,JSON.stringify(body),JSON.stringify(action.effects??[]),seed,action.draws??0,s.clock,now()));
    for(const check of action.checks??[])await this.store.run('INSERT INTO check_records (id,timeline_id,event_id,character_id,check_definition_id,attribute,skill_id,context,difficulty,die_value,attribute_value,skill_value,total,outcome,modifiers_json,provenance_json,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',check.id,id,eventId,check.characterId,check.checkDefinitionId,check.attribute,check.skillId,check.context,check.difficulty,check.dieValue,check.attributeValue,check.skillValue,check.total,check.outcome,JSON.stringify(check.modifiers),JSON.stringify(check.provenance),now());
-   const eventCanon=await this.store.get<{canon_revision_id:string}>('SELECT canon_revision_id FROM timeline_canon_bindings WHERE timeline_id=?',id);
-   if(eventCanon)await this.store.run('INSERT INTO event_canon_bindings VALUES (?,?,?)',eventId,eventCanon.canon_revision_id,now());
+   const eventCanonId=s.canon?.revisionId;
+   if(eventCanonId)await this.store.run('INSERT INTO event_canon_bindings VALUES (?,?,?)',eventId,eventCanonId,now());
+   await this.store.run('INSERT INTO event_world_context VALUES (?,?,?)',eventId,s.canon?.revisionId??null,JSON.stringify(s.settings.campaign));
    await this.store.run('INSERT INTO game_outbox(event_id,created_at) VALUES (?,?)',eventId,now());
    if(action.characterId){
     const permitted=(action.effects??[]).filter(e=>e.observers.includes(action.characterId!));
@@ -246,7 +264,12 @@ export class Game {
    (await this.audit(actor,t.campaign_id,type,eventId,{reason:type,before:creator?{revision:t.revision,command:body}:undefined,after:creator?{revision,effects:action.effects??[]}:undefined}));
    const response={revision,eventId,...action.result};
    (await this.store.run('INSERT INTO game_receipts VALUES (?,?,?,?,?)',id,actor.id,key,checksum(body),JSON.stringify(response)));
-   (await this.saveInternal(actor,id,'Autosave '+revision,s,revision,true));
+   if((s.settings.campaign?.saveBehavior.autosave??'safe-commit')==='safe-commit')await this.saveInternal(actor,id,'Autosave '+revision,s,revision,true);
+   if(beforeDeath&&s.entities.some(e=>e.kind==='character'&&e.data.playable&&e.data.condition==='dead'&&beforeDeath.entities.some(old=>old.id===e.id&&old.data.condition!=='dead'))){
+    const saveId=await this.saveInternal(actor,id,'Before death',beforeDeath,t.revision,true);
+    const branch=await this.branch(actor,id,saveId,'Before death');Object.assign(response,{deathBranchId:branch.id});
+    await this.store.run('UPDATE game_receipts SET result_json=? WHERE timeline_id=? AND actor_id=? AND key=?',JSON.stringify(response),id,actor.id,key);
+   }
    return response;
   }));
  }
@@ -354,11 +377,11 @@ export class Game {
   return proposeIntent(s,characterId,text);
  }
  private async saveInternal(actor:Actor,id:string,name:string,s:State,revision:number,automatic=false){
-  const saveId=randomUUID(),snapshot={version:1,state:s,transcript:(await this.transcript(id))};
+  const saveId=randomUUID(),snapshot={version:1,state:s,worldHistory:await this.worldHistory(id),transcript:(await this.transcript(id))};
   const stored=await encodeSnapshot(this.store,snapshot);
   (await this.store.run('INSERT INTO saves VALUES (?,?,?,?,?,?,?,?,?)',saveId,id,name,revision,JSON.stringify(stored),checksum(snapshot),actor.id,now(),automatic?1:0));return saveId;
  }
- async save(actor:Actor,id:string,name:string){return this.store.transaction(async()=>{const {t,access}=await this.access(actor,id);ensure(access.role!=='observer',403,'forbidden');const saveId=await this.saveInternal(actor,id,name,await this.load(id),t.revision);await this.audit(actor,t.campaign_id,'save.created',saveId);return {id:saveId};});}
+ async save(actor:Actor,id:string,name:string){return this.store.transaction(async()=>{const {t,access}=await this.access(actor,id);ensure(access.role!=='observer',403,'forbidden');const state=await this.load(id),count=await this.store.get<{n:number}>('SELECT count(*) n FROM saves WHERE timeline_id=? AND automatic=0',id);ensure((count?.n??0)<(state.settings.campaign?.saveBehavior.maxManualSaves??100),409,'manual_save_limit');const saveId=await this.saveInternal(actor,id,name,state,t.revision);await this.audit(actor,t.campaign_id,'save.created',saveId);return {id:saveId};});}
  async saves(actor:Actor,id:string){const {access}=(await this.access(actor,id));return (await this.store.all('SELECT id,name,revision,created_at,automatic FROM saves WHERE timeline_id=? AND (?=1 OR created_by=?) ORDER BY rowid DESC LIMIT 100',id,privileged(access.role)?1:0,actor.id));}
  async branch(actor:Actor,id:string,saveId:string,name:string){
   return (await this.store.transaction(async ()=>{
@@ -367,13 +390,13 @@ export class Game {
    const snapshot=await decodeSnapshot(this.store,JSON.parse(save.snapshot_json));ensure(checksum(snapshot)===save.checksum,409,'corrupt_save');
    const parsed=snapshotSchema.parse(snapshot),childId=randomUUID();
    (await this.store.run('INSERT INTO timelines(id,campaign_id,parent_id,parent_save_id,name,revision,clock,settings_json,created_at) VALUES (?,?,?,?,?,?,?,?,?)',childId,t.campaign_id,id,saveId,name,1,parsed.state.clock,JSON.stringify(parsed.state.settings),now()));
-   const parentCanon=await this.store.get<{canon_revision_id:string}>('SELECT canon_revision_id FROM timeline_canon_bindings WHERE timeline_id=?',id);
-   if(parentCanon)await this.store.run('INSERT INTO timeline_canon_bindings VALUES (?,?,?)',childId,parentCanon.canon_revision_id,now());
+   await this.pinCanon(childId,parsed.state.canon===undefined?await this.canon(id):parsed.state.canon);
+   await this.store.run('INSERT INTO timeline_world_history VALUES (?,?)',childId,JSON.stringify(parsed.worldHistory));
    (await this.persist(childId,parsed.state));(await this.restoreTranscript(childId,parsed.transcript));(await this.audit(actor,t.campaign_id,'timeline.branched',childId,{before:{parentTimelineId:id,saveId},after:{timelineId:childId,name}}));
    (await this.saveInternal(actor,childId,'Branch origin',parsed.state,1,true));return {id:childId};
   }));
  }
- async export(actor:Actor,id:string){(await this.access(actor,id,true));const payload={version:1,state:(await this.load(id)),transcript:(await this.transcript(id))};ensureJsonBytes(payload,this.exportBytes,'export_too_large');return {payload,checksum:checksum(payload)};}
+ async export(actor:Actor,id:string){(await this.access(actor,id,true));const payload={version:1,worldHistory:await this.worldHistory(id),state:(await this.load(id)),transcript:(await this.transcript(id))};ensureJsonBytes(payload,this.exportBytes,'export_too_large');return {payload,checksum:checksum(payload)};}
  async validateImport(actor:Actor,id:string,raw:unknown){
   (await this.access(actor,id,true));ensureJsonBytes(raw,this.importBytes,'import_too_large');const envelope=z.strictObject({payload:z.unknown(),checksum:z.string().length(64)}).parse(raw);
   ensure(checksum(envelope.payload)===envelope.checksum,400,'import_checksum_mismatch');
@@ -386,8 +409,9 @@ export class Game {
  }
  async import(actor:Actor,id:string,name:string,raw:unknown,dryRun=true){
   const state=(await this.validateImport(actor,id,raw));if(dryRun)return {valid:true,entities:state.entities.length,version:1};
-  return (await this.store.transaction(async ()=>{const {t}=(await this.access(actor,id,true)),child=randomUUID();(await this.store.run('INSERT INTO timelines(id,campaign_id,parent_id,name,clock,settings_json,created_at) VALUES (?,?,?,?,?,?,?)',child,t.campaign_id,id,name,state.clock,JSON.stringify(state.settings),now()));const campaignCanon=await this.store.get<{canon_revision_id:string}>('SELECT canon_revision_id FROM timeline_canon_bindings WHERE timeline_id=?',id);if(campaignCanon)await this.store.run('INSERT INTO timeline_canon_bindings VALUES (?,?,?)',child,campaignCanon.canon_revision_id,now());(await this.persist(child,state));
+  return (await this.store.transaction(async ()=>{const {t}=(await this.access(actor,id,true)),child=randomUUID();(await this.store.run('INSERT INTO timelines(id,campaign_id,parent_id,name,clock,settings_json,created_at) VALUES (?,?,?,?,?,?,?)',child,t.campaign_id,id,name,state.clock,JSON.stringify(state.settings),now()));await this.pinCanon(child,state.canon??null);(await this.persist(child,state));
    const bundle=z.object({payload:snapshotSchema}).parse(raw);
+   await this.store.run('INSERT INTO timeline_world_history VALUES (?,?)',child,JSON.stringify(bundle.payload.worldHistory));
    (await this.restoreTranscript(child,bundle.payload.transcript.map(turn=>({...turn,user_id:actor.id}))));
    (await this.audit(actor,t.campaign_id,'timeline.imported',child,{before:{parentTimelineId:id},after:{timelineId:child,name,entities:state.entities.length,clock:state.clock}}));(await this.saveInternal(actor,child,'Import origin',state,1,true));return {id:child};}));
  }

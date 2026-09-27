@@ -1,3 +1,4 @@
+import {canonSources} from './canon.ts';
 import {randomUUID} from 'node:crypto';
 import {data,getEntity} from './model.ts';
 import type {Entity,State} from './model.ts';
@@ -99,7 +100,10 @@ export function retrieve(s:State,observerId:string,query:string,limit=12,queryEm
   const semantic=cosine(localQuery,candidateEmbedding);
   const body=(e.name+' '+e.data.description+' '+(e.data.tags as string[]).join(' ')).toLowerCase();
   return {id:e.id,name:e.name,text:e.data.description,source:source.source,score:terms.filter(t=>body.includes(t)).length+Math.max(0,semantic)+source.priority};
- }).sort((a,b)=>b.score-a.score||a.id.localeCompare(b.id)).slice(0,Math.min(limit,50));
+ });
+ rows.push(...canonSources(s).map(r=>({...r,score:terms.filter(t=>(r.name+' '+r.text).toLowerCase().includes(t)).length})));
+ rows.sort((a,b)=>b.score-a.score||a.id.localeCompare(b.id));
+ rows.splice(Math.min(limit,50));
  return {sources:rows,beliefs:view.beliefs.filter(b=>terms.some(t=>b.proposition.toLowerCase().includes(t))).slice(0,limit),
  memories:view.memories.filter(m=>m.currentSalience>0).sort((a,b)=>b.currentSalience-a.currentSalience).slice(0,limit),
  contradictions:view.beliefs.filter(b=>b.correctedBy).map(b=>({beliefId:b.id,correctedBy:b.correctedBy}))};

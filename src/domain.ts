@@ -107,10 +107,12 @@ export class Domain {
       const replay=await this.replay(campaignId,actor,key,body);if(replay)return replay;
       const row=await this.store.get<{defaults_json:string;overrides_json:string;revision:number;schema_version:number}>('SELECT defaults_json,overrides_json,revision,schema_version FROM campaign_configurations WHERE campaign_id=?',campaignId);
       ensure(row,404,'campaign_config_unavailable');ensure(row.revision===input.expectedRevision,409,'revision_conflict');
-      const stored=parseStoredCampaignConfig(row),overrides=campaignConfigOverridesSchema.parse(input.overrides),resolved=resolveCampaignConfig(stored.defaults,overrides),before={defaults:stored.defaults,overrides:stored.overrides,resolved};
+      const stored=parseStoredCampaignConfig(row),overrides=campaignConfigOverridesSchema.parse(input.overrides),resolved=resolveCampaignConfig(stored.defaults,overrides),before={defaults:stored.defaults,overrides:stored.overrides,resolved:resolveCampaignConfig(stored.defaults,stored.overrides)};
       const now=clock(),configRevision=row.revision+1,campaignRevision=access.revision+1;
       await this.store.run('UPDATE campaign_configurations SET overrides_json=?,revision=?,updated_at=?,updated_by=? WHERE campaign_id=?',JSON.stringify(overrides),configRevision,now,actor.id,campaignId);
       await this.store.run('UPDATE campaigns SET revision=revision+1,updated_at=? WHERE id=?',now,campaignId);
+      const timelines=await this.store.all<{id:string;settings_json:string}>('SELECT id,settings_json FROM timelines WHERE campaign_id=? AND archived_at IS NULL',campaignId);
+      for(const timeline of timelines){const settings=JSON.parse(timeline.settings_json);settings.campaign=resolved;settings.timezone=resolved.timezone;settings.needs=resolved.needsIntensity!=='off';settings.intensity=resolved.injuryIntensity==='restrained'?'restrained':'grounded';if(resolved.matureContent==='off'||resolved.contentRating==='general')settings.intimacy='off';await this.store.run('UPDATE timelines SET settings_json=?,revision=revision+1 WHERE id=?',JSON.stringify(settings),timeline.id);}
       const result=await this.finish(scope,actor,key,body,{id:campaignId,revision:campaignRevision},'campaign.configuration.updated',{configRevision,resolved},campaignId,{before,after:{overrides,resolved},reason:input.reason??'campaign.configuration'});
       return {...result,configRevision};
     });
@@ -126,7 +128,7 @@ export class Domain {
   }
   async canonRecords(actor:Actor,worldId:string){
     await this.access(actor,{type:'world',id:worldId});
-    const rows=await this.store.all<{record_id:string;slug:string;aliases_json:string;source_status:string;valid_from:string|null;valid_until:string|null;revision:number;updated_at:string}>('SELECT record_id,slug,aliases_json,source_status,valid_from,valid_until,revision,updated_at FROM canon_records WHERE world_id=? AND archived_at IS NULL ORDER BY slug,record_id',worldId);
+    const rows=await this.store.all<{record_id:string;name:string;kind:string;slug:string;aliases_json:string;source_status:string;valid_from:string|null;valid_until:string|null;revision:number;updated_at:string}>('SELECT c.record_id,r.name,r.kind,c.slug,c.aliases_json,c.source_status,c.valid_from,c.valid_until,c.revision,c.updated_at FROM canon_records c JOIN records r ON r.id=c.record_id WHERE c.world_id=? AND c.archived_at IS NULL AND r.archived_at IS NULL ORDER BY c.slug,c.record_id',worldId);
     return {items:rows.map(row=>({...row,aliases:JSON.parse(row.aliases_json)}))};
   }
   async setCanonRecord(actor:Actor,worldId:string,input:{recordId:string;slug:string;aliases:string[];sourceStatus:'draft'|'published'|'archived';validFrom:string|null;validUntil:string|null;expectedRevision?:number;links?:{targetRecordId:string;relation:string}[]},key:string){
@@ -135,13 +137,16 @@ export class Domain {
       await this.access(actor,scope,true);
       const body={type:'canon.record.set',...input},replay=await this.replay(worldId,actor,key,body);if(replay)return replay;
       const record=await this.store.get<{id:string;revision:number}>('SELECT id,revision FROM records WHERE id=? AND world_id=?',input.recordId,worldId);ensure(record,404,'not_found');
-      const current=await this.store.get<{revision:number}>('SELECT revision FROM canon_records WHERE record_id=? AND world_id=?',input.recordId,worldId);
+      const current=await this.store.get<{revision:number;slug:string}>('SELECT revision,slug FROM canon_records WHERE record_id=? AND world_id=?',input.recordId,worldId);
+      ensure(!input.validFrom||!input.validUntil||Date.parse(input.validFrom)<Date.parse(input.validUntil),400,'invalid_canon_validity');
+      if(current)ensure(current.slug===input.slug,409,'canon_slug_immutable');
       if(current)ensure(current.revision===input.expectedRevision,409,'revision_conflict');else ensure(input.expectedRevision===undefined||input.expectedRevision===0,409,'revision_conflict');
       const aliases=JSON.stringify([...new Set(input.aliases.map(value=>value.trim()).filter(Boolean))]),now=clock(),revision=(current?.revision??0)+1;
       const before=current?await this.canonSnapshot(input.recordId):undefined;
       if(current) await this.store.run('UPDATE canon_records SET slug=?,aliases_json=?,source_status=?,valid_from=?,valid_until=?,revision=?,updated_at=?,updated_by=?,archived_at=? WHERE record_id=?',input.slug,aliases,input.sourceStatus,input.validFrom,input.validUntil,revision,now,actor.id,input.sourceStatus==='archived'?now:null,input.recordId);
       else await this.store.run('INSERT INTO canon_records(record_id,world_id,slug,aliases_json,source_status,valid_from,valid_until,revision,created_at,updated_at,created_by,updated_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',input.recordId,worldId,input.slug,aliases,input.sourceStatus,input.validFrom,input.validUntil,revision,now,now,actor.id,actor.id);
-      await this.store.run('DELETE FROM canon_record_links WHERE source_record_id=?',input.recordId);
+      if(input.sourceStatus==='archived')await this.store.run('UPDATE canon_records SET archived_at=? WHERE record_id=?',now,input.recordId);
+      if(input.links!==undefined)await this.store.run('DELETE FROM canon_record_links WHERE source_record_id=?',input.recordId);
       for(const link of input.links??[]){ensure(link.targetRecordId!==input.recordId,400,'canon_self_link');ensure(await this.store.get('SELECT id FROM records WHERE id=? AND world_id=?',link.targetRecordId,worldId),404,'not_found');await this.store.run('INSERT INTO canon_record_links VALUES (?,?,?,?)',input.recordId,link.targetRecordId,link.relation,now);}
       const after=await this.canonSnapshot(input.recordId),eventAggregate=randomUUID();
       const result=await this.finish(scope,actor,key,body,{id:eventAggregate,revision},'canon.record.updated',{recordId:input.recordId,revision},worldId,{before,after,reason:'canon.record.edit'});
@@ -169,9 +174,12 @@ export class Domain {
   async setCanonRevisionStatus(actor:Actor,worldId:string,revisionId:string,status:'draft'|'published'|'archived',key:string){
     const scope:Scope={type:'world',id:worldId};
     return await this.store.transaction(async()=>{
-      await this.access(actor,scope,true);const row=await this.store.get<{id:string;revision:number;status:string}>('SELECT id,revision,status FROM canon_revisions WHERE id=? AND world_id=?',revisionId,worldId);ensure(row,404,'not_found');
+      await this.access(actor,scope,true);const row=await this.store.get<{id:string;revision:number;status:string;published_at:string|null;archived_at:string|null}>('SELECT id,revision,status,published_at,archived_at FROM canon_revisions WHERE id=? AND world_id=?',revisionId,worldId);ensure(row,404,'not_found');
       const body={type:'canon.revision.status',revisionId,status},replay=await this.replay(worldId,actor,key,body);if(replay)return replay;
-      const now=clock(),before={status:row.status};await this.store.run('UPDATE canon_revisions SET status=?,published_at=?,archived_at=? WHERE id=?',status,status==='published'?now:null,status==='archived'?now:null,revisionId);
+      const allowed:Record<string,string[]>={draft:['published','archived'],published:['archived'],archived:[]};ensure(status===row.status||allowed[row.status]?.includes(status),409,'invalid_canon_revision_transition');
+      if(status==='published'){const unpublished=await this.store.get<{n:number}>("SELECT count(*) n FROM canon_revision_records WHERE revision_id=? AND json_extract(snapshot_json,'$.canon.source_status')<>'published'",revisionId);ensure((unpublished?.n??0)===0,409,'canon_revision_contains_unpublished_records');}
+      const now=clock(),before={status:row.status},publishedAt=status==='published'?(row.published_at??now):row.published_at,archivedAt=status==='archived'?(row.archived_at??now):null;
+      await this.store.run('UPDATE canon_revisions SET status=?,published_at=?,archived_at=? WHERE id=?',status,publishedAt,archivedAt,revisionId);
       const result=await this.finish(scope,actor,key,body,{id:randomUUID(),revision:row.revision},'canon.revision.status.updated',{revisionId,status},worldId,{before,after:{status},reason:'canon.revision.status'});
       return {...result,canonRevisionId:revisionId};
     });

@@ -5,6 +5,7 @@ import { Fault, ensure } from './contracts.ts';
 import type { Actor } from './contracts.ts';
 import type { Config } from './config.ts';
 export const credentials=z.strictObject({email:z.email().max(254).transform(v=>v.toLowerCase()),password:z.string().min(12).max(128)});
+export const recoveryCredentials=z.strictObject({email:z.email().max(254).transform(v=>v.toLowerCase()),recoveryKey:z.string().trim().min(1).max(256),newPassword:z.string().min(12).max(128)});
 export const hash=(value:string)=>createHash('sha256').update(value).digest('hex');
 export const csrfFor=(token:string)=>hash('valor-csrf-v1:'+token);
 async function passwordHash(password:string,salt=randomBytes(16).toString('hex')) {
@@ -77,6 +78,25 @@ export class Auth {
       throw error;
     }
     return {token,csrfToken:csrfFor(token),user:{id,role:'player' as const}};
+  }
+  async recoverPassword(email:string,recoveryKey:string,newPassword:string,requestId?:string) {
+    const configured=this.settings.passwordRecoveryKey;
+    const supplied=Buffer.from(hash(recoveryKey),'hex'),expected=Buffer.from(hash(configured??'valor-unconfigured-password-recovery-key'),'hex');
+    const accepted=Boolean(configured)&&timingSafeEqual(supplied,expected);
+    const user=accepted?await this.store.get<{id:string;password_hash:string}>('SELECT id,password_hash FROM users WHERE email=? AND archived_at IS NULL',email):undefined;
+    if(!accepted||!user){
+      await this.store.run('INSERT INTO audit_log(id,action,target_id,created_at,request_id,reason) VALUES (?,?,?,?,?,?)',randomUUID(),'auth.password_recovery.denied','password-recovery',new Date().toISOString(),requestId??null,'invalid-recovery-credentials');
+      ensure(false,403,'invalid_recovery_credentials');
+    }
+    const encoded=await passwordHash(newPassword),now=new Date().toISOString();
+    return this.store.transaction(async()=>{
+      const current=await this.store.get<{id:string;password_hash:string}>('SELECT id,password_hash FROM users WHERE id=? AND archived_at IS NULL',user.id);
+      ensure(current&&current.password_hash===user.password_hash,409,'account_changed_retry');
+      await this.store.run('UPDATE users SET password_hash=?,revision=revision+1,updated_at=? WHERE id=?',encoded,now,user.id);
+      await this.store.run('DELETE FROM sessions WHERE user_id=?',user.id);
+      await this.store.run('INSERT INTO audit_log(id,actor_id,action,target_id,created_at,request_id,reason,before_json,after_json) VALUES (?,?,?,?,?,?,?,?,?)',randomUUID(),user.id,'auth.password.recovered',user.id,now,requestId??null,'recovery-key',JSON.stringify({sessionsRevoked:true}),JSON.stringify({passwordChanged:true}));
+      return {ok:true};
+    });
   }
   async grantDeveloperAccess(actor:Actor,accessKey:string,expectedRevision:number,requestId?:string) {
     const configured=this.settings.developerAccessKey;

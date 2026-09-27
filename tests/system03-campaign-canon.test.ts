@@ -4,6 +4,11 @@ import {fixture,key} from './helpers.ts';
 import {Game} from '../src/game/engine.ts';
 import {validateEntity} from '../src/game/model.ts';
 import {randomUUID} from 'node:crypto';
+import {readFileSync} from 'node:fs';
+import {defaultCampaignConfig} from '../src/campaign-config.ts';
+import {enforceActionPolicy,injuryRate,lawResponseMinutes,needsRate} from '../src/game/policy.ts';
+import type {Action,State} from '../src/game/model.ts';
+
 const revId=(value:unknown)=>String((value as {canonRevisionId:string}).canonRevisionId);
 
 test('campaign configuration keeps defaults separate from explicit overrides and drives new timeline start',async()=>{
@@ -52,6 +57,7 @@ test('conflicting worlds remain isolated and published canon revisions preserve 
   const revised=await f.domain.createCanonRevision(f.creator,f.world.id,{recordIds:[cityOne.id],note:'revised city'},key());
   await f.domain.setCanonRevisionStatus(f.creator,f.world.id,revId(revised),'published',key());
   await f.domain.setCanonRevisionStatus(f.creator,f.world.id,revId(first),'archived',key());
+  await assert.rejects(()=>f.domain.setCanonRevisionStatus(f.creator,f.world.id,revId(first),'published',key()),/invalid_canon_revision_transition/);
   const oldSnapshot=await f.store.get<{snapshot_json:string}>('SELECT snapshot_json FROM canon_revision_records WHERE revision_id=? AND record_id=?',revId(first),cityOne.id);
   assert.match(oldSnapshot!.snapshot_json,/Harbor City/);
   assert.equal((await f.store.get<{status:string}>('SELECT status FROM canon_revisions WHERE id=?',revId(first)))!.status,'archived');
@@ -59,5 +65,20 @@ test('conflicting worlds remain isolated and published canon revisions preserve 
   const eventEntity=validateEntity({id:randomUUID(),kind:'location',name:'Revision test place',visibility:'campaign',data:{category:'city'}});
   const edit=await game.edit(f.creator,timelineOne.id,{revision:(await game.access(f.creator,timelineOne.id)).t.revision,entity:eventEntity},key());
   assert.equal((await f.store.get<{canon_revision_id:string}>('SELECT canon_revision_id FROM event_canon_bindings WHERE event_id=?',edit.eventId))!.canon_revision_id,revId(first));
+  const context=await f.store.get<{canon_revision_id:string;configuration_json:string}>('SELECT canon_revision_id,configuration_json FROM event_world_context WHERE event_id=?',edit.eventId);
+  assert.equal(context!.canon_revision_id,revId(first));
+  assert.equal(JSON.parse(context!.configuration_json).timezone,'America/New_York');
  }finally{await f.close();}
+});
+
+test('campaign runtime policy is data-driven and Creator controls expose configuration boundaries',()=>{
+ const campaign=defaultCampaignConfig('2012-06-01T12:00:00.000Z','America/New_York');
+ campaign.enabledSystems.combat=false;campaign.technology.features.sms=false;campaign.needsIntensity='intense';campaign.injuryIntensity='restrained';campaign.lawEnforcement.posture='strict';
+ const state={settings:{campaign}} as unknown as State;
+ assert.throws(()=>enforceActionPolicy(state,{type:'combat'} as unknown as Action),/system_disabled/);
+ assert.throws(()=>enforceActionPolicy(state,{type:'message',medium:'sms'} as unknown as Action),/technology_disabled/);
+ assert.equal(needsRate(state),2);assert.equal(injuryRate(state),0.5);assert.equal(lawResponseMinutes(state,'authored-agency',10),5);
+ const app=readFileSync('public/app.js','utf8'),engine=readFileSync('src/game/policy.ts','utf8')+readFileSync('src/game/actions.ts','utf8');
+ assert.match(app,/system03Controls/);assert.match(app,/Explicit overrides \(JSON\)/);assert.match(app,/Snapshot current canon/);
+ assert.doesNotMatch(engine,/Harbor City|Northpoint/);
 });

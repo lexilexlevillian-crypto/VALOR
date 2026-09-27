@@ -66,7 +66,7 @@ The test suite uses temporary databases and synthetic test content. No test fixt
 
 ## Hosting
 
-This is a Node web service, not a static site. Production uses external Turso/libSQL through `@libsql/client`, so it can run on a free Render Web Service without a persistent disk. Set `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN`, HTTPS `APP_ORIGIN`, and a `RATE_LIMIT_SECRET` of at least 32 characters privately in Render. Production never falls back to a local file. Local development still uses `DATABASE_PATH` when Turso is unset. Follow the [Render deployment runbook](docs/RENDER.md); no paid resource is silently provisioned.
+This is a Node web service, not a static site. Production uses external Turso/libSQL through `@libsql/client`, so it can run on a free Render Web Service without a persistent disk. Set `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN`, HTTPS `APP_ORIGIN`, and a `RATE_LIMIT_SECRET` of at least 32 characters privately in Render. Set a distinct random `PASSWORD_RECOVERY_KEY` to enable the login screen's recovery flow; a successful recovery is rate-limited and audited, replaces the password, and revokes every session. Production never falls back to a local file. Local development still uses `DATABASE_PATH` when Turso is unset. Follow the [Render deployment runbook](docs/RENDER.md); no paid resource is silently provisioned.
 
 Optional Gemini narration uses the server-only `GEMINI_API_KEY` (or `GOOGLE_API_KEY`) already configured in Render. Set nonzero campaign and user AI budgets in Settings to allow requests. With Gemini available, Chronicle selects it for automatic narration; choose `grounded` to opt out. Provider failure retains the committed turn without rerolling. See [new systems and Gemini setup](docs/SYSTEMS_EXPANSION.md).
 

@@ -26,6 +26,8 @@ Confirm the repository, branch and deploy commit before changing the service. Pr
 | TURSO_DATABASE_URL | Your external libSQL database URL; `libsql://...` or `https://...` |
 | TURSO_AUTH_TOKEN | Your database's read/write token, entered privately |
 | RATE_LIMIT_SECRET | A random secret of at least 32 characters |
+| DEVELOPER_ACCESS_KEY | Optional random 32-256 character Developer Mode key |
+| PASSWORD_RECOVERY_KEY | Optional, distinct random 32-256 character account recovery key |
 
 Set secrets in the service's Environment tab; never commit them or paste them into chat. Follow [Render environment configuration](https://render.com/docs/configure-environment-variables). `DATABASE_PATH` is ignored when Turso is configured and may be removed. Do not hardcode PORT; HOST defaults to 0.0.0.0. Startup awaits all checksummed migrations before listening. A connection or migration failure prevents startup; it never silently writes to ephemeral SQLite.
 

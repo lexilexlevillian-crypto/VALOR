@@ -1,4 +1,6 @@
 import {z} from 'zod';
+import {campaignConfigSchema} from '../campaign-config.ts';
+import type {CanonSource} from './canon.ts';
 import {id,name,visibility} from '../contracts.ts';
 import {mediaBytes} from './media.ts';
 const text=z.string().max(16000), short=z.string().max(1000), ref=id.nullable().default(null);
@@ -32,6 +34,7 @@ const rules=z.strictObject({
  outcomeBands:outcomeBands.default({criticalMargin:10,successAtCostMargin:2,partialFailureMargin:-2,failureInformationMargin:-10})
 });
 export const settingsSchema=z.strictObject({
+ campaign:campaignConfigSchema.nullable().default(null),
  needs:z.boolean().default(false),fuel:z.boolean().default(false),weather:z.enum(['clear','rain','overcast','snow','fog']).default('clear'),narrationMode:z.enum(['grounded','anchored-prose']).default('grounded'),
  romance:z.boolean().default(false),intimacy:z.enum(['off','fade-to-black']).default('off'),
  intensity:z.enum(['restrained','grounded']).default('restrained'),difficulty:z.enum(['custom','narrative']).default('custom'),
@@ -243,7 +246,7 @@ export type Fact={id:string;subjectId:string;predicate:string;value:unknown;even
 export type Knowledge={observerId:string;factId:string;source:string;at:string};
 export type Belief={id:string;observerId:string;proposition:string;confidence:number;source:string;at:string;correctedBy:string|null};
 export type Memory={id:string;observerId:string;text:string;salience:number;decayPerDay:number;eventId:string;at:string;private:boolean};
-export type State={clock:string;settings:Settings;entities:Entity[];facts:Fact[];knowledge:Knowledge[];beliefs:Belief[];memories:Memory[]};
+export type State={canon?:CanonSource|null;clock:string;settings:Settings;entities:Entity[];facts:Fact[];knowledge:Knowledge[];beliefs:Belief[];memories:Memory[]};
 export const getEntity=(s:State,id:string,kind?:Kind)=>{const e=s.entities.find(e=>e.id===id&&!e.archived);if(!e||kind&&e.kind!==kind)throw new Error('entity_unavailable');return e;};
 export function refs(e:Entity):string[]{
  const result:string[]=[];const walk=(v:unknown,key='')=>{if(!v)return;if(typeof v==='string'&&((key.endsWith('Id')&&!['controllerUserId','sourceEventId','eventId','parentId'].includes(key))||['parentId','to'].includes(key)&&e.kind==='location'))result.push(v);

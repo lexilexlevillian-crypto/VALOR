@@ -38,6 +38,7 @@ test('production refuses unsafe environment and uses host-only secure cookies',a
   assert.throws(()=>config({AI_GATEWAY_URL:'https://gateway.example'}),/both AI_GATEWAY_URL and AI_GATEWAY_SECRET/);
   assert.throws(()=>config({AI_GATEWAY_URL:'https://gateway.example',AI_GATEWAY_SECRET:'short'}),/at least 32 characters/);
   assert.throws(()=>config({DEVELOPER_ACCESS_KEY:'short'}),/32-256 characters/);
+  assert.throws(()=>config({PASSWORD_RECOVERY_KEY:'short'}),/32-256 characters/);
   assert.throws(()=>config({MUTATION_LIMIT:'0'}),/>=1/);
   assert.throws(()=>config({EXPORT_MAX_BYTES:String(65*1024*1024)}),/<=67108864/);
   const f=await fixture();
@@ -151,4 +152,22 @@ test('service serves a real HTTP health request and shuts down cleanly',async()=
     assert.equal(response.status,200);assert.deepEqual(await response.json(),{status:'ok'});
     const root=await fetch(address);assert.equal((await root.json()).playable,true);
   }finally{await f.close();}
+});
+test('password recovery requires the separate secret, revokes sessions, changes the password and audits safely',async()=>{
+  const f=await fixture(),recoveryKey='recovery-test-key-'.repeat(3),newPassword='A new test passphrase 456!';
+  const app=buildApp(f.store,{...f.settings,passwordRecoveryKey:recoveryKey},false);
+  try{
+    const current=await app.inject({method:'POST',url:'/auth/login',headers:{origin:f.settings.origin},payload:{email:'player@example.test',password}});
+    const cookie=String(current.headers['set-cookie']).split(';')[0]!;
+    const wrong=await app.inject({method:'POST',url:'/auth/password/recover',headers:{origin:f.settings.origin},payload:{email:'player@example.test',recoveryKey:'wrong recovery key',newPassword}});
+    assert.equal(wrong.statusCode,403);assert.equal(wrong.json().error,'invalid_recovery_credentials');
+    const reset=await app.inject({method:'POST',url:'/auth/password/recover',headers:{origin:f.settings.origin},payload:{email:'player@example.test',recoveryKey:'  '+recoveryKey+'  ',newPassword}});
+    assert.equal(reset.statusCode,200,reset.body);assert.deepEqual(reset.json(),{ok:true});
+    assert.equal((await app.inject({url:'/auth/session',headers:{cookie}})).statusCode,401);
+    assert.equal((await app.inject({method:'POST',url:'/auth/login',headers:{origin:f.settings.origin},payload:{email:'player@example.test',password}})).statusCode,401);
+    assert.equal((await app.inject({method:'POST',url:'/auth/login',headers:{origin:f.settings.origin},payload:{email:'player@example.test',password:newPassword}})).statusCode,200);
+    assert.equal((await f.store.get<{n:number}>("SELECT count(*) n FROM audit_log WHERE action='auth.password.recovered' AND actor_id=?",f.player.id))!.n,1);
+    const stored=JSON.stringify(await f.store.all('SELECT * FROM audit_log'));
+    assert.doesNotMatch(stored,new RegExp(recoveryKey));assert.doesNotMatch(stored,new RegExp(newPassword));
+  }finally{await app.close();await f.close();}
 });
