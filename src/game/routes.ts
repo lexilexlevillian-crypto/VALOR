@@ -26,6 +26,10 @@ export function gameRoutes(app:FastifyInstance,game:Game,actor:(r:object)=>Actor
   const b=z.strictObject({name,slug:z.string().trim().min(1).max(80).regex(/^[a-z0-9][a-z0-9._-]*$/),description:z.string().max(16000).default(''),kind:z.enum(['guided','freeform','template']),visibility:z.enum(['creator','campaign']).default('campaign'),status:z.enum(['draft','published','archived']).default('draft'),definition:z.unknown()}).parse(r.body);
   return wrap(()=>game.createStartPackage(actor(r),timeline(r),b,key(r.headers)));
  });
+ app.post('/game/timelines/:id/start-packages/:packageId/duplicate',async r=>{
+  const p=z.object({id,packageId:id}).parse(r.params),b=z.strictObject({name,slug:z.string().trim().min(1).max(80).regex(/^[a-z0-9][a-z0-9._-]*$/),visibility:z.enum(['creator','campaign']).optional(),status:z.enum(['draft','published']).optional()}).parse(r.body);
+  return wrap(()=>game.duplicateStartPackage(actor(r),p.id,p.packageId,b,key(r.headers)));
+ });
  app.post('/game/timelines/:id/start',async r=>{
   const b=z.strictObject({revision:bodyRevision,packageId:id.optional(),definition:z.unknown().optional()}).refine(v=>Boolean(v.packageId)!==Boolean(v.definition),'one_start_source_required').parse(r.body);
   return wrap(()=>game.start(actor(r),timeline(r),b,key(r.headers)));
@@ -34,6 +38,9 @@ export function gameRoutes(app:FastifyInstance,game:Game,actor:(r:object)=>Actor
  app.get('/game/timelines/:id/projections',async r=>{const query=z.strictObject({characterId:id}).parse(r.query);return wrap(()=>game.projections(actor(r),timeline(r),query.characterId));});
  app.get('/game/timelines/:id/creator',async r=>(await game.creator(actor(r),timeline(r))));
  app.get('/game/timelines/:id/developer/overview',async r=>(await game.creator(actor(r),timeline(r))));
+ app.post('/game/timelines/:id/developer/validate',async r=>{const b=z.strictObject({revision:bodyRevision,entities:z.array(z.unknown()).min(1).max(100)}).parse(r.body);return wrap(()=>game.developerValidate(actor(r),timeline(r),b));});
+ app.post('/game/timelines/:id/developer/validate-settings',async r=>{const b=z.strictObject({revision:bodyRevision,settings:z.unknown()}).parse(r.body);return wrap(()=>game.developerValidateSettings(actor(r),timeline(r),b));});
+ app.get('/game/timelines/:id/developer/simulation-preview',async r=>{const q=z.strictObject({minutes:z.coerce.number().int().min(1).max(1440)}).parse(r.query);return wrap(()=>game.developerSimulationPreview(actor(r),timeline(r),q.minutes));});
  app.get('/game/timelines/:id/checks',async r=>{const q=z.strictObject({characterId:id}).parse(r.query);return wrap(()=>game.checks(actor(r),timeline(r),q.characterId));});
  app.get('/game/timelines/:id/preview',async r=>{const q=z.strictObject({characterId:id}).parse(r.query);return wrap(()=>game.preview(actor(r),timeline(r),q.characterId));});
  app.get('/game/timelines/:id/diagnostics',async r=>wrap(()=>game.diagnostics(actor(r),timeline(r))));

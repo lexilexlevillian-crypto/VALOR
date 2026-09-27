@@ -21,8 +21,15 @@ test('System 05 mode preference is revisioned, role-gated, audited, and persiste
   assert.equal(denied.statusCode,403);
   const overview=await f.app.inject({url:'/game/timelines/'+timeline.id+'/developer/overview',headers:{cookie:creator.cookie}});
   assert.equal(overview.statusCode,200);assert.ok(Array.isArray(overview.json().entities));
+  const revisionBeforePreview=(await new Game(f.store).access(f.creator,timeline.id)).t.revision;
+  const settingsPreview=await f.app.inject({method:'POST',url:'/game/timelines/'+timeline.id+'/developer/validate-settings',headers:{...creatorHeaders,'idempotency-key':key()},payload:{revision:revisionBeforePreview,settings:overview.json().settings}});
+  assert.equal(settingsPreview.statusCode,200);assert.equal(settingsPreview.json().persisted,false);assert.equal(settingsPreview.json().dryRun,true);
+  const simulationPreview=await f.app.inject({url:'/game/timelines/'+timeline.id+'/developer/simulation-preview?minutes=5',headers:{cookie:creator.cookie}});
+  assert.equal(simulationPreview.statusCode,200);assert.equal(simulationPreview.json().persisted,false);assert.equal(simulationPreview.json().minutes,5);
+  assert.equal((await new Game(f.store).access(f.creator,timeline.id)).t.revision,revisionBeforePreview,'Developer previews do not mutate the timeline');
   const hiddenForPlayer=await f.app.inject({url:'/game/timelines/'+timeline.id+'/developer/overview',headers:{cookie:player.cookie}});
   assert.equal(hiddenForPlayer.statusCode,403);
+  assert.equal((await f.app.inject({url:'/game/timelines/'+timeline.id+'/developer/simulation-preview?minutes=5',headers:{cookie:player.cookie}})).statusCode,403);
   const oldCreatorEndpoint=await f.app.inject({url:'/game/timelines/'+timeline.id+'/creator',headers:{cookie:player.cookie}});
   assert.equal(oldCreatorEndpoint.statusCode,403);
   const exited=await f.app.inject({method:'POST',url:'/me/mode',headers:{...creatorHeaders,'idempotency-key':key()},payload:{mode:'player',expectedRevision:1}});
@@ -52,6 +59,6 @@ test('System 05 access key grants audited Developer Mode only to the authenticat
 test('System 05 static shell exposes safe-area switch styling and does not cache game state',()=>{
  const css=readFileSync('public/style.css','utf8'),sw=readFileSync('public/sw.js','utf8'),app=readFileSync('public/app.js','utf8');
  assert.match(css,/env\(safe-area-inset-bottom\)/);assert.match(css,/mode-switch/);assert.match(css,/mode-dialog/);
- assert.match(app,/Developer Mode/);assert.match(app,/clearDeveloperState/);assert.match(app,/\/me\/developer-access/);
- assert.match(sw,/valor-shell-v6/);assert.match(sw,/theme\.js/);assert.doesNotMatch(sw,/game\/timelines|\/me\/mode|creator/);
+ assert.match(app,/Developer Mode/);assert.match(app,/clearDeveloperState/);assert.match(app,/\/me\/developer-access/);assert.match(app,/cache:'no-store'/);assert.match(app,/developer\/simulation-preview/);assert.match(app,/Developer controls are not loaded/);
+ assert.match(sw,/valor-shell-v8/);assert.match(sw,/theme\.js/);assert.doesNotMatch(sw,/game\/timelines|\/me\/mode|creator/);
 });

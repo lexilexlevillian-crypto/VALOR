@@ -9,7 +9,7 @@ import type {Action,Entity,State} from './model.ts';
 import {observerView,retrieve,observe,fact,visible} from './epistemics.ts';
 import {resolveAction} from './actions.ts';
 import type {CheckRecord} from './actions.ts';
-import type {Effect} from './simulation.ts';
+import {advance,type Effect} from './simulation.ts';
 import {skillNames,traitGroups} from './catalog.ts';
 import type {InStatement,InValue} from '@libsql/client';
 import {contextBrief} from './context.ts';
@@ -43,7 +43,8 @@ const startDefinitionSchema=z.strictObject({
   familiarity:z.number().min(-100).max(100).default(0),secret:z.boolean().default(true)
  })).max(100).default([]),
  reputation:z.array(z.strictObject({factionId:z.uuid(),score:z.number().min(-100).max(100)})).max(100).default([]),
- plotHookIds:z.array(z.uuid()).max(100).default([])
+ plotHookIds:z.array(z.uuid()).max(100).default([]),
+ requiresSystems:z.array(z.string().trim().min(1).max(80)).max(100).default([])
 });
 type StartDefinition=z.infer<typeof startDefinitionSchema>;
 const packageInputSchema=z.strictObject({
@@ -137,8 +138,39 @@ export class Game {
   const e=getEntity(s,characterId,'character'),d=data(e,'character');
   ensure(d.playable&&(d.controllerUserId===actor.id||privileged(role)&&d.controllerUserId===null),403,'character_not_controlled');return e;
  }
- async roster(actor:Actor,id:string){const {access}=(await this.access(actor,id));const s=(await this.load(id));return s.entities.filter(e=>e.kind==='character'&&!e.archived&&e.data.playable&&(e.data.controllerUserId===actor.id||privileged(access.role)&&!e.data.controllerUserId)).map(e=>({id:e.id,name:e.name,description:e.data.description,condition:e.data.condition}));}
+ async roster(actor:Actor,id:string){
+  const {t,access}=await this.access(actor,id),s=await this.load(id),developer=privileged(access.role)&&(await this.domain.userMode(actor)).mode==='developer';
+  const campaign=await this.store.get<{name:string}>('SELECT name FROM campaigns WHERE id=?',t.campaign_id);
+  const turns=await this.store.all<{character_id:string;last_played:string}>('SELECT character_id,MAX(created_at) last_played FROM story_turns WHERE timeline_id=? GROUP BY character_id',id);
+  const starts=await this.store.all<{character_id:string;last_played:string}>('SELECT character_id,MAX(created_at) last_played FROM game_events WHERE timeline_id=? AND character_id IS NOT NULL GROUP BY character_id',id);
+  const lastPlayed=new Map(starts.map(row=>[row.character_id,row.last_played]));for(const row of turns)lastPlayed.set(row.character_id,row.last_played);
+  const saveRows=await this.store.all<{name:string;revision:number;created_at:string}>('SELECT name,revision,created_at FROM saves WHERE timeline_id=? AND (?=1 OR created_by=?) ORDER BY rowid DESC LIMIT 100',id,developer?1:0,actor.id),latestSave=saveRows[0]??null;
+  return s.entities.filter(e=>e.kind==='character'&&!e.archived&&e.data.playable&&(e.data.controllerUserId===actor.id||developer&&!e.data.controllerUserId)).map(e=>{
+   const d=data(e,'character'),location=d.locationId?s.entities.find(x=>x.id===d.locationId&&x.kind==='location'&&!x.archived):null;
+   const permittedLocation=location&&visible(s,location,e.id)?{id:location.id,name:location.name}:null;
+   const portraitMediaId=d.mediaIds.find(mediaId=>{const media=s.entities.find(x=>x.id===mediaId&&x.kind==='media'&&!x.archived);return Boolean(media&&visible(s,media,e.id));})??null;
+   return {id:e.id,name:e.name,description:d.description,condition:d.condition,status:d.condition,campaign:{id:t.campaign_id,name:campaign?.name??'Campaign'},lastPlayed:lastPlayed.get(e.id)??null,location:permittedLocation,locationTime:permittedLocation?s.clock:null,portraitMediaId,timeline:{id:t.id,name:t.name,revision:t.revision,clock:s.clock,parentId:t.parent_id},saveSummary:{count:saveRows.length,latest:latestSave?{name:latestSave.name,revision:latestSave.revision,createdAt:latestSave.created_at}:null}};
+  });
+ }
+ private validateStartSystems(s:State,definition:StartDefinition){
+  const builtIn:Record<string,boolean>={needs:s.settings.needs,fuel:s.settings.fuel,romance:s.settings.romance,intimacy:s.settings.intimacy!=='off','reproductive-health':s.settings.reproductiveHealth,rules:s.settings.rules!==null,'npc-route-travel':s.settings.npcRouteTravel,tactics:s.settings.tactics!==null};
+  const disabled=definition.requiresSystems.filter(system=>s.settings.campaign?.enabledSystems[system]===false||(system in builtIn&&!builtIn[system]));
+  ensure(!disabled.length,400,'start_package_requires_disabled_system');
+ }
+ private startSummary(s:State,definition:StartDefinition){
+  const sources=[...new Set([...definition.grantEntityIds,...definition.plotHookIds])].map(id=>s.entities.find(e=>e.id===id&&!e.archived)).filter((e):e is Entity=>Boolean(e));
+  const character=definition.character.data,items=sources.filter(e=>e.kind==='item'),relations=sources.filter(e=>e.kind==='relationship');
+  const includes:string[]=[];
+  const add=(when:boolean,label:string)=>{if(when)includes.push(label);};
+  add(sources.some(e=>e.kind==='job'),'job');add(sources.some(e=>e.kind==='housing')||Object.prototype.hasOwnProperty.call(character,'homeId'),'home');
+  add(items.some(e=>e.kind==='item'&&data(e,'item').category==='phone'),'phone');add(items.some(e=>e.kind==='item'&&data(e,'item').contacts.length>0),'contacts');
+  add(definition.reputation.length>0,'reputation');add(Array.isArray(character.traits)&&character.traits.length>0,'traits');add(Boolean(character.skills&&typeof character.skills==='object'&&Object.keys(character.skills).length),'skills');
+  add(items.some(e=>e.kind==='item'&&data(e,'item').category==='clothing'),'clothing');add(Object.prototype.hasOwnProperty.call(character,'cash')||Object.prototype.hasOwnProperty.call(character,'bank'),'money');
+  add(sources.some(e=>e.kind==='vehicle'),'vehicle');add(sources.some(e=>e.kind==='quest'),'ongoing problem');add(definition.relationshipTemplates.length>0||relations.length>0,'relationship history');
+  return {characterName:definition.character.name,includes,grantCount:sources.length,relationshipCount:definition.relationshipTemplates.length+relations.length,reputationCount:definition.reputation.length,requiresSystems:definition.requiresSystems};
+ }
  private materializeStart(s:State,actor:Actor,definition:StartDefinition,enforceEmpty=true){
+  this.validateStartSystems(s,definition);
   if(enforceEmpty)ensure(!s.entities.some(e=>e.kind==='character'&&!e.archived&&e.data.playable),409,'timeline_already_started');
   const characterId=randomUUID();
   const rawData={...definition.character.data,description:definition.character.description,playable:true,controllerUserId:actor.id};
@@ -147,7 +179,7 @@ export class Game {
   const sources=[...new Set([...definition.grantEntityIds,...definition.plotHookIds])];
   for(const sourceId of sources){
    const source=getEntity(s,sourceId);
-   ensure(['item','vehicle','quest','housing','relationship'].includes(source.kind),400,'invalid_start_grant');
+   ensure(['item','vehicle','quest','housing','relationship','job'].includes(source.kind),400,'invalid_start_grant');
    const clone=structuredClone(source);
    clone.id=randomUUID();clone.revision=1;clone.archived=false;clone.visibility=source.kind==='relationship'?'owner':source.visibility;
    if(source.kind==='item'){const d=data(clone,'item');d.ownerId=characterId;d.locationId=null;d.containerId=null;d.equipped=false;d.provenance='start:'+characterId;clone.data=d as Entity['data'];}
@@ -155,6 +187,7 @@ export class Game {
    if(source.kind==='quest'){const d=data(clone,'quest');d.characterId=characterId;clone.data=d as Entity['data'];}
    if(source.kind==='housing'){const d=data(clone,'housing');d.tenantId=characterId;clone.data=d as Entity['data'];}
    if(source.kind==='relationship'){const d=data(clone,'relationship');d.fromId=characterId;clone.data=d as Entity['data'];}
+   if(source.kind==='job'){const d=data(clone,'job');d.employeeId=characterId;d.lastWorked=null;clone.data=d as Entity['data'];}
    s.entities.push(validateEntity(clone));
   }
   for(const relation of definition.relationshipTemplates){
@@ -178,8 +211,8 @@ export class Game {
   return {...row,definition:startDefinitionSchema.parse(JSON.parse(row.definition_json))};
  }
  async startPackages(actor:Actor,id:string){
-  const {t,access}=await this.access(actor,id);
-  const rows=await this.store.all<{id:string;slug:string;name:string;description:string;kind:string;visibility:string;status:string;definition_json:string;schema_version:number;revision:number;created_at:string;updated_at:string}>("SELECT id,slug,name,description,kind,visibility,status,definition_json,schema_version,revision,created_at,updated_at FROM campaign_start_packages WHERE campaign_id=? AND archived_at IS NULL AND (status='published' AND visibility='campaign' OR ?=1) ORDER BY name,id",t.campaign_id,privileged(access.role)?1:0);  return rows.map(row=>({id:row.id,slug:row.slug,name:row.name,description:row.description,kind:row.kind,visibility:row.visibility,status:row.status,schemaVersion:row.schema_version,revision:row.revision,createdAt:row.created_at,updatedAt:row.updated_at,...(privileged(access.role)?{definition:startDefinitionSchema.parse(JSON.parse(row.definition_json))}:{})}));
+  const {t,access}=await this.access(actor,id),developer=privileged(access.role)&&(await this.domain.userMode(actor)).mode==='developer';
+  const state=await this.load(id),rows=await this.store.all<{id:string;slug:string;name:string;description:string;kind:string;visibility:string;status:string;definition_json:string;schema_version:number;revision:number;created_at:string;updated_at:string}>("SELECT id,slug,name,description,kind,visibility,status,definition_json,schema_version,revision,created_at,updated_at FROM campaign_start_packages WHERE campaign_id=? AND archived_at IS NULL AND (status='published' AND visibility='campaign' OR ?=1) ORDER BY name,id",t.campaign_id,developer?1:0);  return rows.map(row=>{const definition=startDefinitionSchema.parse(JSON.parse(row.definition_json));return {id:row.id,slug:row.slug,name:row.name,description:row.description,kind:row.kind,visibility:row.visibility,status:row.status,schemaVersion:row.schema_version,revision:row.revision,createdAt:row.created_at,updatedAt:row.updated_at,summary:this.startSummary(state,definition),...(developer?{definition}:{})};});
  }
  async createStartPackage(actor:Actor,id:string,input:unknown,key:string){
   keySchema.parse(key);
@@ -194,6 +227,10 @@ export class Game {
    await this.audit(actor,t.campaign_id,'start.package.created',packageId,{reason:'start.package.created',after:{name:parsed.name,slug:parsed.slug,kind:parsed.kind,status:parsed.status}});
    return {id:packageId,slug:parsed.slug,revision:1};
   });
+ }
+ async duplicateStartPackage(actor:Actor,id:string,packageId:string,input:{name:string;slug:string;visibility?:'creator'|'campaign';status?:'draft'|'published'},key:string){
+  const {t}=await this.access(actor,id,true),source=await this.packageFor(actor,t,packageId);
+  return this.createStartPackage(actor,id,{name:input.name,slug:input.slug,description:source.description,kind:'template',visibility:input.visibility??'creator',status:input.status??'draft',definition:source.definition},key);
  }
  async start(actor:Actor,id:string,input:{revision:number;packageId?:string;definition?:unknown},key:string){
   const parsed=z.strictObject({revision:z.number().int().positive(),packageId:z.uuid().optional(),definition:z.unknown().optional()}).refine(v=>Boolean(v.packageId)!==Boolean(v.definition),'one_start_source_required').parse(input);
@@ -273,7 +310,28 @@ export class Game {
    return response;
   }));
  }
- async edit(actor:Actor,id:string,input:{revision:number;entity:unknown},key:string){
+ async developerValidate(actor:Actor,id:string,input:{revision:number;entities:unknown[]}){
+  const {t}=await this.access(actor,id,true);ensure(t.revision===input.revision,409,'revision_conflict');
+  const entities=z.array(entitySchema).min(1).max(100).parse(input.entities).map(validateEntity);ensure(new Set(entities.map(entity=>entity.id)).size===entities.length,400,'duplicate_entity_id');
+  const state=await this.load(id),staged=structuredClone(state);
+  for(const entity of entities){const index=staged.entities.findIndex(row=>row.id===entity.id);if(index<0)staged.entities.push(entity);else staged.entities[index]=entity;}
+  validateState(staged);
+  for(const entity of entities){const old=state.entities.find(row=>row.id===entity.id),candidate={...staged,entities:staged.entities.filter(row=>row.id!==entity.id)};if(old)candidate.entities.push(old);await this.applyEntity(id,candidate,entity);}
+  const creates=entities.filter(entity=>!state.entities.some(row=>row.id===entity.id)).length,archives=entities.filter(entity=>entity.archived&&!state.entities.find(row=>row.id===entity.id)?.archived).length;
+  return {valid:true,dryRun:true,persisted:false,revision:t.revision,count:entities.length,creates,updates:entities.length-creates,archives,kinds:Object.fromEntries([...new Set(entities.map(entity=>entity.kind))].map(kind=>[kind,entities.filter(entity=>entity.kind===kind).length])),warnings:archives?['Archived records disappear from normal views. Active references are rejected.']:[]};
+ }
+ async developerValidateSettings(actor:Actor,id:string,input:{revision:number;settings:unknown}){
+  const {t}=await this.access(actor,id,true);ensure(t.revision===input.revision,409,'revision_conflict');const parsed=settingsSchema.parse(input.settings);new Intl.DateTimeFormat('en-US',{timeZone:parsed.timezone});const current=(await this.load(id)).settings;
+  const changedKeys=Object.keys(parsed).filter(key=>checksum((current as unknown as Record<string,unknown>)[key])!==checksum((parsed as unknown as Record<string,unknown>)[key]));
+  return {valid:true,dryRun:true,persisted:false,revision:t.revision,changedKeys,warnings:parsed.rules?[]:['Resolution rules remain unconfigured.']};
+ } async developerSimulationPreview(actor:Actor,id:string,minutes:number){
+  const {t}=await this.access(actor,id,true),state=await this.load(id),before=new Map(state.entities.map(entity=>[entity.id,checksum(entity)])),from=state.clock,effects:Effect[]=[];
+  const playerId=state.entities.find(entity=>entity.kind==='character'&&entity.data.playable&&!entity.archived)?.id??state.entities.find(entity=>entity.kind==='character'&&!entity.archived)?.id??actor.id;
+  advance(state,minutes,'developer-preview-'+randomUUID(),effects,playerId);validateState(state);
+  const changed=state.entities.filter(entity=>before.has(entity.id)&&before.get(entity.id)!==checksum(entity)).map(entity=>({id:entity.id,name:entity.name,kind:entity.kind})),created=state.entities.filter(entity=>!before.has(entity.id)).map(entity=>({id:entity.id,name:entity.name,kind:entity.kind}));
+  const effectTypes=Object.fromEntries([...new Set(effects.map(effect=>effect.type))].map(type=>[type,effects.filter(effect=>effect.type===type).length]));
+  return {valid:true,dryRun:true,persisted:false,revision:t.revision,minutes,from,to:state.clock,summary:{changedEntities:changed.length,createdEntities:created.length,effects:effects.length,effectTypes},changed,created,effects:effects.slice(0,100)};
+ } async edit(actor:Actor,id:string,input:{revision:number;entity:unknown},key:string){
   const entity=validateEntity(input.entity);
   return (await this.mutate(actor,id,input.revision,key,input,'creator.entity',true,async s=>{
    await this.applyEntity(id,s,entity);
@@ -382,7 +440,7 @@ export class Game {
   (await this.store.run('INSERT INTO saves VALUES (?,?,?,?,?,?,?,?,?)',saveId,id,name,revision,JSON.stringify(stored),checksum(snapshot),actor.id,now(),automatic?1:0));return saveId;
  }
  async save(actor:Actor,id:string,name:string){return this.store.transaction(async()=>{const {t,access}=await this.access(actor,id);ensure(access.role!=='observer',403,'forbidden');const state=await this.load(id),count=await this.store.get<{n:number}>('SELECT count(*) n FROM saves WHERE timeline_id=? AND automatic=0',id);ensure((count?.n??0)<(state.settings.campaign?.saveBehavior.maxManualSaves??100),409,'manual_save_limit');const saveId=await this.saveInternal(actor,id,name,state,t.revision);await this.audit(actor,t.campaign_id,'save.created',saveId);return {id:saveId};});}
- async saves(actor:Actor,id:string){const {access}=(await this.access(actor,id));return (await this.store.all('SELECT id,name,revision,created_at,automatic FROM saves WHERE timeline_id=? AND (?=1 OR created_by=?) ORDER BY rowid DESC LIMIT 100',id,privileged(access.role)?1:0,actor.id));}
+ async saves(actor:Actor,id:string){const {access}=await this.access(actor,id),developer=privileged(access.role)&&(await this.domain.userMode(actor)).mode==='developer';return (await this.store.all('SELECT id,name,revision,created_at,automatic FROM saves WHERE timeline_id=? AND (?=1 OR created_by=?) ORDER BY rowid DESC LIMIT 100',id,developer?1:0,actor.id));}
  async branch(actor:Actor,id:string,saveId:string,name:string){
   return (await this.store.transaction(async ()=>{
    const {t,access}=(await this.access(actor,id));ensure(access.role!=='observer',403,'forbidden');

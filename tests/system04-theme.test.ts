@@ -15,14 +15,21 @@ test('System 04 theme catalog exposes every required family with readable token 
   const match=source.match(new RegExp("'"+id+"':\\{[^\\n]+"));
   assert.ok(match, id);
   for(const token of ['base','surface','raised','text','muted','border','glow','selected','success','warning','danger','focus','chart'])assert.match(match![0],new RegExp(token+':'));
-  const text=match![0].match(/text:'(#[0-9a-f]+)'/)![1]!,surface=match![0].match(/surface:'(#[0-9a-f]+)'/)![1]!,focus=match![0].match(/focus:'(#[0-9a-f]+)'/)![1]!;
+  const text=match![0].match(/text:'(#[0-9a-f]+)'/)![1]!,surface=match![0].match(/surface:'(#[0-9a-f]+)'/)![1]!,focus=match![0].match(/focus:'(#[0-9a-f]+)'/)![1]!,border=match![0].match(/border:'(#[0-9a-f]+)'/)![1]!;
   assert.ok(contrast(text,surface)>=4.5,id+' text/surface');
   assert.ok(contrast(focus,surface)>=3,id+' focus/surface');
+  assert.ok(contrast(border,surface)>=3,id+' border/surface');
  }
  const css=readFileSync('public/style.css','utf8');
  assert.match(css,/min-height:44px/);
  assert.match(css,/prefers-reduced-motion/);
  assert.match(css,/var\(--focus\)/);
+ assert.match(css,/--base:var\(--theme-base\)/);
+ assert.match(css,/\[data-accessibility=emergency\]/);
+ const app=readFileSync('public/app.js','utf8');
+ assert.match(app,/OVERVIEW/);assert.match(app,/STATS/);assert.match(app,/BACKGROUND/);
+ assert.match(app,/Emergency high visibility/);
+ assert.match(source,/applyAccessibilityMode/);
 });
 
 test('System 04 user theme persistence and Creator campaign palette policy are authorized and revisioned',async()=>{
