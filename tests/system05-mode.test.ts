@@ -53,5 +53,5 @@ test('System 05 static shell exposes safe-area switch styling and does not cache
  const css=readFileSync('public/style.css','utf8'),sw=readFileSync('public/sw.js','utf8'),app=readFileSync('public/app.js','utf8');
  assert.match(css,/env\(safe-area-inset-bottom\)/);assert.match(css,/mode-switch/);assert.match(css,/mode-dialog/);
  assert.match(app,/Developer Mode/);assert.match(app,/clearDeveloperState/);assert.match(app,/\/me\/developer-access/);
- assert.match(sw,/valor-shell-v4/);assert.match(sw,/theme\.js/);assert.doesNotMatch(sw,/game\/timelines|\/me\/mode|creator/);
+ assert.match(sw,/valor-shell-v5/);assert.match(sw,/theme\.js/);assert.doesNotMatch(sw,/game\/timelines|\/me\/mode|creator/);
 });
