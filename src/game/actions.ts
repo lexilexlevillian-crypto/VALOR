@@ -158,6 +158,17 @@ export function resolveAction(s:State,actorId:string,action:Action,eventId:strin
   assert(m.category==='medicine'&&m.quantity>0,'medicine_required');m.quantity--;w.treated=true;w.bleeding=0;injury.data=w as Entity['data'];medicine.data=m as Entity['data'];
   say('Treatment applied; recovery requires time.');minutes=rule.treatmentMinutes;break;
  }
+ case 'add-contact':{
+  const phone=owned(action.phoneId),p=data(phone,'item'),target=getEntity(s,action.contactId,'character');
+  assert(p.category==='phone'&&!p.locked,'phone_unavailable');
+  assert(!p.contacts.some(contact=>contact.characterId===target.id),'contact_already_exists');
+  p.contacts.push({characterId:target.id,label:action.label});phone.data=p as Entity['data'];
+  say('Contact added: '+action.label+'.');break;
+ }
+ case 'conversation':{
+  const target=getEntity(s,action.targetId,'character');nearby(target);assert(target.id!==actorId,'invalid_target');
+  say(action.text);minutes=1;break;
+ }
  case 'message':{
   const phone=owned(action.phoneId),p=data(phone,'item'),target=getEntity(s,action.toId,'character');
   assert(p.category==='phone'&&!p.locked&&p.battery>0,'phone_unavailable');assert(p.contacts.some(c=>c.characterId===target.id),'contact_unknown');

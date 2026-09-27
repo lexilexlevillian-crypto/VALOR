@@ -4,6 +4,7 @@ export type Config = {
   production:boolean; host:string; port:number; origin:string; databasePath:string;
   tursoDatabaseUrl?:string; tursoAuthToken?:string;
   rateLimitSecret:string; sessionHours:number; requestLimit:number; loginLimit:number;
+  mutationLimit:number; aiCallLimit:number; exportLimit:number; exportBytes:number; importBytes:number;
 };
 export function config(env:NodeJS.ProcessEnv=process.env):Config {
   const production=env.NODE_ENV==='production';
@@ -22,7 +23,18 @@ export function config(env:NodeJS.ProcessEnv=process.env):Config {
     try{const remote=new URL(tursoDatabaseUrl);valid=['libsql:','https:'].includes(remote.protocol)&&!!remote.hostname&&!remote.username&&!remote.password&&!remote.search&&!remote.hash&&['','/'].includes(remote.pathname);}catch{}
     if(!valid)throw new Error('TURSO_DATABASE_URL must be a secure libsql:// or https:// database URL without credentials, query, or path');
   }
+  const gatewayUrl=env.AI_GATEWAY_URL?.trim(),gatewaySecret=env.AI_GATEWAY_SECRET?.trim();
+  if(!!gatewayUrl!==!!gatewaySecret)throw new Error('Set both AI_GATEWAY_URL and AI_GATEWAY_SECRET');
+  if(gatewaySecret&&gatewaySecret.length<32)throw new Error('AI_GATEWAY_SECRET must be at least 32 characters');
+  const bounded=(value:string|undefined,fallback:number,min:number,max:number)=>z.coerce.number().int().min(min).max(max).parse(value??fallback);
   return {production,origin,databasePath,tursoDatabaseUrl,tursoAuthToken,rateLimitSecret,host:env.HOST??(production?'0.0.0.0':'127.0.0.1'),
     port:z.coerce.number().int().min(0).max(65535).parse(env.PORT??3000),
-    sessionHours:12,requestLimit:120,loginLimit:10};
+    sessionHours:bounded(env.SESSION_HOURS,12,1,168),
+    requestLimit:bounded(env.REQUEST_LIMIT,120,10,10000),
+    loginLimit:bounded(env.LOGIN_LIMIT,10,1,100),
+    mutationLimit:bounded(env.MUTATION_LIMIT,60,1,1000),
+    aiCallLimit:bounded(env.AI_CALL_LIMIT,10,1,100),
+    exportLimit:bounded(env.EXPORT_LIMIT,10,1,100),
+    exportBytes:bounded(env.EXPORT_MAX_BYTES,8*1024*1024,1024,64*1024*1024),
+    importBytes:bounded(env.IMPORT_MAX_BYTES,8*1024*1024,1024,64*1024*1024)};
 }

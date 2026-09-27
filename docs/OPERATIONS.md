@@ -8,7 +8,7 @@ Local default: data/valor.sqlite, excluded from Git. Production uses external Tu
 
 No destructive down-migration is shipped: losing user history is unacceptable. To roll back code, first prove it supports the existing schema; otherwise stop the service and restore a verified pre-migration backup into a new database path.
 
-006_snapshot_chunks adds immutable compressed blocks reused by new saves; 007_intent_usage adds shared-budget AI proposal accounting. Existing inline saves are not changed. New save manifests require a build that understands storage version 2. Do not deploy older code and assume it can restore those manifests. Full backups include snapshot_chunks; game exports remain self-contained, including bounded image assets. No save deletion or garbage collection runs automatically.
+006_snapshot_chunks adds immutable compressed blocks reused by new saves; 007_intent_usage adds shared-budget AI proposal accounting. Existing inline saves are not changed. New save manifests require a build that understands storage version 2. Do not deploy older code and assume it can restore those manifests. Full backups include snapshot_chunks; game exports remain self-contained, including bounded image assets. No save deletion or garbage collection runs automatically. Migration 018 adds optional audit notes and immutable deletion reports; it is additive and does not hard-delete existing data.
 
 ## Backups and restore
 
@@ -37,7 +37,7 @@ Production requires NODE_ENV=production, an HTTPS APP_ORIGIN with no path (or Re
 
 The local API binds to 127.0.0.1. No TLS termination is implemented in Node; production must sit behind trusted HTTPS hosting. Forwarded IP headers are deliberately ignored. Behind a shared reverse proxy, per-IP rate limits may apply to all users of that proxy until its exact trust policy is configured and tested. Do not enable blanket proxy trust.
 
-The session credential is the random cookie; there is no hardcoded JWT signing secret. Rotate RATE_LIMIT_SECRET through the secret store to rotate hashed rate-bucket identifiers. This resets the effective rate buckets; session hashes remain valid. Provision account passwords through environment variables available only to the operator process, then clear them. No email/reset provider is assumed.
+The session credential is the random cookie; there is no hardcoded JWT signing secret. Rotate RATE_LIMIT_SECRET through the secret store to rotate hashed rate-bucket identifiers. This resets the effective rate buckets; session hashes remain valid. `REQUEST_LIMIT`, `LOGIN_LIMIT`, `MUTATION_LIMIT`, `AI_CALL_LIMIT`, and `EXPORT_LIMIT` control independent one-minute buckets. `IMPORT_MAX_BYTES` and `EXPORT_MAX_BYTES` default to 8 MiB and are bounded at startup. When using a gateway, `AI_GATEWAY_URL` and an `AI_GATEWAY_SECRET` of at least 32 characters must be supplied together. Provision account passwords through environment variables available only to the operator process, then clear them. No email/reset provider is assumed.
 
 Node uses restrictive umask for server/operator processes. Unix database files and backups are chmod 0600 and newly created directories 0700; Windows ACLs are an operator responsibility. Run as a dedicated non-root account with access only to the required data/backup directories.
 
@@ -50,6 +50,8 @@ The supplied service is https://valor-uwgb.onrender.com, ID srv-das0ah59fdbs73bb
 ## Logs and failure handling
 
 Request logs include generated request ID, method, route template and status. Never log raw requests, full URLs, command payloads, query strings, narration context or hidden fields. Authentication and privileged changes also have database audit records. A 500 gives the user only a correlation ID and generic error. Backups and migrations fail rather than pretending success.
+
+Archive remains the default content-removal policy. Record hard deletion is restricted to the owning Creator, an archived target, a fresh immutable dependency report with no blockers, and exact confirmation. It retains the audit/event tombstone and deletion report, so it is not a privacy-erasure workflow. Define legal holds, retention, account erasure, and backup purge procedures before treating permanent deletion as regulatory erasure.
 
 SIGINT/SIGTERM stop accepting traffic, close the HTTP server, then close the libSQL client. Uncommitted transactions are rolled back; remote transaction expiry also fails closed. Outbox delivery retries until successful; consumers must deduplicate event IDs. There is no public event subscription endpoint.
 

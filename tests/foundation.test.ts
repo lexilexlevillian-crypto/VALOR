@@ -28,7 +28,7 @@ test('fresh migrations, checksum enforcement, forward migration and real process
     assert.equal(read.sections[0]!.id,section.sectionId);
     assert.equal(read.sections[0]!.fields[0]!.id,field.fieldId);
     assert.equal(read.sections[0]!.fields[0]!.value,'Authored durable value');
-    assert.equal((await store.get<{n:number}>('SELECT count(*) AS n FROM schema_migrations'))!.n,16);
+    assert.equal((await store.get<{n:number}>('SELECT count(*) AS n FROM schema_migrations'))!.n,18);
     store.close();
     const child=spawnSync(process.execPath,['--input-type=module','-e',
       "import {Store} from './src/db.ts'; const s=new Store(process.env.TEST_DATABASE); await s.migrate(); console.log((await s.get('SELECT value_json FROM field_values')).value_json); s.close();"],
@@ -38,6 +38,24 @@ test('fresh migrations, checksum enforcement, forward migration and real process
     (await store.run("UPDATE schema_migrations SET checksum='tampered' WHERE version=1"));
     (await assert.rejects(async ()=>(await store.migrate()),/checksum/));store.close();
   } finally {await f.close();}
+});
+
+test('operator backup preserves the current schema before pending migrations run',async()=>{
+  const f=await fixture();
+  const source=join(f.dir,'pre-migration.sqlite'),destination=join(f.dir,'pre-migration-backup.sqlite');
+  let store=new Store(source);
+  try {
+    await store.migrate(17);store.close();
+    const child=spawnSync(process.execPath,['src/cli.ts','backup',destination],{
+      cwd:process.cwd(),encoding:'utf8',env:{...process.env,DATABASE_PATH:source,TURSO_DATABASE_URL:'',TURSO_AUTH_TOKEN:'',AI_GATEWAY_URL:'',AI_GATEWAY_SECRET:''}
+    });
+    assert.equal(child.status,0,child.stderr||child.stdout);
+    store=new Store(source);
+    assert.equal((await store.get<{n:number}>('SELECT max(version) n FROM schema_migrations'))!.n,17);store.close();
+    store=new Store(destination);
+    assert.equal((await store.get<{n:number}>('SELECT max(version) n FROM schema_migrations'))!.n,17);
+    assert.equal((await store.get<{integrity_check:string}>('PRAGMA integrity_check'))!.integrity_check,'ok');
+  } finally {store.close();await f.close();}
 });
 
 test('tenant isolation, global admin least privilege, role restrictions and field/ancestor visibility',async()=>{

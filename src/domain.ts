@@ -4,14 +4,14 @@ import { ensure, eventSchema, commandSchema } from './contracts.ts';
 import type { Actor, Command, DomainEvent, Scope } from './contracts.ts';
 import {campaignConfigOverridesSchema,defaultCampaignConfig,parseStoredCampaignConfig,resolveCampaignConfig} from './campaign-config.ts';
 import {defaultThemeId,themeIdSchema,themeIds} from './theme.ts';
+import {auditJson} from './security.ts';
 
 type RecordRow = {id:string; world_id:string|null; campaign_id:string|null; owner_id:string; kind:string; name:string; visibility:string; revision:number; archived_at:string|null};
 type SectionRow = {id:string; record_id:string; parent_id:string|null; name:string; position:number; visibility:string; archived_at:string|null};
 type FieldRow = {id:string; record_id:string; section_id:string; name:string; position:number; visibility:string; value_type:string; archived_at:string|null};
 type ScopeAccess = {role:string; owner_id:string; revision:number};
 type Receipt = {request_hash:string; response_json:string};
-type AuditContext = {reason?:string; before?:unknown; after?:unknown};
-const auditJson=(value:unknown)=>value===undefined||value===null?null:JSON.stringify(value);
+type AuditContext = {reason?:string;note?:string;before?:unknown;after?:unknown};
 export type CommandResult = {id:string; revision:number; eventId:string; sectionId?:string; fieldId?:string};
 const clock = () => new Date().toISOString();
 function canonical(value:unknown):string {
@@ -60,7 +60,9 @@ export class Domain {
     const world=scope.type==='world'?scope.id:null, campaign=scope.type==='campaign'?scope.id:null;
     (await this.store.run('INSERT INTO domain_events VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',event.id,1,world,campaign,actor.id,result.id,result.revision,type,JSON.stringify(event.payload),event.seed,event.rngVersion,now));
     const auditContext=(await this.store.get<{name:string}>("SELECT name FROM pragma_table_info('audit_log') WHERE name='request_id'"));
-    if(auditContext) (await this.store.run('INSERT INTO audit_log(id,actor_id,world_id,campaign_id,action,target_id,event_id,created_at,request_id,reason,before_json,after_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',randomUUID(),actor.id,world,campaign,type,result.id,event.id,now,actor.requestId??null,audit.reason??null,auditJson(audit.before),auditJson(audit.after)));
+    const auditNote=(await this.store.get<{name:string}>("SELECT name FROM pragma_table_info('audit_log') WHERE name='note'"));
+    if(auditContext&&auditNote) (await this.store.run('INSERT INTO audit_log(id,actor_id,world_id,campaign_id,action,target_id,event_id,created_at,request_id,reason,before_json,after_json,note) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',randomUUID(),actor.id,world,campaign,type,result.id,event.id,now,actor.requestId??null,audit.reason??null,auditJson(audit.before),auditJson(audit.after),audit.note??null));
+    else if(auditContext) (await this.store.run('INSERT INTO audit_log(id,actor_id,world_id,campaign_id,action,target_id,event_id,created_at,request_id,reason,before_json,after_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',randomUUID(),actor.id,world,campaign,type,result.id,event.id,now,actor.requestId??null,audit.reason??null,auditJson(audit.before),auditJson(audit.after)));
     else (await this.store.run('INSERT INTO audit_log(id,actor_id,world_id,campaign_id,action,target_id,event_id,created_at) VALUES (?,?,?,?,?,?,?,?)',randomUUID(),actor.id,world,campaign,type,result.id,event.id,now));
     (await this.store.run('INSERT INTO outbox(event_id,created_at) VALUES (?,?)',event.id,now));
     const response={...result,eventId:event.id};
@@ -286,7 +288,7 @@ export class Domain {
       grants:(await this.store.all('SELECT * FROM visibility_grants WHERE record_id=? ORDER BY user_id',recordId))
     };
   }
-  async execute(actor:Actor,scope:Scope,raw:Command,key:string) {
+  async execute(actor:Actor,scope:Scope,raw:Command,key:string,auditMeta:{reason?:string;note?:string}={}) {
     const command=commandSchema.parse(raw);
     return (await this.store.transaction(async ()=>{
       (await this.access(actor,scope,true));
@@ -307,7 +309,8 @@ export class Domain {
         (await this.store.run('INSERT INTO records(id,world_id,campaign_id,source_record_id,source_revision,owner_id,kind,name,visibility,created_at,updated_at,created_by,updated_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
           id,scope.type==='world'?scope.id:null,scope.type==='campaign'?scope.id:null,source?.id??null,source?.revision??null,actor.id,kind,name,command.visibility,now,now,actor.id,actor.id));
         if(source) (await this.copyStructure(source.id,id,actor,now));
-        return (await this.finish(scope,actor,key,command,{id,revision:1},command.type,(await this.snapshot(id))));
+        const after=await this.snapshot(id);
+        return (await this.finish(scope,actor,key,command,{id,revision:1},command.type,after,scope.id,{after,reason:auditMeta.reason??command.type,note:auditMeta.note}));
       }
       const record=(await this.record(scope,command.recordId));
       ensure(record.revision===command.expectedRevision,409,'revision_conflict');
@@ -354,7 +357,7 @@ export class Domain {
       }
       (await this.store.run('UPDATE records SET revision=revision+1,updated_at=?,updated_by=? WHERE id=?',now,actor.id,record.id));
       const after=await this.snapshot(record.id);
-      return (await this.finish(scope,actor,key,command,result,command.type,after,scope.id,{before,after,reason:command.type}));
+      return (await this.finish(scope,actor,key,command,result,command.type,after,scope.id,{before,after,reason:auditMeta.reason??command.type,note:auditMeta.note}));
     }));
   }
   private async copyStructure(sourceId:string,targetId:string,actor:Actor,now:string) {
@@ -380,6 +383,68 @@ export class Domain {
       const value=(await this.store.get<{value_json:string}>('SELECT value_json FROM field_values WHERE field_id=?',field.id));
       if(value)(await this.store.run('INSERT INTO field_values VALUES (?,?,1,?,?)',id,value.value_json,now,actor.id));
     }
+  }
+  private async recordDeletionDependencies(scope:Scope,recordId:string){
+    const record=await this.record(scope,recordId,true);
+    const count=async(sql:string,...args:string[])=>(await this.store.get<{n:number}>(sql,...args))!.n;
+    const owned={
+      sections:await count('SELECT count(*) n FROM sections WHERE record_id=?',recordId),
+      fields:await count('SELECT count(*) n FROM fields WHERE record_id=?',recordId),
+      values:await count('SELECT count(*) n FROM field_values WHERE field_id IN (SELECT id FROM fields WHERE record_id=?)',recordId),
+      grants:await count('SELECT count(*) n FROM visibility_grants WHERE record_id=?',recordId)
+    };
+    const blockers={
+      sourceInstances:await count('SELECT count(*) n FROM records WHERE source_record_id=?',recordId),
+      canonRecords:await count('SELECT count(*) n FROM canon_records WHERE record_id=?',recordId),
+      canonLinks:await count('SELECT count(*) n FROM canon_record_links WHERE source_record_id=? OR target_record_id=?',recordId,recordId),
+      canonSnapshots:await count('SELECT count(*) n FROM canon_revision_records WHERE record_id=?',recordId)
+    };
+    const retainedHistory={
+      events:await count('SELECT count(*) n FROM domain_events WHERE aggregate_id=?',recordId),
+      audits:await count('SELECT count(*) n FROM audit_log WHERE target_id=?',recordId)
+    };
+    return {record:{id:record.id,name:record.name,revision:record.revision,archivedAt:record.archived_at},owned,blockers,retainedHistory,
+      hardDeleteAllowed:Boolean(record.archived_at)&&Object.values(blockers).every(value=>value===0)};
+  }
+  private deletionDependencyHash(dependencies:Awaited<ReturnType<Domain['recordDeletionDependencies']>>){
+    return digest({record:dependencies.record,owned:dependencies.owned,blockers:dependencies.blockers,hardDeleteAllowed:dependencies.hardDeleteAllowed});
+  }
+  async deletionReport(actor:Actor,scope:Scope,recordId:string,note?:string){
+    return this.store.transaction(async()=>{
+      const access=await this.access(actor,scope,true);ensure(access.owner_id===actor.id,403,'owner_required');
+      const dependencies=await this.recordDeletionDependencies(scope,recordId),id=randomUUID(),createdAt=clock(),expiresAt=new Date(Date.now()+10*60000).toISOString();
+      await this.store.run('INSERT INTO deletion_reports VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',id,1,scope.type,scope.id,'record',recordId,actor.id,JSON.stringify(dependencies),this.deletionDependencyHash(dependencies),dependencies.hardDeleteAllowed?1:0,createdAt,expiresAt,null);
+      await this.store.run('INSERT INTO audit_log(id,actor_id,world_id,campaign_id,action,target_id,created_at,request_id,reason,before_json,after_json,note) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
+       randomUUID(),actor.id,scope.type==='world'?scope.id:null,scope.type==='campaign'?scope.id:null,'record.deletion.reported',recordId,createdAt,actor.requestId??null,'dependency-review',null,auditJson(dependencies),note??null);
+      return {id,schemaVersion:1,targetId:recordId,expiresAt,...dependencies,confirmation:'HARD_DELETE '+recordId};
+    },'write');
+  }
+  async hardDeleteRecord(actor:Actor,scope:Scope,recordId:string,reportId:string,confirmation:string,note?:string){
+    return this.store.transaction(async()=>{
+      const access=await this.access(actor,scope,true);ensure(access.owner_id===actor.id,403,'owner_required');
+      const report=await this.store.get<{dependency_hash:string;hard_delete_allowed:number;expires_at:string;consumed_at:string|null;created_by:string}>(
+       'SELECT dependency_hash,hard_delete_allowed,expires_at,consumed_at,created_by FROM deletion_reports WHERE id=? AND scope_type=? AND scope_id=? AND target_type=? AND target_id=?',reportId,scope.type,scope.id,'record',recordId);
+      ensure(report&&report.created_by===actor.id,404,'deletion_report_unavailable');
+      ensure(!report.consumed_at&&Date.parse(report.expires_at)>Date.now(),409,'deletion_report_expired');
+      ensure(confirmation==='HARD_DELETE '+recordId,400,'hard_delete_confirmation_required');
+      const dependencies=await this.recordDeletionDependencies(scope,recordId);
+      ensure(report.dependency_hash===this.deletionDependencyHash(dependencies),409,'deletion_dependencies_changed');
+      ensure(report.hard_delete_allowed===1&&dependencies.hardDeleteAllowed,409,'hard_delete_blocked');
+      const ids=await this.store.all<{id:string}>('SELECT id FROM sections WHERE record_id=? UNION ALL SELECT id FROM fields WHERE record_id=?',recordId,recordId);
+      const revision=dependencies.record.revision+1,at=clock(),eventId=randomUUID(),seed=randomBytes(32).toString('hex');
+      await this.store.run('INSERT INTO domain_events VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',eventId,1,scope.type==='world'?scope.id:null,scope.type==='campaign'?scope.id:null,actor.id,recordId,revision,'record.hard_deleted',JSON.stringify({reportId,retainedHistory:dependencies.retainedHistory}),seed,'hmac-sha256-v1',at);
+      await this.store.run('INSERT INTO outbox(event_id,created_at) VALUES (?,?)',eventId,at);
+      await this.store.run('DELETE FROM visibility_grants WHERE record_id=?',recordId);
+      await this.store.run('DELETE FROM field_values WHERE field_id IN (SELECT id FROM fields WHERE record_id=?)',recordId);
+      await this.store.run('DELETE FROM fields WHERE record_id=?',recordId);
+      await this.store.run('DELETE FROM sections WHERE record_id=?',recordId);
+      await this.store.run('DELETE FROM records WHERE id=?',recordId);
+      for(const artifactId of [recordId,...ids.map(row=>row.id)])await this.store.run('DELETE FROM artifact_schema_versions WHERE artifact_id=? AND scope_type=? AND scope_id=?',artifactId,scope.type,scope.id);
+      await this.store.run('UPDATE deletion_reports SET consumed_at=? WHERE id=?',at,reportId);
+      await this.store.run('INSERT INTO audit_log(id,actor_id,world_id,campaign_id,action,target_id,event_id,created_at,request_id,reason,before_json,after_json,note) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
+       randomUUID(),actor.id,scope.type==='world'?scope.id:null,scope.type==='campaign'?scope.id:null,'record.hard_deleted',recordId,eventId,at,actor.requestId??null,'confirmed-hard-delete',auditJson(dependencies),auditJson({deleted:true,reportId}),note??null);
+      return {id:recordId,deleted:true,eventId,reportId};
+    },'write');
   }
   async read(actor:Actor,scope:Scope,id:string) {
     const access=(await this.access(actor,scope)), record=(await this.record(scope,id));
@@ -415,7 +480,7 @@ export class Domain {
   }
   async audits(actor:Actor,scope:Scope,after='') {
     (await this.access(actor,scope,true));
-    return (await this.store.all('SELECT id,actor_id,action,target_id,event_id,created_at,request_id,reason,before_json,after_json FROM audit_log WHERE '+column(scope)+'=? AND rowid>COALESCE((SELECT rowid FROM audit_log WHERE id=? AND '+column(scope)+'=?),0) ORDER BY rowid LIMIT 100',scope.id,after,scope.id));
+    return (await this.store.all('SELECT id,actor_id,action,target_id,event_id,created_at,request_id,reason,note,before_json,after_json FROM audit_log WHERE '+column(scope)+'=? AND rowid>COALESCE((SELECT rowid FROM audit_log WHERE id=? AND '+column(scope)+'=?),0) ORDER BY rowid LIMIT 100',scope.id,after,scope.id));
   }
 }
 

@@ -23,13 +23,17 @@ Every authenticated mutation requires the cookie, matching Origin, and X-CSRF-To
 - POST /campaigns/:campaignId/members: {userId,role,expectedRevision}. Campaign owner only. role is admin/creator/player/observer or null to revoke. expectedRevision is the campaign revision.
 - GET /scopes/:type/:scopeId/records: permitted record projections. type is world or campaign.
 - GET /scopes/:type/:scopeId/records/:recordId: one permitted record projection.
+- POST /foundation/commands: execute one strict System 01 command envelope. The body carries commandId, type, aggregateId, expectedRevision, idempotencyKey, and a type-specific payload; actor, clock, seed, authorization, and outcome remain server-owned.
+- GET /game/timelines/:id/projections?characterId=UUID: observer-scoped Chronicle, roster, phone inbox, inventory, map, case file, and NPC profile read models.
 - GET /scopes/:type/:scopeId/events and /audits: Creator/admin members only.
+- POST /scopes/:type/:scopeId/records/:recordId/deletion-report: owner-only immutable dependency report for a possible permanent deletion; optional `{note}`.
+- DELETE /scopes/:type/:scopeId/records/:recordId: owner-only permanent deletion with `{reportId,confirmation,note?}`. The record must be archived, the report fresh and unchanged, and confirmation must exactly match the report response.
 
 Lists are capped at 100. Record lists include nextCursor; pass it as ?after=UUID. For world/campaign lists, use the last ID returned until an empty page. Histories return insertion-ordered pages; use the last event/audit ID as ?after=UUID. Unknown or out-of-scope records return 404 without distinguishing secret existence.
 
 ## Typed commands
 
-POST /commands takes {scope:{type,id},command:{...}}. Extra fields are rejected. Creator/admin authorization is scoped, not inferred from IDs. Existing records require expectedRevision, incremented once per successful aggregate mutation.
+POST /commands takes `{scope:{type,id},command:{...},audit?:{reason,note?}}`. Extra fields are rejected. Creator/admin authorization is scoped, not inferred from IDs. Existing records require expectedRevision, incremented once per successful aggregate mutation. `audit.reason` is 1-160 characters and `audit.note` is optional up to 1000 characters; omitted metadata defaults the reason to the command type.
 
 | type | Required fields beyond type |
 | --- | --- |

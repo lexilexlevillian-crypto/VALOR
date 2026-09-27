@@ -40,7 +40,7 @@ test('libSQL transaction awaits asynchronous work and isolates concurrent failur
 test('libSQL migrations and foreign key failures are transactional',async()=>{
  const dir=mkdtempSync(join(tmpdir(),'valor-libsql-')),store=new LibsqlStore(join(dir,'test.sqlite'));
  try{await store.migrate();
-  assert.equal((await store.get<{n:number}>('SELECT count(*) n FROM schema_migrations'))!.n,16);
+  assert.equal((await store.get<{n:number}>('SELECT count(*) n FROM schema_migrations'))!.n,18);
   await assert.rejects(()=>store.run('INSERT INTO sessions VALUES (?,?,?,?)',key(),key(),'now','later'),/FOREIGN KEY/);
   await store.run("UPDATE schema_migrations SET checksum='invalid' WHERE version=1");
   await assert.rejects(()=>store.migrate(),/checksum/);

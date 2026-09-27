@@ -10,13 +10,14 @@ import type { Config } from './config.ts';
 import { Game } from './game/engine.ts';
 import { gameRoutes } from './game/routes.ts';
 import { publicAssets, shell, shellPolicy, staticRoutes } from './static.ts';
+import {FoundationAuthority} from './foundation-authority.ts';
 
 export function buildApp(store:Store,settings:Config,logging:boolean|{write(chunk:string):void}=true) {
-  const domain=new Domain(store),auth=new Auth(store,settings);
+  const domain=new Domain(store),auth=new Auth(store,settings),foundation=new FoundationAuthority(store);
   const app=Fastify({
     bodyLimit:32768,requestTimeout:15000,connectionTimeout:10000,
     trustProxy:false,requestIdHeader:false,genReqId:()=>randomUUID(),logController:new LogController({disableRequestLogging:true}),
-    logger:logging?{level:'info',...(typeof logging==='object'?{stream:logging}:{}),redact:{paths:['password','token','csrfToken','req.headers.cookie','req.headers.authorization','req.headers.x-csrf-token','req.body'],censor:'[REDACTED]'}}:false
+    logger:logging?{level:'info',...(typeof logging==='object'?{stream:logging}:{}),redact:{paths:['password','token','csrfToken','secret','contacts','req.url','req.query','req.headers.cookie','req.headers.authorization','req.headers.x-csrf-token','req.body'],censor:'[REDACTED]'}}:false
   });
   const cookieName=settings.production?'__Host-valor_session':'valor_session';
   const cookie=(token:string,maxAge:number)=>cookieName+'='+token+'; Path=/; HttpOnly; SameSite=Strict; Max-Age='+maxAge+(settings.production?'; Secure':'');
@@ -41,7 +42,12 @@ export function buildApp(store:Store,settings:Config,logging:boolean|{write(chun
     }
     const token=tokenFrom(request.headers.cookie);
     const authenticated=await auth.authenticate(token); actors.set(request,{...authenticated,requestId:request.id});
-    if(unsafe)auth.csrf(token!,request.headers['x-csrf-token']);
+    if(unsafe){
+      auth.csrf(token!,request.headers['x-csrf-token']);
+      if(path!=='/auth/logout')await auth.limit('mutation-user',authenticated.id,settings.mutationLimit,60000);
+    }
+    if(/^\/game\/timelines\/[^/]+\/(?:interpret|narrate(?:\/stream)?)$/.test(path??''))await auth.limit('ai-call-user',authenticated.id,settings.aiCallLimit,60000);
+    if(request.method==='GET'&&/^\/game\/timelines\/[^/]+\/export$/.test(path??''))await auth.limit('export-user',authenticated.id,settings.exportLimit,60000);
   });
   app.addHook('onResponse',async(request,reply)=>{
     app.log.info({requestId:request.id,method:request.method,route:request.routeOptions.url??'unmatched',status:reply.statusCode},'request.complete');
@@ -179,16 +185,27 @@ export function buildApp(store:Store,settings:Config,logging:boolean|{write(chun
   });
   app.post('/commands',async(request)=>{
     const input=envelopeSchema.parse(request.body);
-    return (await domain.execute(actor(request),input.scope,input.command,key(request.headers)));
+    return (await domain.execute(actor(request),input.scope,input.command,key(request.headers),input.audit));
   });
+  app.post('/foundation/commands',async request=>foundation.execute(actor(request),request.body));
   app.get('/scopes/:type/:scopeId/records',async(request)=>(await domain.list(actor(request),getScope(request.params),cursor(request.query))));
   app.get('/scopes/:type/:scopeId/records/:recordId',async(request)=>{
     const p=z.strictObject({type:z.enum(['world','campaign']),scopeId:id,recordId:id}).parse(request.params);
     return (await domain.read(actor(request),{type:p.type,id:p.scopeId},p.recordId));
   });
+  app.post('/scopes/:type/:scopeId/records/:recordId/deletion-report',async request=>{
+    const p=z.strictObject({type:z.enum(['world','campaign']),scopeId:id,recordId:id}).parse(request.params);
+    const body=z.strictObject({note:z.string().trim().max(1000).optional()}).parse(request.body??{});
+    return domain.deletionReport(actor(request),{type:p.type,id:p.scopeId},p.recordId,body.note);
+  });
+  app.delete('/scopes/:type/:scopeId/records/:recordId',async request=>{
+    const p=z.strictObject({type:z.enum(['world','campaign']),scopeId:id,recordId:id}).parse(request.params);
+    const body=z.strictObject({reportId:id,confirmation:z.string().max(200),note:z.string().trim().max(1000).optional()}).parse(request.body);
+    return domain.hardDeleteRecord(actor(request),{type:p.type,id:p.scopeId},p.recordId,body.reportId,body.confirmation,body.note);
+  });
   app.get('/scopes/:type/:scopeId/events',async(request)=>(await domain.history(actor(request),getScope(request.params),cursor(request.query))));
   app.get('/scopes/:type/:scopeId/audits',async(request)=>(await domain.audits(actor(request),getScope(request.params),cursor(request.query))));
-  gameRoutes(app,new Game(store),actor,key);
+  gameRoutes(app,new Game(store,{exportBytes:settings.exportBytes,importBytes:settings.importBytes}),actor,key);
   staticRoutes(app);
   return app;
 }

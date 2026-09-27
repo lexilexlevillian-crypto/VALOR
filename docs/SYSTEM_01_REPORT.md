@@ -1,51 +1,59 @@
-# System 01 implementation report
+# System 01 completion report
 
-Status: System 01 implemented; Systems 02-18 have not been started.
+Status: complete in migration 017 and the server command/projection layer.
 
-Publication: local branch system-01-foundation. The GitHub remote is configured and repository access is verified, but no source has been pushed. Automatic approval review blocked publication because the destination is public and the staged payload includes the complete supplied brief and operational/security documentation. Publication of that exact payload needs user confirmation. CI has not run remotely.
+## Schema
 
-## Delivered
+The normalized foundation remains split by authority and lifecycle:
 
-- Typed Node/Fastify API and strict runtime schemas.
-- Database-backed accounts, sessions, owned world libraries, campaigns and memberships.
-- Separate Creator definitions and independent campaign instances with source revision provenance.
-- Stable record/section/field IDs, persisted typed values, explicit visibility, revisions and soft archive.
-- Two checked, transactional forward migrations, foreign keys and query indexes.
-- Authenticated authorization on scoped queries/mutations; filtered player/observer projections.
-- Scrypt password hashing, opaque hashed sessions, production secure cookies, CSRF and Origin checks.
-- Durable keyed rate limits, request size/time limits, parameterized queries and redacted structured logs.
-- Immutable event/audit/receipt history, optimistic concurrency, idempotency, atomic outbox and versioned deterministic RNG support.
-- Operator-only account provisioning, online verified backup and documented recovery.
-- Foundation CI and API/architecture/operations documentation.
+- Accounts and access: `users`, `sessions`, `memberships`.
+- Reusable Creator definitions: world-scoped `records`, `sections`, `fields`, canon records/revisions, and `creator_templates`.
+- Campaign configuration and instances: `campaigns`, configurations, start packages, timelines, and campaign-scoped records.
+- Runtime characters, objects, media references, and other instances: `game_entities`, with `kind`, stable UUID, revision, visibility, provenance/source ID, timestamps, and archive state. Characters, objects, and media share this instance envelope while retaining kind-specific strict schemas.
+- History: immutable `domain_events`, `game_events`, `foundation_commands`, `foundation_events`, receipts, checks, saves, chronicle rows, and audit records.
+- Relationships and epistemic state: referential `entity_links`, facts, character knowledge, beliefs, and memories.
+- Schema metadata: `artifact_schema_versions` registers durable world/campaign artifacts; `schema_compatibility` states current/minimum versions and recovery policy.
 
-## Migration and authority status
+Migration 017 adds immutable, versioned command and event envelopes for the required vocabulary:
+`CreateCharacter`, `EditCharacter`, `StartCampaign`, `AdvanceWorldTime`, `MoveActor`, `TransferItem`, `AddContact`, `SendText`, `StartConversation`, `ResolveCheck`, `StartCombat`, `CreateEvidence`, `TriggerWatcher`, `CreateSave`, and `BranchTimeline`. Each maps one-to-one to its past-tense event.
 
-Migrations 001 and 002 pass fresh installation and populated forward migration. Authored values survive renaming/reordering, migration and a fresh Node process. Database history cannot be updated/deleted by ordinary application operations.
+Every accepted command stores its authenticated actor, scope, optional expected revision, idempotency key, canonical request hash, strict payload, and schema version. Exactly one immutable foundation event records the actual outcome, aggregate revision, source domain/game event, server-generated audit seed, RNG version, and schema version. The response receipt is committed in the same transaction.
 
-The server is authoritative. No client or AI-supplied actor, seed, clock or arbitrary state update is accepted. All tested writes commit projection, event, audit, receipt and outbox together or roll back together.
+## Authority boundaries
 
-## Verification
+- Clients submit intent only. Actor identity comes from the authenticated session. Payload schemas reject unknown properties, client seeds, outcomes, clocks, and state patches.
+- Existing domain/game methods remain the enforcement point for world ownership, campaign membership, Creator privileges, controlled-character authority, referential integrity, and optimistic revisions. The foundation command bus delegates to those checks inside the same transaction.
+- Creator definitions are independent of campaign instances. Instantiation records source ID and source revision; later definition edits do not mutate running campaigns.
+- Canonical state is stored in normalized tables. Immutable events explain what happened. Receipts provide idempotent replay. Outboxes are delivery state. None is replaced by browser state.
+- Chronicle, roster, phone inbox, inventory, map, case file, and NPC profile are rebuilt server-side from the observer-filtered canonical state. Hidden Creator data never enters these read models, and projections are explicitly non-authoritative.
 
-Run npm run check and npm test. The suite covers fresh/forward migrations, process restart, tenant and global-admin isolation, hidden fields and ancestors, observer grants, source/instance independence, idempotency and revoked access, concurrent HTTP writes, forced rollback, immutable history, foreign keys, field types, archive preservation, backup recovery, deterministic RNG and outbox retry, authentication/session expiry/logout, secure cookies, CSRF/origin rejection, input and size validation, SQL injection handling, durable rate limits, log redaction, and a real HTTP listener.
+## Migration and recovery result
 
-Verified on Windows with Node 24.21.0:
+Migration 017 is forward-only and additive. It creates new tables/indexes/triggers, backfills missing artifact schema registrations, and installs insert triggers for future worlds, campaigns, memberships, start packages, character profile schemas, checks, game receipts/outbox rows, and foundation command artifacts.
 
-- npm run check: passed.
-- npm test: 18 passed, 0 failed; includes a real HTTP listener and fresh-process database read.
-- npm run migrate: passed; 001 and 002 applied to the workspace database.
-- npm install / lockfile synchronization: succeeded and reported zero vulnerabilities.
-- Standalone npm audit: attempted twice after verification; the registry advisory endpoint reset the connection (ECONNRESET). A fresh final audit is therefore unverified.
+Migration application is transactional and checksummed. A failed migration or command leaves no partial projection, command, event, receipt, audit, outbox, or artifact metadata. Rollback means restoring a verified pre-migration backup; immutable history is never rewritten backward. New incompatible shapes require a new schema version and an additive/transformative migration. Projections can always be rebuilt from canonical state.
 
-CI must independently pass on Linux after publication. No production load, penetration, device accessibility or full-game acceptance claim is made by these foundation checks.
+Verified acceptance coverage includes:
 
-## Deferred decisions
+- fresh install, populated forward migration, checksum enforcement, and process restart;
+- backup to an independently opened database and recovery with migration re-check;
+- forced transaction rollback with unchanged canonical and schema metadata;
+- strict command payloads, authorization failure rollback, optimistic revision conflict, and idempotent replay;
+- immutable command/event/receipt rows and deterministic seed linkage to the underlying game event;
+- schema-version registration for command/event/receipt and later campaign artifacts;
+- all seven observer-scoped projections, including rejection of client-owned authority.
 
-SQLite is a single-instance foundation. Production hosting/durable storage and any migration to PostgreSQL require a deliberate deployment decision. No Render deployment or paid resources have been provisioned.
+Commands:
 
-Player-visible epistemic models are deferred to System 04; foundation visibility grants are not character knowledge. Gameplay math, canon, content policies and jurisdiction are not invented. Public account signup/recovery, MFA/invitations, account lifecycle UI, backup scheduling/retention/key custody, proxy trust, scalable notification workers and production monitoring await their own authorized scope.
+```sh
+npm run check
+npm test
+npm run migrate
+```
 
-This System 01 pass stops here pending approval. System 02 remains the next numbered system only after an explicit user request.
+## Open decisions
 
-## Completion pass: artifact schema metadata
-
-Migration 008 adds the artifact_schema_versions registry and insert triggers. Existing durable world/campaign records are backfilled with schema version 1; future records, timelines, entities, media references, epistemic rows, events, saves, templates and related history register atomically. The registry is metadata only and never replaces canonical domain state. Focused tests cover additive migration, restart/backup recovery, and transaction rollback.
+- SQLite/libSQL is the current single-writer transactional authority. Moving to PostgreSQL or a multi-writer event store is a deployment/scale decision, not required for System 01 correctness.
+- Foundation schema version 1 is the only supported wire version today. Version 2 must define an explicit transformer and raise the compatibility minimum only after deployed readers are ready.
+- Projections are rebuilt on request. Materialized server caches may be added after profiling; they must remain disposable and revision-keyed.
+- Retention, backup scheduling, key custody, disaster-recovery objectives, and production monitoring remain operational deployment decisions.

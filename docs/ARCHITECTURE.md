@@ -10,6 +10,8 @@ Turso credentials grant server-side database access; protect them like account d
 
 The client supplies authenticated intent, an idempotency key, and expected revision. Server schemas reject unknown properties, including client actor IDs, seeds, outcomes and clocks. Actor identity comes from a database-backed session. All domain writes authorize the actor and scope inside BEGIN IMMEDIATE, validate the command, update projections, append a versioned event and audit entry, queue an outbox notification, and save the response receipt before committing.
 
+The System 01 command bus at `POST /foundation/commands` is the stable cross-UI vocabulary. It persists the validated command and exactly one immutable past-tense outcome event, while delegating authorization and mutation to the established domain/game services. Chronicle, roster, phone inbox, inventory, map, case file, and NPC profile are observer-scoped server projections rebuilt from canonical state; clients never become authoritative caches.
+
 A thrown error rolls back every part of the mutation. Competing writes must present the current aggregate revision; a stale command receives 409. Retrying the same key and normalized command returns the saved result, without another event or random seed. Changing the command while reusing a key returns 409. Current permissions are checked even on replay. There are no AI endpoints or direct client database writes.
 
 ## Durable model
@@ -23,7 +25,8 @@ A thrown error rolls back every part of the mutation. Competing writes must pres
 | sections, fields, field_values | Stable custom structure, type-checked values, order, revision and visibility |
 | visibility_grants | Explicit user access to knowledge-gated records |
 | domain_events | Immutable, versioned change history and random seed provenance |
-| audit_log | Immutable privileged mutation and authentication history |
+| audit_log | Immutable privileged mutation and authentication history, correlation, reason, optional note, and redacted before/after values |
+| deletion_reports | Immutable, expiring dependency snapshots required before owner-only hard deletion |
 | command_receipts | Durable idempotency and exact response correlation |
 | outbox | Transactional internal notification delivery |
 | rate_limits | Durable, keyed-hash abuse buckets |
@@ -34,6 +37,8 @@ All content is created through validated commands, never baked into a city seed 
 World and campaign records share structural primitives but are isolated by mutually exclusive foreign-key scope columns. Instantiation requires access to the source world and exact source revision. It copies active sections/fields/values into new stable instance IDs and records source_record_id/source_revision. Later source edits never change an existing instance. Original source revisions are reconstructible from immutable full aggregate snapshots. Editing a name or order keeps that record's field/section identity and values intact.
 
 History-bearing content is soft archived; queries omit it, but data and prior events remain. Archiving a section also hides its descendants without deleting their values. Parent sections are immutable links in this foundation; changing the nesting structure is deferred to Creator UI work. Field types cannot be changed silently after values exist. Full aggregate snapshots favor correctness in this initial foundation; compact projections and storage quotas will need profiling as authored collections grow.
+
+Hard deletion is deliberately narrower than archive. Only a scope owner may permanently delete an archived authored record, and only after generating an unexpired immutable dependency report, supplying its exact confirmation phrase, and passing an atomic dependency-hash recheck. Blocking source-instance or canon references reject deletion. Owned projection rows are removed while immutable audit/event history and the consumed report remain. Runtime timelines, saves, and events have no hard-delete path.
 
 ## Permissions and views
 
@@ -66,7 +71,9 @@ Production cookies are __Host- prefixed, HttpOnly, Secure, host-only and SameSit
 
 Requests are size- and time-bounded. Authentication has per-account and per-IP limits, independent of forwarded IP claims. Rate buckets persist with a keyed hash; logs never store their raw identifiers. Proxy headers are not trusted. Failed logins do the same KDF work for unknown accounts and return a uniform error.
 
-SQL is parameterized. The only dynamic SQL identifiers are fixed internal choices between world_id and campaign_id. Structured request logs allow only server-generated request ID, method, route template and status. Error responses omit SQL, payloads, stacks and secret values. Secret-key redaction is an additional layer, verified by tests.
+Authenticated mutation bursts, AI calls, and exports have separate per-user buckets so one class cannot exhaust another. Imports and exports have independent byte ceilings. Configuration parses all security limits into bounded integer ranges and requires paired, sufficiently long AI gateway credentials.
+
+SQL is parameterized. The only dynamic SQL identifiers are fixed internal choices between world_id and campaign_id. Structured request logs allow only server-generated request ID, method, route template and status. Error responses omit SQL, payloads, stacks and secret values. Audit snapshots recursively redact credentials, tokens, private contacts/messages, Creator secrets, and instructions before persistence; log redaction is a second layer. Both are verified by tests.
 
 SQLite has no per-table database roles. Least privilege therefore means a dedicated OS service account, restrictive database/backup directory permissions, protected disk and operator-only CLI access. It is not a security boundary against code already running as that account.
 

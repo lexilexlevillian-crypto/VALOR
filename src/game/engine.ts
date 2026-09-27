@@ -18,10 +18,11 @@ import type {IntentProposal} from './intent.ts';
 import {encodeSnapshot,decodeSnapshot} from './snapshots.ts';
 import {mediaBytes} from './media.ts';
 import {defaultCampaignConfig,parseStoredCampaignConfig,resolveCampaignConfig} from '../campaign-config.ts';
+import {buildFoundationProjections} from '../foundation-projections.ts';
+import {auditJson,ensureJsonBytes} from '../security.ts';
 type Timeline={id:string;campaign_id:string;parent_id:string|null;parent_save_id:string|null;name:string;revision:number;clock:string;settings_json:string};
 type Mutation<T>={result:T;effects?:Effect[];draws?:number;checks?:CheckRecord[];characterId?:string;turnText?:string};
 const now=()=>new Date().toISOString();
-const auditJson=(value:unknown)=>value===undefined||value===null?null:JSON.stringify(value);
 const canonical=(v:unknown):string=>Array.isArray(v)?'['+v.map(canonical).join(',')+']':v&&typeof v==='object'?'{'+Object.entries(v).sort(([a],[b])=>a.localeCompare(b)).map(([k,x])=>JSON.stringify(k)+':'+canonical(x)).join(',')+'}':JSON.stringify(v);
 export const checksum=(v:unknown)=>createHash('sha256').update(canonical(v)).digest('hex');
 const privileged=(role:string)=>['creator','admin'].includes(role);
@@ -57,8 +58,11 @@ const snapshotSchema=z.strictObject({version:z.literal(1),transcript:z.array(tra
  memories:z.array(z.strictObject({id:z.uuid(),observerId:z.uuid(),text:z.string().max(16000),salience:z.number().min(0).max(1),decayPerDay:z.number().min(0).max(1),eventId:z.uuid(),at:z.iso.datetime(),private:z.boolean()}))
 })});
 export class Game {
- store:Store;domain:Domain;
- constructor(store:Store){this.store=store;this.domain=new Domain(store);}
+ store:Store;domain:Domain;readonly exportBytes:number;readonly importBytes:number;
+ constructor(store:Store,limits:{exportBytes?:number;importBytes?:number}={}){
+  this.store=store;this.domain=new Domain(store);
+  this.exportBytes=limits.exportBytes??8*1024*1024;this.importBytes=limits.importBytes??8*1024*1024;
+ }
  async access(actor:Actor,id:string,write=false){
   const t=(await this.store.get<Timeline>('SELECT * FROM timelines WHERE id=? AND archived_at IS NULL',id));ensure(t,404,'timeline_unavailable');
   const access=(await this.domain.access(actor,{type:'campaign',id:t.campaign_id},write));return {t,access};
@@ -110,7 +114,9 @@ export class Game {
   write('UPDATE timelines SET clock=?,settings_json=? WHERE id=?',s.clock,JSON.stringify(s.settings),id);
   for(let offset=0;offset<statements.length;offset+=100)await this.store.batch(statements.slice(offset,offset+100));
  }
- private async audit(actor:Actor,campaignId:string,action:string,targetId:string,details:{reason?:string;before?:unknown;after?:unknown}={}){(await this.store.run('INSERT INTO audit_log(id,actor_id,campaign_id,action,target_id,created_at,request_id,reason,before_json,after_json) VALUES (?,?,?,?,?,?,?,?,?,?)',randomUUID(),actor.id,campaignId,action,targetId,now(),actor.requestId??null,details.reason??null,auditJson(details.before),auditJson(details.after)));}
+ private async audit(actor:Actor,campaignId:string,action:string,targetId:string,details:{reason?:string;note?:string;before?:unknown;after?:unknown}={}){
+  await this.store.run('INSERT INTO audit_log(id,actor_id,campaign_id,action,target_id,created_at,request_id,reason,before_json,after_json,note) VALUES (?,?,?,?,?,?,?,?,?,?,?)',randomUUID(),actor.id,campaignId,action,targetId,now(),actor.requestId??null,details.reason??action,auditJson(details.before),auditJson(details.after),details.note??null);
+ }
  private controlled(actor:Actor,s:State,characterId:string,role:string){
   const e=getEntity(s,characterId,'character'),d=data(e,'character');
   ensure(d.playable&&(d.controllerUserId===actor.id||privileged(role)&&d.controllerUserId===null),403,'character_not_controlled');return e;
@@ -185,6 +191,11 @@ export class Game {
   });
  } async view(actor:Actor,id:string,characterId:string){const {t,access}=(await this.access(actor,id));const s=(await this.load(id));this.controlled(actor,s,characterId,access.role);
   return {timeline:{id:t.id,name:t.name,revision:t.revision},...observerView(s,characterId),checks:await this.checkHistory(id,characterId),turns:(await this.transcript(id)).filter(turn=>turn.character_id===characterId&&turn.user_id===actor.id).slice(-100)};}
+ async projections(actor:Actor,id:string,characterId:string){
+  const {access}=await this.access(actor,id),state=await this.load(id);
+  this.controlled(actor,state,characterId,access.role);
+  return buildFoundationProjections(state,characterId,(await this.transcript(id)).filter(turn=>turn.user_id===actor.id));
+ }
  async checks(actor:Actor,id:string,characterId:string){
   const {access}=(await this.access(actor,id));
   const state=await this.load(id);
@@ -326,6 +337,17 @@ export class Game {
    return {result:{narration,permitted,checks:resolved.checks??[]},effects:resolved.effects,draws:resolved.draws,checks:resolved.checks,characterId:input.characterId,turnText:input.text??action.type};
   }));
  }
+ async triggerWatcher(actor:Actor,id:string,revision:number,watcherId:string,key:string){
+  return this.mutate(actor,id,revision,key,{revision,watcherId},'creator.watcher.trigger',true,s=>{
+   const watcher=getEntity(s,watcherId,'watcher');
+   ensure(!watcher.data.fired,409,'watcher_already_fired');
+   watcher.data.fired=true;
+   const subjectId=typeof watcher.data.subjectId==='string'?watcher.data.subjectId:null;
+   const observers=subjectId&&s.entities.some(entity=>entity.id===subjectId&&entity.kind==='character')?[subjectId]:[];
+   const effect:Effect={id:randomUUID(),text:String(watcher.data.description||watcher.name),observers,type:'watcher.triggered',subjectId:watcher.id};
+   return {result:{watcherId:watcher.id},effects:[effect]};
+  });
+ }
  async authorizeCharacter(actor:Actor,id:string,characterId:string){const {access}=(await this.access(actor,id));this.controlled(actor,(await this.load(id)),characterId,access.role);}
  async parse(actor:Actor,id:string,characterId:string,text:string):Promise<IntentProposal>{
   const {access}=(await this.access(actor,id)),s=(await this.load(id));this.controlled(actor,s,characterId,access.role);
@@ -347,13 +369,13 @@ export class Game {
    (await this.store.run('INSERT INTO timelines(id,campaign_id,parent_id,parent_save_id,name,revision,clock,settings_json,created_at) VALUES (?,?,?,?,?,?,?,?,?)',childId,t.campaign_id,id,saveId,name,1,parsed.state.clock,JSON.stringify(parsed.state.settings),now()));
    const parentCanon=await this.store.get<{canon_revision_id:string}>('SELECT canon_revision_id FROM timeline_canon_bindings WHERE timeline_id=?',id);
    if(parentCanon)await this.store.run('INSERT INTO timeline_canon_bindings VALUES (?,?,?)',childId,parentCanon.canon_revision_id,now());
-   (await this.persist(childId,parsed.state));(await this.restoreTranscript(childId,parsed.transcript));(await this.audit(actor,t.campaign_id,'timeline.branched',childId));
+   (await this.persist(childId,parsed.state));(await this.restoreTranscript(childId,parsed.transcript));(await this.audit(actor,t.campaign_id,'timeline.branched',childId,{before:{parentTimelineId:id,saveId},after:{timelineId:childId,name}}));
    (await this.saveInternal(actor,childId,'Branch origin',parsed.state,1,true));return {id:childId};
   }));
  }
- async export(actor:Actor,id:string){(await this.access(actor,id,true));const payload={version:1,state:(await this.load(id)),transcript:(await this.transcript(id))};return {payload,checksum:checksum(payload)};}
+ async export(actor:Actor,id:string){(await this.access(actor,id,true));const payload={version:1,state:(await this.load(id)),transcript:(await this.transcript(id))};ensureJsonBytes(payload,this.exportBytes,'export_too_large');return {payload,checksum:checksum(payload)};}
  async validateImport(actor:Actor,id:string,raw:unknown){
-  (await this.access(actor,id,true));const envelope=z.strictObject({payload:z.unknown(),checksum:z.string().length(64)}).parse(raw);
+  (await this.access(actor,id,true));ensureJsonBytes(raw,this.importBytes,'import_too_large');const envelope=z.strictObject({payload:z.unknown(),checksum:z.string().length(64)}).parse(raw);
   ensure(checksum(envelope.payload)===envelope.checksum,400,'import_checksum_mismatch');
   const bundle={payload:snapshotSchema.parse(envelope.payload)};
   const state=bundle.payload.state;state.entities=state.entities.map(validateEntity);validateState(state);
@@ -367,14 +389,14 @@ export class Game {
   return (await this.store.transaction(async ()=>{const {t}=(await this.access(actor,id,true)),child=randomUUID();(await this.store.run('INSERT INTO timelines(id,campaign_id,parent_id,name,clock,settings_json,created_at) VALUES (?,?,?,?,?,?,?)',child,t.campaign_id,id,name,state.clock,JSON.stringify(state.settings),now()));const campaignCanon=await this.store.get<{canon_revision_id:string}>('SELECT canon_revision_id FROM timeline_canon_bindings WHERE timeline_id=?',id);if(campaignCanon)await this.store.run('INSERT INTO timeline_canon_bindings VALUES (?,?,?)',child,campaignCanon.canon_revision_id,now());(await this.persist(child,state));
    const bundle=z.object({payload:snapshotSchema}).parse(raw);
    (await this.restoreTranscript(child,bundle.payload.transcript.map(turn=>({...turn,user_id:actor.id}))));
-   (await this.audit(actor,t.campaign_id,'timeline.imported',child));(await this.saveInternal(actor,child,'Import origin',state,1,true));return {id:child};}));
+   (await this.audit(actor,t.campaign_id,'timeline.imported',child,{before:{parentTimelineId:id},after:{timelineId:child,name,entities:state.entities.length,clock:state.clock}}));(await this.saveInternal(actor,child,'Import origin',state,1,true));return {id:child};}));
  }
  async history(actor:Actor,id:string){(await this.access(actor,id,true));return (await this.store.all('SELECT * FROM game_events WHERE timeline_id=? ORDER BY rowid DESC LIMIT 100',id));}
  async context(actor:Actor,id:string,characterId:string,query:string){const {access}=(await this.access(actor,id));const s=(await this.load(id));this.controlled(actor,s,characterId,access.role);return {...retrieve(s,characterId,query),brief:contextBrief(s,characterId,query,s.settings.contextTokens)};}
  async template(actor:Actor,id:string,name:string){
   const {t}=(await this.access(actor,id,true)),campaign=(await this.store.get<{source_world_id:string}>('SELECT source_world_id FROM campaigns WHERE id=?',t.campaign_id))!;
   (await this.domain.access(actor,{type:'world',id:campaign.source_world_id},true));const bundle=(await this.export(actor,id)),templateId=randomUUID();
-  (await this.store.transaction(async ()=>{(await this.store.run('INSERT INTO creator_templates(id,world_id,name,bundle_json,created_by,created_at) VALUES (?,?,?,?,?,?)',templateId,campaign.source_world_id,name,JSON.stringify(bundle),actor.id,now()));(await this.audit(actor,t.campaign_id,'template.created',templateId));}));return {id:templateId};
+  (await this.store.transaction(async ()=>{(await this.store.run('INSERT INTO creator_templates(id,world_id,name,bundle_json,created_by,created_at) VALUES (?,?,?,?,?,?)',templateId,campaign.source_world_id,name,JSON.stringify(bundle),actor.id,now()));(await this.audit(actor,t.campaign_id,'template.created',templateId,{after:{templateId,name,worldId:campaign.source_world_id}}));}));return {id:templateId};
  }
  async installCatalog(actor:Actor,id:string,revision:number,key:string){
   return (await this.mutate(actor,id,revision,key,{revision,type:'catalog.install'},'creator.catalog',true,s=>{

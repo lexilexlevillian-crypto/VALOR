@@ -31,6 +31,7 @@ export function gameRoutes(app:FastifyInstance,game:Game,actor:(r:object)=>Actor
   return wrap(()=>game.start(actor(r),timeline(r),b,key(r.headers)));
  });
  app.get('/game/timelines/:id/view',async r=>{const query=z.strictObject({characterId:id}).parse(r.query);return wrap(async ()=>(await game.view(actor(r),timeline(r),query.characterId)));});
+ app.get('/game/timelines/:id/projections',async r=>{const query=z.strictObject({characterId:id}).parse(r.query);return wrap(()=>game.projections(actor(r),timeline(r),query.characterId));});
  app.get('/game/timelines/:id/creator',async r=>(await game.creator(actor(r),timeline(r))));
  app.get('/game/timelines/:id/developer/overview',async r=>(await game.creator(actor(r),timeline(r))));
  app.get('/game/timelines/:id/checks',async r=>{const q=z.strictObject({characterId:id}).parse(r.query);return wrap(()=>game.checks(actor(r),timeline(r),q.characterId));});
@@ -63,7 +64,7 @@ export function gameRoutes(app:FastifyInstance,game:Game,actor:(r:object)=>Actor
  app.post('/game/timelines/:id/saves',async r=>(await game.save(actor(r),timeline(r),z.strictObject({name}).parse(r.body).name)));
  app.post('/game/timelines/:id/branch',async r=>{const b=z.strictObject({saveId:id,name}).parse(r.body);return wrap(async ()=>(await game.branch(actor(r),timeline(r),b.saveId,b.name)));});
  app.get('/game/timelines/:id/export',async r=>(await game.export(actor(r),timeline(r))));
- app.post('/game/timelines/:id/import',{bodyLimit:8*1024*1024},async r=>{const b=z.strictObject({name,bundle:z.unknown(),dryRun:z.boolean().default(true)}).parse(r.body);return wrap(async ()=>(await game.import(actor(r),timeline(r),b.name,b.bundle,b.dryRun)));});
+ app.post('/game/timelines/:id/import',{bodyLimit:game.importBytes},async r=>{const b=z.strictObject({name,bundle:z.unknown(),dryRun:z.boolean().default(true)}).parse(r.body);return wrap(async ()=>(await game.import(actor(r),timeline(r),b.name,b.bundle,b.dryRun)));});
  app.post('/game/timelines/:id/template',async r=>(await game.template(actor(r),timeline(r),z.strictObject({name}).parse(r.body).name)));
  app.get('/game/timelines/:id/templates',async r=>(await game.templates(actor(r),timeline(r))));
  app.post('/game/timelines/:id/templates/use',async r=>{const b=z.strictObject({templateId:id,name}).parse(r.body);return wrap(async ()=>(await game.instantiateTemplate(actor(r),timeline(r),b.templateId,b.name)));});

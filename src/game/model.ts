@@ -212,6 +212,8 @@ export const actionSchema=z.discriminatedUnion('type',[
  z.strictObject({type:z.literal('reload'),weaponId:id,ammoId:id}),z.strictObject({type:z.literal('consume'),itemId:id}),
  z.strictObject({type:z.literal('treat'),injuryId:id,medicineId:id}),
  z.strictObject({type:z.literal('message'),phoneId:id,toId:id,text:short,medium:z.enum(['sms','mms','call','voicemail','email']).default('sms')}),
+ z.strictObject({type:z.literal('add-contact'),phoneId:id,contactId:id,label:name}),
+ z.strictObject({type:z.literal('conversation'),targetId:id,text:short}),
  z.strictObject({type:z.literal('buy'),businessId:id,itemId:id,payment:z.enum(['cash','bank']).optional()}),z.strictObject({type:z.literal('sell'),businessId:id,itemId:id}),
  z.strictObject({type:z.literal('bank'),businessId:id,operation:z.enum(['deposit','withdraw']),cents:cents.refine(n=>n>0)}),
  z.strictObject({type:z.literal('work'),jobId:id}),z.strictObject({type:z.literal('pay-rent'),housingId:id}),

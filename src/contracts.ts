@@ -26,7 +26,10 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.strictObject({type:z.literal('visibility.revoke'), ...root, userId:id})
 ]);
 export type Command = z.infer<typeof commandSchema>;
-export const envelopeSchema = z.strictObject({scope:scopeSchema, command:commandSchema});
+export const envelopeSchema = z.strictObject({
+ scope:scopeSchema,command:commandSchema,
+ audit:z.strictObject({reason:z.string().trim().min(1).max(160),note:z.string().trim().max(1000).optional()}).optional()
+});
 export const eventSchema = z.strictObject({
   id, schemaVersion:z.literal(1), actorId:id, aggregateId:id,
   aggregateRevision:z.number().int().positive(), type:z.string().min(1),
