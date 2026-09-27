@@ -1,5 +1,6 @@
+import {THEMES,THEME_IDS,themeById,applyTheme} from './theme.js';
 const $=(tag,attrs={},...children)=>{const e=document.createElement(tag);for(const[k,v]of Object.entries(attrs)){if(k.startsWith('on'))e.addEventListener(k.slice(2).toLowerCase(),v);else if(k==='class')e.className=v;else if(k==='text')e.textContent=v;else if(k==='value')e.value=v;else if(k==='checked')e.checked=v;else if(v!==false&&v!=null)e.setAttribute(k,v===true?'':v);}for(const child of children.flat())if(child!=null)e.append(child instanceof Node?child:document.createTextNode(String(child)));return e;};
-const S={user:null,csrf:'',campaign:null,timeline:null,character:null,view:null,creator:null,catalog:null,narrator:null,page:'Campaigns',busy:false,online:navigator.onLine};
+const S={user:null,csrf:'',campaign:null,timeline:null,character:null,view:null,creator:null,catalog:null,narrator:null,page:'Campaigns',busy:false,online:navigator.onLine,theme:'neon-green-terminal',themeRevision:0,themeAllowed:[...THEME_IDS],themePolicy:null,mode:'player',modeRevision:0,developerAllowed:false};
 const app=document.querySelector('#app'),notice=document.querySelector('#notice');
 let noticeTimer;
 function notify(message){notice.textContent=message;clearTimeout(noticeTimer);noticeTimer=setTimeout(()=>notice.textContent='',9000);}
@@ -14,26 +15,35 @@ async function run(fn){if(S.busy)return;S.busy=true;document.documentElement.set
 function field(label,control){const id=control.id||'field-'+crypto.randomUUID();control.id=id;return $('div',{class:'field'},$('label',{for:id},label),control);}
 function input(value='',type='text'){return $('input',{type,value});}
 function title(text,kicker='VALOR / CITY RECORD'){return $('div',{},$('div',{class:'eyebrow'},kicker),$('h1',{},text),$('div',{class:'rule'}));}
+function panel(kicker,heading,...children){return $('section',{class:'panel'},$('div',{class:'panel-header'},$('div',{},$('div',{class:'section-kicker'},kicker),$('h2',{},heading)),...children));}
+function statBar(label,value,max=100){const number=Math.max(0,Math.min(max,Number(value)||0)),fill=Math.round(number/max*100);return $('div',{class:'stat-row'},$('span',{},label),$('div',{class:'stat-bar','aria-label':label+' '+number+' of '+max},$('i',{style:'width:'+fill+'%'})),$('strong',{},String(Math.round(number))));}
+function themeChoices(current,allowed,onchoose){const grid=$('div',{class:'theme-grid','aria-label':'Available visual themes'});for(const id of allowed){const theme=themeById(id),choice=$('button',{type:'button',class:'theme-choice','aria-pressed':id===current},$('span',{class:'theme-chip'}),$('strong',{},theme.label),$('small',{},theme.mood));choice.querySelector('.theme-chip').style.setProperty('--theme-chip',theme.tokens.glow);choice.addEventListener('click',()=>run(()=>onchoose(id)));grid.append(choice);}return grid;}
+async function loadTheme(campaignId=null){const user=await api('/me/theme');let allowed=[...THEME_IDS],recommended='neon-green-terminal';if(campaignId){S.themePolicy=await api('/campaigns/'+campaignId+'/theme');allowed=S.themePolicy.allowedThemes;recommended=S.themePolicy.recommendedThemeId;}S.themeRevision=user.revision;S.themeAllowed=allowed;S.theme=applyTheme(allowed.includes(user.themeId)?user.themeId:recommended,allowed);}
+async function loadMode(){const state=await api('/me/mode');S.mode=state.developerAllowed&&state.mode==='developer'?'developer':'player';S.modeRevision=state.revision;S.developerAllowed=state.developerAllowed;}
+function clearDeveloperState(){S.creator=null;S.view=null;}
+async function persistMode(next,dialog){const saved=await api('/me/mode',{mode:next,expectedRevision:S.modeRevision});S.mode=saved.mode;S.modeRevision=saved.revision;S.developerAllowed=saved.developerAllowed;if(next==='player'){clearDeveloperState();S.page=S.timeline?'Chronicle':'Campaigns';}dialog.close();await render();}
+function modeSwitch(){const developer=S.mode==='developer',node=$('button',{type:'button',class:'mode-switch','aria-label':developer?'Exit Developer Mode':'Enter Developer Mode',title:developer?'Exit Developer Mode':'Enter Developer Mode'},$('span',{class:'mode-switch-icon'},developer?'◆':'◇'),$('span',{class:'mode-switch-label'},developer?'DEVELOPER':'PLAYER'));node.addEventListener('click',openModeSwitch);return node;}
+function openModeSwitch(){const next=S.mode==='developer'?'player':'developer',dialog=$('dialog',{class:'mode-dialog'},$('div',{class:'mode-dialog-inner'},$('div',{class:'section-kicker'},'ACCESS / MODE BOUNDARY'),$('h2',{},next==='developer'?'Enter Developer Mode?':'Exit Developer Mode?'),$('p',{},next==='developer'?'Developer Mode exposes authorized Creator/debug tools, hidden fields, world-state inspection, event history, AI context sources, simulations, controlled edits, and diagnostics. It does not change server authorization.':'Player Mode clears the loaded Developer snapshot and returns to observer-permitted gameplay surfaces.'),next==='developer'&&!S.developerAllowed?$('p',{class:'error'},'Your account is not authorized for Developer Mode.'):null,$('div',{class:'actions'},button('Cancel',()=>dialog.close()),next==='developer'&&!S.developerAllowed?button('Close',()=>dialog.close(),true):$('button',{type:'button',class:'primary',onclick:()=>run(()=>persistMode(next,dialog))},next==='developer'?'Confirm Developer Mode':'Confirm Player Mode'))));document.body.append(dialog);dialog.addEventListener('close',()=>dialog.remove(),{once:true});dialog.showModal();}
 const endpoint=(suffix)=>'/game/timelines/'+S.timeline.id+'/'+suffix;
-const nav=['Chronicle','Character','Inventory','Equipment','Phone','Map','Relationships','Journal / Cases','Lore','Skills / Traits','Health','Vehicles','Jobs / Money','Combat','Search / Loot','Save / Load','Settings','Creator'];
+const nav=['New Game','Chronicle','Character','Inventory','Equipment','Phone','Map','Relationships','Journal / Cases','Lore','Skills / Traits','Health','Vehicles','Jobs / Money','Combat','Search / Loot','Save / Load','Settings','Creator'];
 function frame(content){
  const rail=$('aside',{class:'rail','aria-label':'Primary sidebar'},$('div',{class:'brand'},'VALOR',$('small',{},'THE CITY KEEPS A RECORD.')),
  $('div',{class:'eyebrow'},'CAMPAIGN DOSSIER'),$('nav',{'aria-label':'Game navigation'},
- button('Campaigns',()=>{S.page='Campaigns';return render();}),...(S.timeline?nav.filter(n=>n!=='Creator'||['creator','admin'].includes(S.campaign.role)).map(n=>{const b=button(n,()=>{S.page=n;return render();});if(n===S.page)b.setAttribute('aria-current','page');return b;}):[])),
- $('footer',{},$('div',{class:'eyebrow'},S.user?.role??''),button('Sign out',async()=>{await api('/auth/logout',{});S.user=null;S.csrf='';S.view=null;S.creator=null;S.character=null;S.timeline=null;S.campaign=null;loginScreen();})));
+ button('Campaigns',()=>{S.page='Campaigns';return render();}),...(S.timeline?nav.filter(n=>n!=='Creator'||(S.mode==='developer'&&['creator','admin'].includes(S.campaign.role))).map(n=>{const label=n==='Creator'?'Developer Studio':n,b=button(label,()=>{S.page=n==='Creator'?'Developer':n;return render();});if((n==='Creator'&&S.page==='Developer')||n===S.page)b.setAttribute('aria-current','page');return b;}):[])),
+ $('footer',{},$('div',{class:'eyebrow'},S.user?.role??''),button('Sign out',async()=>{await api('/auth/logout',{});S.user=null;S.csrf='';S.view=null;S.creator=null;S.character=null;S.timeline=null;S.campaign=null;S.mode='player';S.modeRevision=0;S.developerAllowed=false;loginScreen();})));
  const shell=$('div',{class:'shell'},rail,$('div',{class:'workspace'},
  $('header',{class:'topbar'},$('button',{type:'button',class:'mobile-menu','aria-label':'Toggle navigation',onclick:()=>{shell.classList.toggle('menu-open');}},'☰'),
  $('div',{class:'eyebrow'},S.campaign?.name??'PERSISTENT TEXT RPG / EST. 2012'),
- $('span',{class:S.online?'status':'status offline'},S.online?'● Connected':'● Offline')),
+ $('span',{class:'mode-badge'},S.mode==='developer'?'DEVELOPER MODE':'PLAYER MODE'),$('span',{class:S.online?'status':'status offline'},S.online?'● Connected':'● Offline')),
  $('main',{id:'main',tabindex:'-1'},content)));
- app.replaceChildren(shell);
+ app.replaceChildren(shell,modeSwitch());
 }
 function loginScreen(mode='login'){
  const signup=mode==='signup',email=input('','email'),password=input('','password');email.autocomplete='email';password.autocomplete=signup?'new-password':'current-password';email.required=true;password.required=true;
  const fields=[field('Email address',email),field('Password',password)];
  let confirmation;
  if(signup){confirmation=input('','password');confirmation.autocomplete='new-password';confirmation.required=true;fields.push(field('Confirm password',confirmation));}
- const form=$('form',{onsubmit:e=>{e.preventDefault();run(async()=>{if(signup&&password.value!==confirmation.value)throw new Error('Passwords do not match.');const result=await api(signup?'/auth/signup':'/auth/login',{email:email.value,password:password.value});S.user=result.user;S.csrf=result.csrfToken;password.value='';await render();});}},
+ const form=$('form',{onsubmit:e=>{e.preventDefault();run(async()=>{if(signup&&password.value!==confirmation.value)throw new Error('Passwords do not match.');const result=await api(signup?'/auth/signup':'/auth/login',{email:email.value,password:password.value});S.user=result.user;S.csrf=result.csrfToken;password.value='';await loadMode();await loadTheme();await render();});}},
  ...fields,$('button',{type:'submit',class:'primary'},signup?'Create account':'Enter Valor'));
  const switcher=$('p',{class:'auth-switch'},signup?'Already have an account? ':'Need an account? ',$('button',{type:'button',class:'link-button',onclick:()=>loginScreen(signup?'login':'signup')},signup?'Log in':'Sign up'));
  app.replaceChildren($('main',{id:'main',class:'login'},$('div',{class:'eyebrow'},'A PERSISTENT CRIME-DRAMA RPG'),$('div',{class:'brand'},'VALOR'),$('div',{class:'rule'}),$('h1',{},'Every choice leaves a trace.'),$('p',{},'A city written by its Creator. A life shaped by your decisions.'),form,switcher,$('p',{class:'muted'},signup?'Create a player account to begin your chronicle.':'Sign in to continue your chronicle.'),$('small',{class:S.online?'':'offline'},S.online?'Your session stays private.':'Offline — reconnect to sign in.')));
@@ -42,7 +52,8 @@ async function render(){
  if(!S.user)return loginScreen();
  if(S.page==='Campaigns')return campaigns();
  if(!S.timeline){S.page='Campaigns';return campaigns();}
- if(S.page==='Creator')return creator();
+ if(S.page==='Developer')return developer(); if(S.page==='New Game')return newGame();
+ if(S.page==='Creator'){S.page='Chronicle';return render();}
  if(S.page==='Save / Load')return saves();
  if(S.page==='Settings')return settings();
  if(!S.character)return roster();
@@ -52,10 +63,18 @@ async function render(){
  if(S.page==='Chronicle')return chronicle();
  return dossier();
 }
-async function campaigns(){
- const list=await api('/campaigns');const content=$('div',{},title('Choose your story.','VALOR / MAIN MENU'),$('p',{class:'lead'},'Return to an existing campaign, or open a new city dossier. Characters, history, and consequences persist.'));
+async function openCampaign(c,page='Chronicle'){
+ S.campaign=c;await loadTheme(c.id);
+ let timelines=await api('/game/campaigns/'+c.id+'/timelines');
+ if(!timelines.length&&['creator','admin'].includes(c.role))timelines=[await api('/game/campaigns/'+c.id+'/timelines',{})];
+ S.timeline=timelines[0]??null;S.character=null;S.page=timelines.length?page:'New Game';
+ if(!S.timeline)notify('The Creator needs to initialize this campaign before a start can be selected.');
+ await render();
+}async function campaigns(){
+ const list=await api('/campaigns'),recent=await api('/continue');const content=$('div',{},title('Choose your story.','VALOR / MAIN MENU'),$('p',{class:'lead'},'Return to an existing campaign, or open a new city dossier. Characters, history, and consequences persist.'));
+ if(recent)content.append(panel('CONTINUE','Return to the latest committed life',$('p',{},recent.name+' · '+recent.timeline_name+' · '+new Date(recent.clock).toLocaleString()),button(recent.character_name?'Continue as '+recent.character_name:'Open New Game',async()=>{const c=list.items.find(x=>x.id===recent.campaign_id);if(c){S.campaign=c;S.timeline={id:recent.timeline_id,name:recent.timeline_name,revision:recent.revision,clock:recent.clock};S.character=recent.character_id?{id:recent.character_id,name:recent.character_name}:null;await loadTheme(c.id);S.page=S.character?'Chronicle':'New Game';await render();}},true)));
  const cards=$('div',{class:'grid'});
- for(const c of list.items)cards.append($('article',{class:'card'},$('span',{class:'badge'},c.role),$('h2',{},c.name),$('p',{},new Date(c.starting_at).toLocaleDateString()),button('Open campaign →',async()=>{S.campaign=c;let timelines=await api('/game/campaigns/'+c.id+'/timelines');if(!timelines.length&&['creator','admin'].includes(c.role))timelines=[await api('/game/campaigns/'+c.id+'/timelines',{})];S.timeline=timelines[0]??null;S.character=null;S.page='Chronicle';if(!S.timeline)notify('The Creator needs to initialize this campaign.');await render();},true)));
+ for(const c of list.items)cards.append($('article',{class:'card'},$('span',{class:'badge'},c.role),$('h2',{},c.name),$('p',{},new Date(c.starting_at).toLocaleDateString()),$('div',{class:'actions'},button('Open campaign →',()=>openCampaign(c),true),button('New Game',()=>openCampaign(c,'New Game')))));
  content.append(cards);
  if(!list.items.length)content.append($('div',{class:'empty'},$('h3',{},'The city is unwritten.'),$('p',{},'Create a campaign, then author its locations and people in Creator. No city canon is generated automatically.')));
  if(['creator','admin'].includes(S.user.role)){
@@ -67,11 +86,26 @@ async function campaigns(){
  }
  frame(content);
 }
-async function roster(){
+async function newGame(){
+ const packages=await api(endpoint('start-packages')),content=$('div',{},title('Begin a life.','VALOR / NEW GAME'),$('p',{class:'lead'},'Choose an authored start, or use a Creator-only freeform start. The selected package is applied once to this timeline and recorded as an immutable game event.'));
+ if(!S.timeline){content.append($('div',{class:'empty'},$('h3',{},'No timeline is ready.'),$('p',{},'A Creator must initialize this campaign before a life can begin.')));frame(content);return;}
+ const current=await api(endpoint('roster'));
+ if(current.length)content.append(panel('TIMELINE STARTED','Roster available',$('p',{},'This timeline already has a playable life. Choose it from the roster; starting again would create a second canonical beginning.'),button('Open roster',()=>{S.page='Chronicle';S.character=null;return render();},true)));
+ const cards=$('div',{class:'grid'});
+ for(const start of packages)cards.append($('article',{class:'card'},$('span',{class:'badge'},start.kind.toUpperCase()),$('h2',{},start.name),$('p',{},start.description||'Authored starting conditions.'),$('small',{},start.status+' · '+start.visibility),button(current.length?'Unavailable on this timeline':'Start this life',async()=>{if(current.length)throw new Error('This timeline already has a playable life. Create a new timeline to use another start.');const result=await api(endpoint('start'),{revision:S.timeline.revision,packageId:start.id});const roster=await api(endpoint('roster'));S.character=roster.find(c=>c.id===result.characterId)||null;S.page='Chronicle';await render();},true)));
+ if(packages.length)content.append($('h2',{},'Authored starts'),cards);else content.append($('div',{class:'empty'},$('h3',{},'No published starts yet.'),$('p',{},'The Creator can publish a guided, template, or freeform start package here.')));
+ if(S.mode==='developer'&&['creator','admin'].includes(S.campaign.role)){
+  const snapshot=S.creator??await api(endpoint('developer/overview'));S.creator=snapshot;
+  const nameInput=input(''),slugInput=input(''),description=input(''),characterName=input(''),locationSelect=$('select',{},$('option',{value:''},'No starting location'),...snapshot.entities.filter(e=>e.kind==='location'&&!e.archived).map(e=>$('option',{value:e.id},e.name))),cash=input('0','number');
+  const definition=()=>({character:{name:characterName.value,description:description.value,data:{locationId:locationSelect.value||null,cash:Number(cash.value||0)}},grantEntityIds:[],relationshipTemplates:[],reputation:[],plotHookIds:[]});
+  content.append(panel('DEVELOPER / CREATOR','Freeform start',$('p',{},'This is a controlled authoring surface. Server validation still owns every field, reference, permission, and timeline mutation.'),field('Package name',nameInput),field('Slug',slugInput),field('Playable character name',characterName),field('Description',description),field('Starting location',locationSelect),field('Cash in cents',cash),$('div',{class:'actions'},button('Save published package',async()=>{await api(endpoint('start-packages'),{name:nameInput.value,slug:slugInput.value,description:description.value,kind:'guided',visibility:'campaign',status:'published',definition:definition()});notify('Published start package saved.');await newGame();}),button('Start freeform life',async()=>{if(current.length)throw new Error('This timeline already has a playable life.');const result=await api(endpoint('start'),{revision:S.timeline.revision,definition:definition()});const roster=await api(endpoint('roster'));S.character=roster.find(c=>c.id===result.characterId)||null;S.page='Chronicle';await render();},true))));
+ }
+ frame(content);
+}async function roster(){
  const characters=await api(endpoint('roster'));
  const content=$('div',{},title('Select a life.','VALOR / CHARACTER ROSTER'),$('p',{},'Choose a playable character assigned to your account.'));
  const grid=$('div',{class:'grid'});for(const c of characters)grid.append($('article',{class:'card'},$('span',{class:'badge'},c.condition),$('h2',{},c.name),$('p',{},c.description),button('Continue as '+c.name,async()=>{S.character=c;S.page='Chronicle';await render();},true)));
- content.append(grid);if(!characters.length)content.append($('div',{class:'empty'},$('h3',{},'No playable characters yet.'),$('p',{},'In Creator, add a location and a character. Enable playable and assign the character to your account.'),...(['creator','admin'].includes(S.campaign.role)?[button('Open Creator',()=>{S.page='Creator';return render();},true)]:[])));
+ content.append(grid);if(!characters.length)content.append($('div',{class:'empty'},$('h3',{},'No playable characters yet.'),$('p',{},'In Creator, add a location and a character. Enable playable and assign the character to your account.'),...(['creator','admin'].includes(S.campaign.role)?[button(S.mode==='developer'?'Open Developer Studio':'Switch to Developer Mode',()=>{if(S.mode==='developer'){S.page='Developer';return render();}openModeSwitch();},true)]:[])));
  frame(content);
 }
 async function act(action,text){
@@ -104,13 +138,21 @@ function chronicle(){
  const form=$('form',{class:'composer',onsubmit:e=>{e.preventDefault();run(async()=>{const text=composer.value;const parsed=await api(endpoint('parse'),{characterId:S.character.id,text});proposal.replaceChildren();if(!parsed.action)return notify(parsed.clarification);proposal.append($('h3',{},'Review proposed action'),$('p',{},'Nothing has happened yet. Confirm only if this matches your intention.'),renderValue(parsed.action),button('Confirm this action',()=>act(parsed.action,text),true),button('Cancel proposal',()=>proposal.replaceChildren()));});}},
  field('YOUR NEXT ACTION',composer),$('div',{class:'actions'},$('button',{type:'submit',class:'primary',disabled:!S.online},'Review action →'),button('Look around',()=>act({type:'look'})),button('Wait 10 min',()=>act({type:'wait',minutes:10}))));
  if(S.catalog.providers.includes('gemini'))form.append(button('Ask Gemini to interpret',async()=>{const text=composer.value;if(!text.trim())throw new Error('Enter an intended action first.');const parsed=await api(endpoint('interpret'),{characterId:S.character.id,text,provider:'gemini'});proposal.replaceChildren();if(!parsed.action)return notify(parsed.clarification);proposal.append($('h3',{},'Review Gemini proposal'),$('p',{},'Nothing has happened. Check the exact action and target before confirming.'),renderValue(parsed.action),button('Confirm this action',()=>act(parsed.action,text),true),button('Cancel proposal',()=>proposal.replaceChildren()));}));
- prose.append(form,proposal,universalActions());
+ form.append(proposal);prose.append(form,universalActions());
  const aside=$('aside',{class:'scene-aside','aria-label':'Current scene'},$('h2',{},'Current dossier'),$('h3',{},S.character.name),$('p',{},pc?.data.description??''),$('div',{class:'badge'},pc?.data.condition??'Unknown'),$('h3',{},'Known surroundings'));
  for(const e of view.entities.filter(e=>e.kind==='character'&&e.id!==S.character.id))aside.append($('p',{},e.name));
  aside.append($('h3',{},'Routes'),...((location?.data.exits??[]).map(exit=>{const dest=view.entities.find(e=>e.id===exit.to);return dest?button(dest.name+' · '+exit.minutes+' min',()=>act({type:'travel',destinationId:dest.id,mode:'walk',vehicleId:null})):null;})),button('Change character',()=>{S.character=null;return roster();}));
  frame($('div',{class:'chronicle-layout'},prose,aside));
 }
 const pageKinds={'Character':['character'],'Inventory':['item'],'Equipment':['item'],'Phone':['item','message','dispatch'],'Map':['location'],'Relationships':['relationship'],'Journal / Cases':['quest','case','evidence','judgment','estate','dispatch'],'Lore':['lore','storycard','media'],'Skills / Traits':['skill','trait'],'Health':['injury','service','dispatch'],'Vehicles':['vehicle'],'Jobs / Money':['job','business','housing','recipe','service','estate'],'Combat':['combat'],'Search / Loot':['item','evidence']};
+function characterProfile(entity){
+ const data=entity.data??{},attributes=data.attributes??data.stats??{},aliases=(data.aliases??[]).join(', ');
+ const overview=$('div',{class:'profile-region'},$('div',{class:'section-kicker'},'OVERVIEW'),$('h3',{},data.legalName||entity.name),aliases?$('p',{},'Also known as: '+aliases):null,$('p',{},data.description??'No authored description is currently visible.'),data.pronouns?$('p',{class:'muted'},'Pronouns: '+data.pronouns):null,data.locationId?$('p',{class:'muted'},'Current location record: '+data.locationId):null);
+ const appearance=$('div',{class:'profile-region'},$('div',{class:'section-kicker'},'APPEARANCE / PRESENTATION'),$('p',{},renderValue({heightCm:data.heightCm,build:data.build,hair:data.hair,eyes:data.eyes,complexion:data.complexion,features:data.features,scars:data.scars,tattoos:data.tattoos,disabilities:data.disabilities,appearance:data.appearance,presentation:data.presentation,socialPresentation:data.socialPresentation})));
+ const stats=$('div',{class:'profile-region'},$('div',{class:'section-kicker'},'STATS'),$('div',{class:'stat-list'},...Object.entries(attributes).slice(0,8).map(([key,value])=>statBar(key.replace(/([A-Z])/g,' $1'),value))));
+ const background=$('div',{class:'profile-region'},$('div',{class:'section-kicker'},'BACKGROUND'),$('p',{},renderValue({nationality:data.nationality,cultureContext:data.cultureContext,originLocationId:data.originLocationId,classContext:data.classContext,familyBackground:data.familyBackground,employerOccupation:data.employerOccupation,education:data.education,beliefsContext:data.beliefsContext,background:data.background})));
+ return $('article',{class:'profile-sheet'},$('div',{class:'profile-header'},$('div',{},$('div',{class:'eyebrow'},'CHARACTER DOSSIER'),$('h2',{},entity.name),$('p',{},data.condition??'Playable character')),$('div',{class:'framed-image'},$('span',{class:'placeholder'},'PORTRAIT / OPTIONAL MEDIA'))),$('div',{class:'profile-wall'},overview,appearance,stats,background));
+}
 function dossier(){
  const content=$('div',{},title(S.page+'.','VALOR / DOSSIER'));
  let rows=S.view.entities.filter(e=>(pageKinds[S.page]??[]).includes(e.kind));
@@ -120,9 +162,14 @@ function dossier(){
  if(S.page==='Phone')rows=rows.filter(e=>e.kind==='message'||e.data.category==='phone');
  if(S.page==='Search / Loot')content.append(button('Search current location',()=>act({type:'search'}),true));
  if(S.page==='Jobs / Money'){const pc=S.view.entities.find(e=>e.id===S.character.id);content.append($('p',{class:'prose'},'Cash: $'+(Number(pc?.data.cash??0)/100).toFixed(2)));}
+ if(S.page==='Skills / Traits'){
+  const pc=S.view.entities.find(e=>e.id===S.character.id),skillValues=pc?.data.skills??{},attributes=pc?.data.attributes??{},checks=S.view.checks??[];
+  content.append(panel('MECHANICS','Capability record',$('p',{},'Ratings are authored or earned through time, cost, prerequisites, practice, and milestones. The visible ledger records the exact check inputs used.'),$('h3',{},'Attributes'),renderValue(attributes),$('h3',{},'Skills'),renderValue(skillValues),$('h3',{},'Recent checks'),checks.length?$('div',{},...checks.slice(0,20).map(check=>$('p',{class:'muted'},String(check.attribute)+' · '+String(check.outcome)+' · total '+String(check.total??'—')+' vs '+String(check.difficulty)))):$('p',{class:'muted'},'No checks recorded yet.')));
+ }
+
  const grid=$('div',{class:'grid'});
  for(const entity of rows){
-  const card=$('article',{class:'card'},$('span',{class:'badge'},entity.kind),$('h3',{},entity.name),$('p',{},entity.data.description??''));
+  const card=entity.kind==='character'?characterProfile(entity):$('article',{class:'card'},$('span',{class:'badge'},entity.kind),$('h3',{},entity.name),$('p',{},entity.data.description??''));
   for(const id of (entity.kind==='media'?[entity.id]:entity.data.mediaIds??[])){const asset=S.view.entities.find(e=>e.id===id&&e.kind==='media');if(asset)card.append($('img',{class:'media-image',src:endpoint('media')+'/'+id+'?characterId='+S.character.id,alt:asset.data.alt||asset.name,loading:'lazy'}));}
   const details=$('details',{},$('summary',{},'Record details'),renderValue(entity.data));
   card.append(details,...entityActions(entity));grid.append(card);
@@ -194,7 +241,7 @@ function schemaEditor(schema,value,onchange,key='',depth=0){
  if(schema.enum)control=$('select',{},...schema.enum.map(v=>$('option',{value:v,selected:v===value},v)));
  else if(schema.type==='boolean')control=$('input',{type:'checkbox',checked:!!value});
  else if(schema.format==='uuid'&&key!=='id'&&!key.startsWith('id ')){
-  const options=[...((S.page==='Creator'?S.creator?.entities:S.view?.entities)??[]).filter(e=>!e.archived).map(e=>({id:e.id,name:e.name+' ['+e.kind+']'})),{id:S.user.id,name:'Current account'}];
+  const options=[...((S.mode==='developer'?S.creator?.entities:S.view?.entities)??[]).filter(e=>!e.archived).map(e=>({id:e.id,name:e.name+' ['+e.kind+']'})),{id:S.user.id,name:'Current account'}];
   control=$('select',{},$('option',{value:''},'Choose record…'),...options.map(e=>$('option',{value:e.id,selected:e.id===value},e.name)));
  }else if(schema.type==='number'||schema.type==='integer')control=$('input',{type:'number',value:value??schema.minimum??0,min:schema.minimum,max:schema.maximum,step:schema.type==='integer'?1:'any'});
  else if(schema.format==='date')control=input(value??'','date');
@@ -205,18 +252,61 @@ function schemaEditor(schema,value,onchange,key='',depth=0){
  control.addEventListener('input',()=>onchange(schema.type==='boolean'?control.checked:schema.type==='number'||schema.type==='integer'?Number(control.value):control.value));
  return field(key.replace(/([A-Z])/g,' $1'),control);
 }
-async function creator(){
- if(!S.catalog)S.catalog=await api('/game/catalog');S.creator=await api(endpoint('creator'));
- const list=$('div',{class:'entity-list'}),editor=$('section',{class:'card'},$('h2',{},'Creator studio'),$('p',{},'Author the city, its people, objects and rules. Every record is stored on the server. Player views filter hidden fields.'));
+function characterSectionsEditor(data,onchange){
+ const root=$('div',{class:'character-section-editor'});
+ let sections=Array.isArray(data.sections)?structuredClone(data.sections):[];
+ const visibilities=['creator','campaign','owner','knowledge'];
+ const active=()=>sections.filter(s=>!s.archived);
+ const emit=()=>onchange(structuredClone(sections));
+ const redraw=()=>{root.replaceChildren();root.append($('p',{class:'muted'},'Custom sections are durable data. Rename or reorder them freely; stable IDs preserve values and references.'));
+  const addName=input(''),addVisibility=$('select',{},...visibilities.map(v=>$('option',{value:v},v)));
+  root.append($('div',{class:'custom-add'},field('New section',addName),field('Visibility',addVisibility),button('Add section',()=>{const name=addName.value.trim();if(!name)throw new Error('Name the new section.');sections.push({id:crypto.randomUUID(),name,parentId:null,position:sections.length,visibility:addVisibility.value,helpText:'',editable:true,repeatable:false,archived:false,fields:[]});emit();redraw();},true)));
+  for(const section of active().sort((a,b)=>(a.position-b.position)||a.id.localeCompare(b.id))){
+   const sectionIndex=sections.indexOf(section),name=input(section.name),help=input(section.helpText??''),parent=$('select',{},$('option',{value:''},'Root section'),...active().filter(other=>other.id!==section.id).map(other=>$('option',{value:other.id,selected:other.id===section.parentId},other.name)));
+   const visibility=$('select',{},...visibilities.map(v=>$('option',{value:v,selected:v===section.visibility},v)));
+   name.addEventListener('input',()=>{section.name=name.value;emit();});help.addEventListener('input',()=>{section.helpText=help.value;emit();});parent.addEventListener('change',()=>{section.parentId=parent.value||null;emit();});visibility.addEventListener('change',()=>{section.visibility=visibility.value;emit();});
+   const sectionActions=$('div',{class:'actions'},button('Move up',()=>{if(sectionIndex>0){[sections[sectionIndex-1].position,sections[sectionIndex].position]=[section.position,sections[sectionIndex-1].position];sections.sort((a,b)=>a.position-b.position);emit();redraw();}}),button('Move down',()=>{if(sectionIndex<sections.length-1){[sections[sectionIndex+1].position,sections[sectionIndex].position]=[section.position,sections[sectionIndex+1].position];sections.sort((a,b)=>a.position-b.position);emit();redraw();}}),button('Duplicate section',()=>{const clone=structuredClone(section);clone.id=crypto.randomUUID();clone.name+=' copy';clone.position=sections.length;clone.fields=clone.fields.map(f=>({...f,id:crypto.randomUUID()}));sections.push(clone);emit();redraw();}),button('Archive section',()=>{section.archived=true;emit();redraw();}),button('Delete section',()=>{sections=sections.filter(s=>s.id!==section.id).map(s=>s.parentId===section.id?{...s,parentId:null}:s);emit();redraw();}));
+   const fieldList=$('div',{class:'custom-field-list'});
+   for(const custom of (section.fields??[]).filter(f=>!f.archived)){
+    const fi=section.fields.indexOf(custom),fieldName=input(custom.name),fieldHelp=input(custom.helpText??''),fieldVisibility=$('select',{},...visibilities.map(v=>$('option',{value:v,selected:v===custom.visibility},v))),type=$('select',{},...['text','number','boolean','json'].map(v=>$('option',{value:v,selected:v===custom.type},v)));
+    fieldName.addEventListener('input',()=>{custom.name=fieldName.value;emit();});fieldHelp.addEventListener('input',()=>{custom.helpText=fieldHelp.value;emit();});fieldVisibility.addEventListener('change',()=>{custom.visibility=fieldVisibility.value;emit();});type.addEventListener('change',()=>{custom.type=type.value;custom.value=type.value==='number'?0:type.value==='boolean'?false:type.value==='json'?{}:'';emit();redraw();});
+    let valueControl;
+    if(custom.type==='boolean')valueControl=$('input',{type:'checkbox',checked:!!custom.value});
+    else if(custom.type==='number')valueControl=$('input',{type:'number',value:Number(custom.value??0)});
+    else if(custom.type==='json')valueControl=$('textarea',{value:JSON.stringify(custom.value??{},null,2),rows:3});
+    else valueControl=input(String(custom.value??''));
+    valueControl.addEventListener('change',()=>{try{custom.value=custom.type==='boolean'?valueControl.checked:custom.type==='number'?Number(valueControl.value):custom.type==='json'?JSON.parse(valueControl.value):valueControl.value;valueControl.setCustomValidity('');emit();}catch{valueControl.setCustomValidity('Enter valid JSON.');}});
+    const actions=$('div',{class:'actions'},button('Move up',()=>{if(fi>0){[section.fields[fi-1],section.fields[fi]]=[section.fields[fi],section.fields[fi-1]];emit();redraw();}}),button('Move down',()=>{if(fi<section.fields.length-1){[section.fields[fi+1],section.fields[fi]]=[section.fields[fi],section.fields[fi+1]];emit();redraw();}}),button('Duplicate field',()=>{const clone=structuredClone(custom);clone.id=crypto.randomUUID();clone.name+=' copy';section.fields.splice(fi+1,0,clone);emit();redraw();}),button('Archive field',()=>{custom.archived=true;emit();redraw();}),button('Delete field',()=>{section.fields=section.fields.filter(f=>f.id!==custom.id);emit();redraw();}));
+    fieldList.append($('div',{class:'custom-field'},$('div',{class:'field-grid'},field('Field name',fieldName),field('Type',type),field('Visibility',fieldVisibility),field('Help text',fieldHelp),field('Value',valueControl)),actions));
+   }
+   const newFieldName=input(''),newFieldType=$('select',{},...['text','number','boolean','json'].map(v=>$('option',{value:v},v))),newFieldVisibility=$('select',{},...visibilities.map(v=>$('option',{value:v},v)));
+   fieldList.append($('div',{class:'custom-add'},field('New field',newFieldName),field('Type',newFieldType),field('Visibility',newFieldVisibility),button('Add field',()=>{const name=newFieldName.value.trim();if(!name)throw new Error('Name the new field.');const type=newFieldType.value;section.fields.push({id:crypto.randomUUID(),name,type,visibility:newFieldVisibility.value,value:type==='number'?0:type==='boolean'?false:type==='json'?{}:'',helpText:'',repeatable:false,archived:false});emit();redraw();},true)));
+   root.append($('section',{class:'custom-section card'},
+    $('div',{class:'custom-section-heading'},
+      $('div',{},$('div',{class:'section-kicker'},'CUSTOM SECTION'),$('h3',{},section.name||'Unnamed section'),$('small',{},'Stable ID '+section.id))
+    ),
+    $('div',{class:'field-grid'},field('Section name',name),field('Parent section',parent),field('Visibility',visibility),field('Help text',help)),
+    sectionActions,fieldList
+   ));
+  }
+ };
+ redraw();return root;
+}
+async function developer(){
+ if(S.mode!=='developer'||!S.developerAllowed){S.page='Chronicle';return render();}
+ if(!S.catalog)S.catalog=await api('/game/catalog');S.creator=await api(endpoint('developer/overview'));
+ const list=$('div',{class:'entity-list'}),editor=$('section',{class:'card'},$('h2',{},'Developer studio'),$('p',{},'Author the city, its people, objects and rules. Every record is stored on the server. Player views filter hidden fields.'));
  const filter=input(''),kind=$('select',{},...S.catalog.kinds.map(k=>$('option',{value:k},k)));
  function drawList(){list.replaceChildren();for(const e of S.creator.entities.filter(e=>!e.archived&&(!filter.value||(e.name+' '+e.kind).toLowerCase().includes(filter.value.toLowerCase()))))list.append($('button',{type:'button',onclick:()=>edit(e)},e.name,$('small',{},e.kind)));}
  filter.addEventListener('input',drawList);
  function edit(original){
-  const draft=structuredClone(original),schema=S.catalog.schemas[draft.kind],name=input(draft.name),visibility=$('select',{},...['creator','campaign','owner','knowledge'].map(v=>$('option',{value:v,selected:v===draft.visibility},v)));
-  editor.replaceChildren($('span',{class:'badge'},draft.kind),$('h2',{},draft.name||'New record'),field('Name',name),field('Visibility',visibility));
-  editor.append(schemaEditor(schema,draft.data,v=>draft.data=v));
-  const save=async()=>{draft.name=name.value;draft.visibility=visibility.value;await api(endpoint(draft.kind==='media'?'media':'entities'),{revision:S.creator.timeline.revision,entity:draft});notify('Saved.');await creator();};
-  editor.append($('div',{class:'actions'},button('Save record',save,true),button('Duplicate',()=>{const clone=structuredClone(draft);clone.id=crypto.randomUUID();clone.name=(name.value||draft.name)+' copy';clone.revision=1;edit(clone);}),button('Archive',async()=>{draft.archived=true;await save();})));
+  const draft=structuredClone(original),schema=S.catalog.schemas[draft.kind],profileSchema=draft.kind==='character'?structuredClone(schema):schema,name=input(draft.name),visibility=$('select',{},...['creator','campaign','owner','knowledge'].map(v=>$('option',{value:v,selected:v===draft.visibility},v)));
+  if(draft.kind==='character'&&profileSchema.properties)delete profileSchema.properties.sections;
+  editor.className=draft.kind==='character'?'profile-sheet':'card';
+  const profileHead=draft.kind==='character'?$('div',{class:'profile-header'},$('div',{},$('div',{class:'eyebrow'},'CHARACTER DOSSIER'),$('h2',{},draft.name||'New record'),$('p',{},'Author identity, appearance, and current state deliberately.')),$('div',{class:'framed-image'},$('span',{class:'placeholder'},'PORTRAIT / OPTIONAL MEDIA'))):$('span',{class:'badge'},draft.kind);
+  editor.replaceChildren(profileHead,draft.kind==='character'?$('div',{class:'profile-region'},$('div',{class:'section-kicker'},'OVERVIEW / STATS / BACKGROUND'),field('Name',name),field('Visibility',visibility),characterSectionsEditor(draft.data,v=>{draft.data.sections=v;}),schemaEditor(profileSchema,draft.data,v=>{draft.data={...draft.data,...v};})):$('div',{},$('h2',{},draft.name||'New record'),field('Name',name),field('Visibility',visibility),schemaEditor(schema,draft.data,v=>draft.data=v)));
+  const save=async()=>{draft.name=name.value;draft.visibility=visibility.value;await api(endpoint(draft.kind==='media'?'media':'entities'),{revision:S.creator.timeline.revision,entity:draft});notify('Saved.');await developer();};
+  const actions=$('div',{class:'actions'},button('Save record',save,true),button('Duplicate',()=>{const clone=structuredClone(draft);clone.id=crypto.randomUUID();clone.name=(name.value||draft.name)+' copy';clone.revision=1;edit(clone);}),button('Archive',async()=>{draft.archived=true;await save();}));editor.append(actions);editor.prepend(actions);
   const refs=S.creator.references.filter(r=>r.target_id===draft.id);if(refs.length)editor.append($('p',{},'Referenced by: '+refs.map(r=>S.creator.entities.find(e=>e.id===r.entity_id)?.name??r.entity_id).join(', ')));
  }
  drawList();
@@ -225,16 +315,18 @@ async function creator(){
   if(type==='character'){defaults.controllerUserId=S.user.id;}
   edit({id:crypto.randomUUID(),kind:type,name:'',visibility:'creator',data:defaults,revision:1,archived:false});
  },true),list);
- const content=$('div',{},title('Creator.','VALOR / CONTENT STUDIO'),$('p',{},'No neighborhoods, people, gangs or laws are supplied as canon. Start with a location, then create a playable character and assign its location.'),button('Install editable skills and traits catalog',async()=>{const result=await api(endpoint('catalog'),{revision:S.creator.timeline.revision});notify(result.created+' editable catalog records added.');await creator();}),$('div',{class:'editor-layout'},left,editor));
+ const content=$('div',{},title('Developer Studio.','VALOR / DEVELOPER MODE'),$('p',{},'No neighborhoods, people, gangs or laws are supplied as canon. Start with a location, then create a playable character and assign its location.'),button('Install editable skills and traits catalog',async()=>{const result=await api(endpoint('catalog'),{revision:S.creator.timeline.revision});notify(result.created+' editable catalog records added.');await developer();}),$('div',{class:'editor-layout'},left,editor));
+ const aiCharacter=choose('AI context character',S.creator.entities.filter(e=>e.kind==='character'&&e.data.playable&&!e.archived)),aiQuery=input('Context query'),aiOutput=$('div',{});
+ content.append(panel('DEVELOPER MODE / AUTHORIZED','World-state inspection', $('p',{},'This panel is visible only after the server-authorized mode switch. It may show hidden fields and simulation state; it never grants additional authority.'),renderValue({timeline:S.creator.timeline,clock:S.creator.clock,entityCount:S.creator.entities.length,factCount:S.creator.facts.length,beliefCount:S.creator.beliefs.length,memoryCount:S.creator.memories.length})),$('details',{},$('summary',{},'AI context source inspection'),$('p',{},'Inspect the deterministic context sources used for an authorized playable character. The result is diagnostic data, not a mutation.'),aiCharacter,field('Query',aiQuery),button('Inspect AI context sources',async()=>{const id=aiCharacter.querySelector('select').value;if(!id)throw new Error('Choose a playable character.');aiOutput.replaceChildren(renderValue(await api(endpoint('context')+'?characterId='+encodeURIComponent(id)+'&query='+encodeURIComponent(aiQuery.value))));}),aiOutput));
  const factSubject=choose('Subject / observer',S.creator.entities.filter(e=>!e.archived)),layer=$('select',{},...['truth','knowledge','belief','memory','correct-belief','retire-truth','refresh-memory'].map(l=>$('option',{value:l},l))),text=$('textarea',{}),factId=input(''),recordId=input('');
- content.append($('details',{},$('summary',{},'World truth, knowledge, beliefs and memories'),$('form',{onsubmit:e=>{e.preventDefault();run(async()=>{await api(endpoint('epistemic'),{revision:S.creator.timeline.revision,layer:layer.value,subjectId:factSubject.querySelector('select').value,text:text.value,...(factId.value?{factId:factId.value}:{}),...(recordId.value?{recordId:recordId.value}:{})});await creator();});}},field('Layer',layer),factSubject,field('Authored proposition / memory',text),field('Fact UUID (knowledge, correction or retirement)',factId),field('Belief / memory UUID (correction or refresh)',recordId),$('button',{type:'submit'},'Record explicitly')),renderValue({facts:S.creator.facts,beliefs:S.creator.beliefs,memories:S.creator.memories})));
+ content.append($('details',{},$('summary',{},'World truth, knowledge, beliefs and memories'),$('form',{onsubmit:e=>{e.preventDefault();run(async()=>{await api(endpoint('epistemic'),{revision:S.creator.timeline.revision,layer:layer.value,subjectId:factSubject.querySelector('select').value,text:text.value,...(factId.value?{factId:factId.value}:{}),...(recordId.value?{recordId:recordId.value}:{})});await developer();});}},field('Layer',layer),factSubject,field('Authored proposition / memory',text),field('Fact UUID (knowledge, correction or retirement)',factId),field('Belief / memory UUID (correction or refresh)',recordId),$('button',{type:'submit'},'Record explicitly')),renderValue({facts:S.creator.facts,beliefs:S.creator.beliefs,memories:S.creator.memories})));
  content.append($('details',{},$('summary',{},'Developer event history'),button('Load authorized event trace',async()=>{const result=await api(endpoint('history'));content.append($('pre',{},JSON.stringify(result,null,2)));})));
  const previewCharacter=choose('Preview as character',S.creator.entities.filter(e=>e.kind==='character'&&!e.archived)),debug=$('div',{});
  content.append($('details',{},$('summary',{},'Read-only diagnostics and visibility preview'),previewCharacter,button('Run diagnostics',async()=>{debug.replaceChildren(renderValue(await api(endpoint('diagnostics'))));}),button('Preview observer-permitted state',async()=>{const id=previewCharacter.querySelector('select').value;if(!id)throw new Error('Choose a character.');debug.replaceChildren(renderValue(await api(endpoint('preview')+'?characterId='+id)));}),debug));
  const mediaFile=$('input',{type:'file',accept:'image/png,image/jpeg,image/webp'}),mediaAlt=input('');
- content.append($('details',{},$('summary',{},'Private image assets'),$('p',{},'PNG, JPEG or WebP, at most 256 KiB. Images are stored with the game database and exports. Uploads begin Creator-only; edit visibility and attach the media UUID to a record deliberately.'),field('Image file',mediaFile),field('Image description (alt text)',mediaAlt),button('Upload private image',async()=>{const file=mediaFile.files[0];if(!file||file.size>262144)throw new Error('Choose an image no larger than 256 KiB.');const bytes=new Uint8Array(await file.arrayBuffer());let binary='';for(let offset=0;offset<bytes.length;offset+=16384)binary+=String.fromCharCode(...bytes.subarray(offset,offset+16384));await api(endpoint('media'),{revision:S.creator.timeline.revision,entity:{id:crypto.randomUUID(),kind:'media',name:file.name,visibility:'creator',data:{mime:file.type,body:btoa(binary),alt:mediaAlt.value}}});notify('Private image saved.');await creator();})));
+ content.append($('details',{},$('summary',{},'Private image assets'),$('p',{},'PNG, JPEG or WebP, at most 256 KiB. Images are stored with the game database and exports. Uploads begin Creator-only; edit visibility and attach the media UUID to a record deliberately.'),field('Image file',mediaFile),field('Image description (alt text)',mediaAlt),button('Upload private image',async()=>{const file=mediaFile.files[0];if(!file||file.size>262144)throw new Error('Choose an image no larger than 256 KiB.');const bytes=new Uint8Array(await file.arrayBuffer());let binary='';for(let offset=0;offset<bytes.length;offset+=16384)binary+=String.fromCharCode(...bytes.subarray(offset,offset+16384));await api(endpoint('media'),{revision:S.creator.timeline.revision,entity:{id:crypto.randomUUID(),kind:'media',name:file.name,visibility:'creator',data:{mime:file.type,body:btoa(binary),alt:mediaAlt.value}}});notify('Private image saved.');await developer();})));
  const batch=$('textarea',{'aria-label':'Creator entity batch JSON',placeholder:'Paste an array of complete entity records (maximum 100).',maxlength:2*1024*1024});
- content.append($('details',{},$('summary',{},'Atomic bulk editing'),$('p',{},'Advanced tool: all records are validated and committed together, or none are changed. References may point to other records in the same batch. The current timeline revision prevents stale overwrites.'),batch,button('Commit validated batch',async()=>{const entities=JSON.parse(batch.value);if(!Array.isArray(entities)||!entities.length||entities.length>100)throw new Error('Supply 1–100 complete records.');await api(endpoint('entities/bulk'),{revision:S.creator.timeline.revision,entities});notify('Batch committed.');await creator();})));
+ content.append($('details',{},$('summary',{},'Atomic bulk editing'),$('p',{},'Advanced tool: all records are validated and committed together, or none are changed. References may point to other records in the same batch. The current timeline revision prevents stale overwrites.'),batch,button('Commit validated batch',async()=>{const entities=JSON.parse(batch.value);if(!Array.isArray(entities)||!entities.length||entities.length>100)throw new Error('Supply 1–100 complete records.');await api(endpoint('entities/bulk'),{revision:S.creator.timeline.revision,entities});notify('Batch committed.');await developer();})));
  frame(content);
 }
 async function saves(){
@@ -246,7 +338,7 @@ async function saves(){
   const comparison=$('section',{class:'card'});
   content.append($('details',{},$('summary',{},'Compare or recover individual records'),$('p',{},'Comparison and record recovery are Creator-only. Recovery creates a new audited revision; the old save and parent timeline remain intact.'),...list.map(save=>button('Compare '+save.name,async()=>{
    const diff=await api(endpoint('saves/compare')+'?saveId='+save.id);comparison.replaceChildren(renderValue(diff),button('Verify save compatibility',async()=>{comparison.append(renderValue(await api(endpoint('saves/compatibility')+'?saveId='+save.id)));}));
-   for(const record of diff.changed)comparison.append(button('Restore '+record.name+' from this save',async()=>{const current=await api(endpoint('creator'));await api(endpoint('entities/restore'),{revision:current.timeline.revision,saveId:save.id,entityId:record.id});notify('Record restored as a new revision.');await saves();}));
+   for(const record of diff.changed)comparison.append(button('Restore '+record.name+' from this save',async()=>{const current=await api(endpoint('developer/overview'));await api(endpoint('entities/restore'),{revision:current.timeline.revision,saveId:save.id,entityId:record.id});notify('Record restored as a new revision.');await saves();}));
   })),comparison));
   const upload=$('input',{type:'file',accept:'.json,application/json'});let bundle;
   const result=$('p',{role:'status'});
@@ -260,8 +352,14 @@ async function saves(){
 async function settings(){
  if(!S.catalog)S.catalog=await api('/game/catalog');
  const creatorRole=['creator','admin'].includes(S.campaign.role),content=$('div',{},title('Settings.','VALOR / CAMPAIGN POLICY'));
+ const policy=await api('/campaigns/'+S.campaign.id+'/theme');
+ content.append(panel('APPEARANCE / PALETTE','Choose your surface',$('p',{},'Choose a readable surface for your own session. Campaign restrictions are enforced by the server.'),themeChoices(S.theme,policy.allowedThemes,async id=>{const saved=await api('/me/theme',{themeId:id,expectedRevision:S.themeRevision});S.themeRevision=saved.revision;S.theme=applyTheme(id,policy.allowedThemes);await settings();})));
  if(!creatorRole){content.append($('p',{},'Campaign settings are controlled by its Creator.'));frame(content);return;}
- const state=await api(endpoint('creator'));let draft=structuredClone(state.settings);
+ const recommended=$('select',{},...THEME_IDS.map(id=>$('option',{value:id,selected:id===policy.recommendedThemeId},THEMES[id].label)));
+ const allowedBox=$('div',{class:'theme-grid','aria-label':'Campaign allowed palettes'});
+ for(const id of THEME_IDS){const checkbox=$('input',{type:'checkbox',checked:policy.allowedThemes.includes(id)});allowedBox.append(field(THEMES[id].label,checkbox));}
+ content.append(panel('CREATOR / CAMPAIGN DEFAULT','Allowed palettes',$('p',{},'Choose which palettes players may use and the campaign recommendation.'),field('Recommended palette',recommended),allowedBox,button('Save palette policy',async()=>{const ids=THEME_IDS.filter((id,index)=>allowedBox.querySelectorAll('input[type="checkbox"]')[index].checked);if(!ids.includes(recommended.value))throw new Error('The recommended palette must be allowed.');await api('/campaigns/'+S.campaign.id+'/theme',{recommendedThemeId:recommended.value,allowedThemes:ids,expectedRevision:policy.revision,reason:'creator.palette.policy'});notify('Campaign palette policy saved.');await settings();},true)));
+ const state=await api(endpoint('developer/overview'));let draft=structuredClone(state.settings);
  content.append($('p',{},'Resolution rules are deliberately unset until you author them. The current resolver uses a die plus the selected attribute and skill against the authored threshold. Mature scenes are disabled by default; enabled intimacy fades to black.'));
  const schema={type:'object',properties:{needs:{type:'boolean'},fuel:{type:'boolean'},weather:{enum:['clear','rain','overcast','snow','fog']},romance:{type:'boolean'},intimacy:{enum:['off','fade-to-black']},intensity:{enum:['restrained','grounded']},difficulty:{enum:['custom','narrative']},traitBudget:{type:'number',minimum:0,maximum:1000},tokenBudget:{type:'integer',minimum:0,maximum:1000000},contextTokens:{type:'integer',minimum:256,maximum:16000},timezone:{type:'string'},npcBudget:{type:'integer',minimum:1,maximum:10000},rules:{anyOf:[{type:'object',properties:{dieSides:{type:'integer',minimum:2,maximum:1000},threshold:{type:'number',minimum:1},damage:{type:'number',minimum:0,maximum:100},treatmentMinutes:{type:'integer',minimum:1,maximum:1440},recoveryPerDay:{type:'number',minimum:0,maximum:100},unfamiliarPenalty:{type:'number',minimum:0,maximum:100},bleedPerMinute:{type:'number',minimum:0,maximum:10}}},{type:'null'}]}}};
  schema.properties.userTokenBudget={type:'integer',minimum:0,maximum:1000000};
@@ -269,7 +367,6 @@ async function settings(){
  content.append($('section',{class:'card'},schemaEditor(schema,draft,v=>draft=v),button('Save campaign settings',async()=>{await api(endpoint('settings'),{revision:state.timeline.revision,settings:draft});notify('Settings saved.');await settings();},true)));
  frame(content);
 }
-
 function universalActions(){
  const actions=S.catalog?.actions??[],select=$('select',{},...actions.map(a=>$('option',{value:a.properties.type.const},a.properties.type.const.replaceAll('-',' ')))),body=$('div',{});let draft;
  const draw=()=>{const schema=actions.find(a=>a.properties.type.const===select.value);if(!schema)return;draft=schemaDefault(schema);body.replaceChildren(schemaEditor(schema,draft,v=>draft=v));};
@@ -279,4 +376,4 @@ function universalActions(){
 window.addEventListener('offline',()=>{S.online=false;notify('Connection lost. Changes are disabled until you reconnect.');if(!S.user)loginScreen();});
 window.addEventListener('online',()=>{S.online=true;notify('Connection restored.');run(()=>render());});
 if('serviceWorker'in navigator)navigator.serviceWorker.register('/sw.js').catch(()=>{});
-try{const session=await api('/auth/session');S.user=session.user;S.csrf=session.csrfToken;await render();}catch{loginScreen();}
+try{const session=await api('/auth/session');S.user=session.user;S.csrf=session.csrfToken;await loadMode();await loadTheme();await render();}catch{applyTheme('neon-green-terminal');loginScreen();}

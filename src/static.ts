@@ -2,7 +2,8 @@ import {readFileSync} from 'node:fs';
 import type {FastifyInstance} from 'fastify';
 const files:Record<string,[string,string]>={
  '/app':['index.html','text/html; charset=utf-8'],'/app.js':['app.js','text/javascript; charset=utf-8'],
- '/style.css':['style.css','text/css; charset=utf-8'],'/sw.js':['sw.js','text/javascript; charset=utf-8'],
+ '/style.css':['style.css','text/css; charset=utf-8'],
+ '/theme.js':['theme.js','text/javascript; charset=utf-8'],'/sw.js':['sw.js','text/javascript; charset=utf-8'],
  '/manifest.webmanifest':['manifest.webmanifest','application/manifest+json'],'/icon.svg':['icon.svg','image/svg+xml']
 };
 export const publicAssets=new Set(Object.keys(files));

@@ -78,3 +78,12 @@ Public signup, email verification/recovery, MFA, invitations, account lifecycle 
 # Integrated game extension
 
 The System 01 architecture below is retained as the foundation record. The current game extension adds timelines and composite timeline/entity keys, separate truth/knowledge/belief/memory tables, immutable game events/receipts/saves, story turns and archived Chronicle lineage. `src/game/engine.ts` owns atomic state/event/prose/autosave writes; `actions.ts` and `simulation.ts` resolve gameplay; `epistemics.ts` projects authorized observations before retrieval or narration. `ai.ts` accepts only source-ID ordering, never state patches or model prose. `public/` is a server-backed responsive PWA with no client authority. See GAME_API.md and IMPLEMENTATION_STATUS.md for the implemented contracts and remaining limits.
+
+### System 01 artifact schema registry
+
+Every durable world/campaign artifact is represented in artifact_schema_versions. Migration 008 backfills existing authored records, campaign timelines, entities (including media references), epistemic rows, events, saves, templates and related history. Database insert triggers register future artifacts atomically. The registry records schema version metadata only; canonical state remains in its domain table. Future transformative migrations must backfill the new version transactionally and retain a compatibility reader. Rollback is performed by restoring a validated backup and replaying forward migrations, never by destructive down-migration.
+
+
+## System 03: campaign configuration and canon boundaries
+
+Campaign policy is persisted in campaign_configurations as validated defaults plus explicit overrides. Timeline settings remain simulation state; they are initialized from the resolved campaign configuration and do not replace campaign policy. World canon uses reusable records plus canon_records metadata, normalized links, immutable canon revision snapshots, and explicit campaign_canon_bindings. Each timeline copies its campaign binding at creation/branch/import, and each committed game event records the bound revision in event_canon_bindings. Revisions are never inferred from named cities or other setting labels, so multiple campaigns may use conflicting authored worlds without engine changes.

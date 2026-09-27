@@ -40,7 +40,7 @@ export function buildApp(store:Store,settings:Config,logging:boolean|{write(chun
       return;
     }
     const token=tokenFrom(request.headers.cookie);
-    const actor=(await auth.authenticate(token)); actors.set(request,actor);
+    const authenticated=await auth.authenticate(token); actors.set(request,{...authenticated,requestId:request.id});
     if(unsafe)auth.csrf(token!,request.headers['x-csrf-token']);
   });
   app.addHook('onResponse',async(request,reply)=>{
@@ -99,14 +99,78 @@ export function buildApp(store:Store,settings:Config,logging:boolean|{write(chun
   });
   const campaignInput=z.strictObject({
     worldId:id,name,startingAt:z.iso.datetime(),
-    timezone:z.string().max(100).refine(value=>{try{new Intl.DateTimeFormat('en-US',{timeZone:value});return true;}catch{return false;}},'Invalid timezone')
+    timezone:z.string().max(100).refine(value=>{try{new Intl.DateTimeFormat('en-US',{timeZone:value});return true;}catch{return false;}},'Invalid timezone'),
+    configuration:z.strictObject({overrides:z.unknown()}).optional()
   });
   app.post('/campaigns',async(request,reply)=>{
     reply.code(201);return (await domain.createCampaign(actor(request),campaignInput.parse(request.body),key(request.headers)));
   });
-  app.get('/campaigns',async(request)=>{
+  app.get('/me/mode',async(request)=>domain.userMode(actor(request)));
+  app.post('/me/mode',async(request)=>{
+    const b=z.strictObject({mode:z.enum(['player','developer']),expectedRevision:z.number().int().nonnegative()}).parse(request.body);
+    return domain.setUserMode(actor(request),b);
+  });
+  app.get('/me/theme',async(request)=>domain.userTheme(actor(request)));
+  app.post('/me/theme',async(request)=>{
+    const b=z.strictObject({themeId:z.string().max(80),expectedRevision:z.number().int().nonnegative()}).parse(request.body);
+    return domain.setUserTheme(actor(request),b,key(request.headers));
+  });
+  app.get('/campaigns/:campaignId/theme',async(request)=>{
+    const p=z.strictObject({campaignId:id}).parse(request.params);
+    return domain.campaignTheme(actor(request),p.campaignId);
+  });
+  app.post('/campaigns/:campaignId/theme',async(request)=>{
+    const p=z.strictObject({campaignId:id}).parse(request.params);
+    const b=z.strictObject({recommendedThemeId:z.string().max(80),allowedThemes:z.array(z.string().max(80)).min(1).max(20),expectedRevision:z.number().int().nonnegative(),reason:z.string().trim().max(500).optional()}).parse(request.body);
+    return domain.setCampaignTheme(actor(request),p.campaignId,b,key(request.headers));
+  });  app.get('/continue',async(request)=>{
+    const user=actor(request);
+    return (await store.get("SELECT c.id AS campaign_id,c.name,c.starting_at,c.timezone,m.role,t.id AS timeline_id,t.name AS timeline_name,t.revision,t.clock,(SELECT ge.id FROM game_entities ge WHERE ge.timeline_id=t.id AND ge.kind='character' AND ge.archived_at IS NULL AND json_extract(ge.data_json,'$.playable')=1 AND json_extract(ge.data_json,'$.controllerUserId')=? ORDER BY ge.updated_at DESC,ge.id LIMIT 1) AS character_id,(SELECT ge.name FROM game_entities ge WHERE ge.timeline_id=t.id AND ge.kind='character' AND ge.archived_at IS NULL AND json_extract(ge.data_json,'$.playable')=1 AND json_extract(ge.data_json,'$.controllerUserId')=? ORDER BY ge.updated_at DESC,ge.id LIMIT 1) AS character_name FROM campaigns c JOIN memberships m ON m.campaign_id=c.id LEFT JOIN timelines t ON t.campaign_id=c.id AND t.archived_at IS NULL WHERE m.user_id=? AND c.archived_at IS NULL AND t.id IS NOT NULL ORDER BY COALESCE((SELECT MAX(created_at) FROM game_events ev WHERE ev.timeline_id=t.id),t.created_at,c.updated_at) DESC,t.id LIMIT 1",user.id,user.id,user.id))??null;
+  });  app.get('/campaigns',async(request)=>{
     const after=cursor(request.query);
     return {items:(await store.all('SELECT c.id,c.name,c.starting_at,c.timezone,c.revision,m.role FROM campaigns c JOIN memberships m ON m.campaign_id=c.id WHERE m.user_id=? AND c.archived_at IS NULL AND c.id>? ORDER BY c.id LIMIT 100',actor(request).id,after))};
+  });
+  app.get('/campaigns/:campaignId/config',async(request)=>{
+    const p=z.strictObject({campaignId:id}).parse(request.params);
+    return await domain.campaignConfig(actor(request),p.campaignId);
+  });
+  app.post('/campaigns/:campaignId/config',async(request)=>{
+    const p=z.strictObject({campaignId:id}).parse(request.params);
+    const b=z.strictObject({expectedRevision:z.number().int().positive(),overrides:z.unknown(),reason:z.string().trim().max(500).optional()}).parse(request.body);
+    return await domain.setCampaignConfig(actor(request),p.campaignId,b,key(request.headers));
+  });
+  app.get('/worlds/:worldId/canon/records',async(request)=>{
+    const p=z.strictObject({worldId:id}).parse(request.params);
+    return await domain.canonRecords(actor(request),p.worldId);
+  });
+  app.post('/worlds/:worldId/canon/records',async(request)=>{
+    const p=z.strictObject({worldId:id}).parse(request.params);
+    const b=z.strictObject({recordId:id,slug:z.string().trim().min(1).max(80).regex(/^[a-z0-9][a-z0-9._-]*$/),aliases:z.array(z.string().trim().min(1).max(160)).max(100),sourceStatus:z.enum(['draft','published','archived']),validFrom:z.iso.datetime().nullable(),validUntil:z.iso.datetime().nullable(),expectedRevision:z.number().int().nonnegative().optional(),links:z.array(z.strictObject({targetRecordId:id,relation:z.string().trim().min(1).max(80)})).max(100).optional()}).parse(request.body);
+    return await domain.setCanonRecord(actor(request),p.worldId,b,key(request.headers));
+  });
+  app.get('/worlds/:worldId/canon/revisions',async(request)=>{
+    const p=z.strictObject({worldId:id}).parse(request.params);
+    return await domain.canonRevisions(actor(request),p.worldId);
+  });
+  app.post('/worlds/:worldId/canon/revisions',async(request)=>{
+    const p=z.strictObject({worldId:id}).parse(request.params);
+    const b=z.strictObject({recordIds:z.array(id).max(10000).default([]),note:z.string().trim().max(1000).default('')}).parse(request.body);
+    return await domain.createCanonRevision(actor(request),p.worldId,b,key(request.headers));
+  });
+  app.post('/worlds/:worldId/canon/revisions/:revisionId/status',async(request)=>{
+    const p=z.strictObject({worldId:id,revisionId:id}).parse(request.params);
+    const b=z.strictObject({status:z.enum(['draft','published','archived'])}).parse(request.body);
+    return await domain.setCanonRevisionStatus(actor(request),p.worldId,p.revisionId,b.status,key(request.headers));
+  });
+  app.get('/campaigns/:campaignId/canon',async(request)=>{
+    const p=z.strictObject({campaignId:id}).parse(request.params);
+    await domain.access(actor(request),{type:'campaign',id:p.campaignId});
+    return (await store.get('SELECT canon_revision_id AS canonRevisionId,bound_at AS boundAt,bound_by AS boundBy FROM campaign_canon_bindings WHERE campaign_id=?',p.campaignId))??{canonRevisionId:null};
+  });
+  app.post('/campaigns/:campaignId/canon',async(request)=>{
+    const p=z.strictObject({campaignId:id}).parse(request.params);
+    const b=z.strictObject({canonRevisionId:id.nullable()}).parse(request.body);
+    return await domain.bindCampaignCanon(actor(request),p.campaignId,b.canonRevisionId,key(request.headers));
   });
   app.post('/campaigns/:campaignId/members',async(request)=>{
     const params=z.strictObject({campaignId:id}).parse(request.params);

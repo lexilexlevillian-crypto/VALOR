@@ -5,6 +5,8 @@ import {atLocation,add,advance,emit,isOpen,timeParts} from './simulation.ts';
 import type {Effect} from './simulation.ts';
 import {fact,observe,remember,visible} from './epistemics.ts';
 import {randomSource} from '../random.ts';
+export type CheckOutcome='critical'|'partial'|'success'|'success-at-cost'|'failure-with-information'|'failure-with-consequence'|'impossible'|'no-roll';
+export type CheckRecord={id:string;eventId:string;characterId:string;checkDefinitionId:string|null;attribute:string;skillId:string|null;context:string;difficulty:number;dieValue:number|null;attributeValue:number;skillValue:number;total:number|null;outcome:CheckOutcome;modifiers:{name:string;value:number;sourceId?:string}[];provenance:Record<string,unknown>};
 import {extendedAction} from './extended-actions.ts';
 import {damageVehicle,vehicleOperational,vehiclePenalty as vehiclePenaltyFor} from './vehicle.ts';
 const requireRule=(s:State)=>{if(!s.settings.rules)throw new Error('configure_resolution_rules_first');return s.settings.rules;};
@@ -18,12 +20,42 @@ export function resolveAction(s:State,actorId:string,action:Action,eventId:strin
  const nearby=(target:Entity)=>{assert(target.data.locationId===pc.locationId&&pc.locationId&&visible(s,target,actorId),'target_not_present');};
  const owned=(id:string)=>{const item=getEntity(s,id,'item');assert(item.data.ownerId===actorId&&visible(s,item,actorId),'item_not_owned');return item;};
  const canCommunicate=(target:Entity)=>target.data.locationId===pc.locationId&&!!pc.locationId||s.entities.some(e=>e.kind==='item'&&e.data.category==='phone'&&e.data.ownerId===actorId&&!e.data.locked&&Number(e.data.battery)>0&&(e.data.contacts as {characterId:string}[]).some(c=>c.characterId===target.id));
- const roll=(attribute:keyof typeof pc.attributes,skillId:string|null=null,difficulty?:number)=>{
-  const rule=requireRule(s);const die=rng.integer(rule.dieSides)+1,skill=skillId?(pc.skills[skillId]??0):0;
-  const modifier=pc.traits.reduce((n,id)=>n+Number(data(getEntity(s,id,'trait'),'trait').modifiers[attribute]??0),0)+s.entities.filter(e=>e.kind==='injury'&&!e.archived&&e.data.characterId===actorId).reduce((n,e)=>n+Number(data(e,'injury').modifiers[attribute]??0),0);
-  const target=difficulty??rule.threshold,total=die+pc.attributes[attribute]+skill+modifier;
-  say('Check: '+total+' against '+target+'. '+(total>=target?'Success.':'Failure.'),'check');
-  return total>=target;
+ const checks:CheckRecord[]=[];
+ const classify=(margin:number,bands:{criticalMargin:number;successAtCostMargin:number;partialFailureMargin:number;failureInformationMargin:number},mode:'legacy-binary'|'configured-bands'):CheckOutcome=>{
+  if(mode==='legacy-binary')return margin>=0?'success':'failure-with-consequence';
+  if(margin>=bands.criticalMargin)return 'critical';
+  if(margin>=0)return margin<=bands.successAtCostMargin?'success-at-cost':'success';
+  if(margin>=bands.partialFailureMargin)return 'partial';
+  if(margin>=bands.failureInformationMargin)return 'failure-with-information';
+  return 'failure-with-consequence';
+ };
+ const roll=(attribute:keyof typeof pc.attributes,skillId:string|null=null,difficulty?:number,checkId:string|null=null,context='')=>{
+  const rule=requireRule(s),definition=checkId?getEntity(s,checkId,'checkDefinition'):null;
+  if(definition)assert(visible(s,definition,actorId),'check_unavailable');
+  const check=definition?data(definition,'checkDefinition'):null;
+  const chosenAttribute=(check?.attribute??attribute) as keyof typeof pc.attributes,chosenSkill=check?.skillId??skillId;
+  const target=Number(check?.difficulty??difficulty??rule.threshold),attributeValue=Number(pc.attributes[chosenAttribute]??0),skillValue=chosenSkill?Number(pc.skills[chosenSkill]??0):0;
+  const modifiers:{name:string;value:number;sourceId?:string}[]=[];
+  for(const traitId of pc.traits){const traitEntity=getEntity(s,traitId,'trait'),trait=data(traitEntity,'trait'),value=Number(trait.modifiers[chosenAttribute]??0);if(value)modifiers.push({name:'Trait: '+traitEntity.name,value,sourceId:traitId});}
+  for(const injury of s.entities.filter(e=>e.kind==='injury'&&!e.archived&&e.data.characterId===actorId)){const value=Number(data(injury,'injury').modifiers[chosenAttribute]??0);if(value)modifiers.push({name:'Condition: '+injury.name,value,sourceId:injury.id});}
+  const contextName=context||String(check?.context??''),contextValue=Number(check?.contextModifiers?.[contextName]??0);if(contextName&&contextValue)modifiers.push({name:'Context: '+contextName,value:contextValue});
+  const conditionValue=Number(check?.conditionModifiers?.[pc.condition]??0);if(conditionValue)modifiers.push({name:'Condition state: '+pc.condition,value:conditionValue});
+  const requiredTraits=(check?.requiredTraits??[]) as string[],missingTrait=requiredTraits.find(id=>!pc.traits.includes(id));
+  const equipmentTags=(check?.requiredEquipmentTags??[]) as string[],equippedTags=new Set(s.entities.filter(e=>e.kind==='item'&&!e.archived&&e.data.ownerId===actorId&&e.data.equipped).flatMap(e=>e.data.tags as string[])),missingEquipment=equipmentTags.find(tag=>!equippedTags.has(tag));
+  const equipmentValue=missingTrait||missingEquipment?0:Number(check?.equipmentModifier??0);if(equipmentValue)modifiers.push({name:'Equipment',value:equipmentValue});
+  const formula=(check?.formula??rule.formula) as 'additive-die'|'additive-no-die'|'authored-total',mode=(check?.outcomeMode??rule.outcomeMode) as 'legacy-binary'|'configured-bands',bands=check?.outcomeBands??rule.outcomeBands;
+  let dieValue:number|null=null,total:number|null=null,outcome:CheckOutcome;
+  if(missingTrait||missingEquipment){outcome='impossible';}
+  else if(check?.rollMode==='no-roll'){outcome='no-roll';}
+  else if(formula==='authored-total'){outcome='no-roll';}
+  else{
+   dieValue=formula==='additive-die'?rng.integer(rule.dieSides)+1:0;
+   total=dieValue+attributeValue+skillValue+modifiers.reduce((sum,entry)=>sum+entry.value,0);
+   outcome=classify(total-target,bands,mode);
+  }
+  checks.push({id:randomUUID(),eventId,characterId:actorId,checkDefinitionId:checkId,attribute:String(chosenAttribute),skillId:chosenSkill,context:contextName,difficulty:target,dieValue,attributeValue,skillValue,total,outcome,modifiers,provenance:{formula,dieSides:formula==='additive-die'?rule.dieSides:null,ruleOutcomeMode:mode,condition:pc.condition,requiredTraits,equipmentTags}});
+  say(outcome==='impossible'?'Check impossible: authored requirement not met.':outcome==='no-roll'?'No roll: authored rule provided no uncertainty.':'Check: '+String(total)+' against '+target+'. Outcome: '+outcome+'.','check');
+  return ['critical','success','success-at-cost'].includes(outcome);
  };
  const activeCombat=()=>s.entities.find(e=>e.kind==='combat'&&!e.archived&&e.data.active&&(e.data.participants as string[]).includes(actorId));
  const combatTurn=()=>{const combat=activeCombat();assert(combat,'combat_not_active');const d=data(combat!,'combat');assert(d.participants[d.turnIndex]===actorId,'not_your_turn');return combat!;};
@@ -186,8 +218,20 @@ export function resolveAction(s:State,actorId:string,action:Action,eventId:strin
   const target=getEntity(s,action.targetId,'character');nearby(target);assert(s.knowledge.some(k=>k.observerId===actorId&&k.factId===action.factId),'fact_unknown');
   observe(s,target.id,action.factId,'told-by:'+actorId+':'+eventId);say('Information shared with '+target.name+'.');minutes=1;break;
  }
- case 'check':roll(action.attribute,action.skillId);break;
- case 'combat':{
+ case 'check':roll(action.attribute,action.skillId,undefined,action.checkId,action.context);break;
+ case 'train':{
+  const targetSkill=action.skillId?getEntity(s,action.skillId,'skill'):null,targetDefinition=targetSkill?data(targetSkill,'skill'):null;
+  const attribute=action.attribute,trainingConfig=targetDefinition?.training??{minutesPerPoint:s.settings.advancement.attributeMinutesPerPoint,practiceMinutesPerPoint:0,costCentsPerHour:s.settings.advancement.attributeCostCentsPerHour,trainerRequired:false,requiresMilestone:false};
+  if(targetSkill){assert(targetSkill.visibility!=='creator'&&visible(s,targetSkill,actorId),'skill_unavailable');for(const prerequisite of targetDefinition!.prerequisites)assert(Number(pc.skills[prerequisite]??0)>0,'skill_prerequisite_required');if(trainingConfig.trainerRequired){assert(action.trainerId&&action.trainerId!==actorId,'trainer_required');const trainer=getEntity(s,action.trainerId!,'character');assert(trainer.data.locationId===pc.locationId&&visible(s,trainer,actorId),'trainer_unavailable');}}
+  if(attribute)assert(!targetSkill,'training_target_required');
+  const key=targetSkill?.id??'attribute:'+attribute,existing=pc.training.find(t=>t.skillId===(targetSkill?.id??null)&&t.attribute===attribute&&t.status==='active');
+  const record=existing??{id:randomUUID(),skillId:targetSkill?.id??null,attribute:attribute??null,trainerId:action.trainerId,source:targetSkill?.name??attribute!,startedAt:s.clock,minutesInvested:0,requiredMinutes:trainingConfig.minutesPerPoint,practiceMinutes:0,requiredPracticeMinutes:trainingConfig.practiceMinutesPerPoint,costPaidCents:0,requiredCostCents:Math.ceil(action.minutes/60)*trainingConfig.costCentsPerHour,milestoneReached:action.milestoneReached,status:'active',completedAt:null,notes:''};
+  if(!existing)pc.training.push(record);
+  assert(record.milestoneReached||!trainingConfig.requiresMilestone,'training_milestone_required');
+  const cost=Math.ceil(action.minutes/60)*trainingConfig.costCentsPerHour;assert(pc.cash>=cost,'insufficient_training_funds');pc.cash-=cost;record.costPaidCents+=cost;record.minutesInvested+=action.minutes;record.practiceMinutes+=action.minutes;
+  const current=targetSkill?Number(pc.skills[targetSkill.id]??0):Number(pc.attributes[attribute!]??0),maximum=targetSkill?targetDefinition!.scale.max:s.settings.attributeScale.max;
+  if(record.minutesInvested>=record.requiredMinutes&&record.practiceMinutes>=record.requiredPracticeMinutes&&record.costPaidCents>=record.requiredCostCents){const next=Math.min(maximum,current+1);if(targetSkill)pc.skills[targetSkill.id]=next;else pc.attributes[attribute!]=next;record.status='completed';record.completedAt=s.clock;say((targetSkill?.name??attribute)+' advanced to '+next+'.');}else say((targetSkill?.name??attribute)+' training recorded; progress is '+record.minutesInvested+'/'+record.requiredMinutes+' minutes.');minutes=action.minutes;break;
+ } case 'combat':{
   requireRule(s);const target=getEntity(s,action.targetId,'character');nearby(target);assert(target.id!==actorId&&!activeCombat(),'combat_unavailable');
   const order=[actor,target].sort((a,b)=>Number(b.data.attributes&& (b.data.attributes as Record<string,number>).Agility)-Number(a.data.attributes&&(a.data.attributes as Record<string,number>).Agility)||a.id.localeCompare(b.id));
   add(s,'combat','Conflict',{participants:order.map(e=>e.id)},'campaign');say('Conflict begins. Initiative is recorded.');break;
@@ -328,5 +372,5 @@ export function resolveAction(s:State,actorId:string,action:Action,eventId:strin
   }combat.data=c as Entity['data'];
  }
  for(const effect of effects)for(const observer of effect.observers)remember(s,observer,effect.text,eventId,0.5);
- return {effects,draws:rng.draws};
+ return {effects,draws:rng.draws,checks};
 }

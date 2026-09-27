@@ -44,4 +44,8 @@ SQLite is a single-instance foundation. Production hosting/durable storage and a
 
 Player-visible epistemic models are deferred to System 04; foundation visibility grants are not character knowledge. Gameplay math, canon, content policies and jurisdiction are not invented. Public account signup/recovery, MFA/invitations, account lifecycle UI, backup scheduling/retention/key custody, proxy trust, scalable notification workers and production monitoring await their own authorized scope.
 
-The single next implementation priority is System 02: client shell, Chronicle, navigation and PWA. Stop here until explicitly instructed.
+This System 01 pass stops here pending approval. System 02 remains the next numbered system only after an explicit user request.
+
+## Completion pass: artifact schema metadata
+
+Migration 008 adds the artifact_schema_versions registry and insert triggers. Existing durable world/campaign records are backfilled with schema version 1; future records, timelines, entities, media references, epistemic rows, events, saves, templates and related history register atomically. The registry is metadata only and never replaces canonical domain state. Focused tests cover additive migration, restart/backup recovery, and transaction rollback.

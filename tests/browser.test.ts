@@ -24,8 +24,11 @@ test('iPad shell, keyboard login, Creator form, long prose, reduced motion and o
   await page.getByRole('button',{name:'Enter Valor'}).click();
   await page.getByRole('heading',{name:'Choose your story.'}).waitFor();
   await page.getByRole('button',{name:'Open campaign'}).click();
-  await page.getByRole('button',{name:'Open Creator'}).click();
-  await page.getByRole('heading',{name:'Creator.'}).waitFor();
+  await page.getByRole('button',{name:'Switch to Developer Mode'}).click();
+  await page.getByRole('heading',{name:'Enter Developer Mode?'}).waitFor();
+  await page.getByRole('button',{name:'Confirm Developer Mode'}).click();
+  await page.getByRole('button',{name:'Open Developer Studio'}).click();
+  await page.getByRole('heading',{name:'Developer Studio.'}).waitFor();
   await page.getByLabel('Record type',{exact:true}).selectOption('location');
   await page.getByRole('button',{name:'New record',exact:true}).click();
   await page.getByLabel('Name',{exact:true}).fill('Browser-authored room');

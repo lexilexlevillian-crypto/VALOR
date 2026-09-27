@@ -34,7 +34,7 @@ export const eventSchema = z.strictObject({
   rngVersion:z.literal('hmac-sha256-v1'), createdAt:z.iso.datetime()
 });
 export type DomainEvent = z.infer<typeof eventSchema>;
-export type Actor = {id:string; role:'admin'|'creator'|'player'};
+export type Actor = {id:string; role:'admin'|'creator'|'player'; requestId?:string};
 export class Fault extends Error {
   status:number; code:string;
   constructor(status:number, code:string) { super(code); this.status=status; this.code=code; }

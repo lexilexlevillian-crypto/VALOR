@@ -55,11 +55,13 @@ export function project(s:State,e:Entity,observerId:string):Entity {
  const own=e.id===observerId||e.data.ownerId===observerId;
  if(e.kind==='character'&&!own){
   const d=data(e,'character'),actor=data(getEntity(s,observerId),'character');
-  copy.data={description:d.description,appearance:d.appearance,identity:{pronouns:d.identity.pronouns??''},locationId:d.locationId===actor.locationId?d.locationId:null,condition:d.condition};
+  copy.data={description:d.description,legalName:d.legalName,aliases:d.aliases,sex:d.sex,gender:d.gender,pronouns:d.pronouns,identity:d.identity,
+   appearance:d.appearance,heightCm:d.heightCm,build:d.build,hair:d.hair,eyes:d.eyes,complexion:d.complexion,features:d.features,scars:d.scars,tattoos:d.tattoos,disabilities:d.disabilities,
+   presentation:d.presentation,locationId:d.locationId===actor.locationId?d.locationId:null,condition:d.condition,characterSchemaVersion:d.characterSchemaVersion,sections:d.sections};
  }else{
   for(const k of ['secrets','instructions','hiddenSolution','embedding','pending','preferences','goals','fears','heat','forensicFindings'])delete copy.data[k];
   if(e.kind==='relationship'){for(const k of ['attraction','desire','affection','trust','respect','attachment','familiarity','jealousy','resentment','fear','loyalty','dependency'])delete copy.data[k];}
-  if(!own)for(const k of ['cash','contacts','serial','registration','stock','suspectIds','custody','schedule','lastSimulated','mood'])delete copy.data[k];
+  if(!own)for(const k of ['cash','contacts','serial','registration','stock','suspectIds','custody','schedule','lastSimulated','mood','goals','fears','notes','familyBackground','cultureContext','beliefsContext'])delete copy.data[k];
   if(e.kind==='faction')for(const k of ['memberIds','reputation','treasuryCents','groupPolicy','lastGroupAt','dispatchPolicy'])delete copy.data[k];
   if(e.kind==='quest')delete copy.data.branches;
   if(e.kind==='character'&&!s.settings.reproductiveHealth)delete copy.data.reproductive;
@@ -67,12 +69,12 @@ export function project(s:State,e:Entity,observerId:string):Entity {
   if(e.kind==='character')delete copy.data.plans;
   if(e.kind==='location')copy.data.exits=(copy.data.exits as {to:string;interruption?:unknown}[]).filter(exit=>s.entities.some(target=>target.id===exit.to&&visible(s,target,observerId))).map(({interruption,...route})=>route) as never;
  }
- const sections=(copy.data.sections??[]) as {id:string;parentId:string|null;visibility?:string;fields:{visibility:string}[]}[];
+ const sections=(copy.data.sections??[]) as {id:string;parentId:string|null;visibility?:string;archived?:boolean;fields:{visibility:string;archived?:boolean}[]}[];
  // Custom section containers reveal only those fields explicitly allowed to this observer.
  const canSee=(v:string|undefined)=>v==='campaign'||v==='owner'&&own||v==='knowledge'&&knows(s,observerId,e.id);
- const sectionVisible=(section:typeof sections[number]):boolean=>!!canSee(section.visibility)&&(!section.parentId||!!sections.find(p=>p.id===section.parentId&&sectionVisible(p)));
- const allowed=new Set(sections.filter(section=>sectionVisible(section)&&section.fields.some(f=>canSee(f.visibility))).map(x=>x.id));
- copy.data.sections=sections.filter(section=>allowed.has(section.id)).map(section=>({...section,fields:section.fields.filter(f=>f.visibility==='campaign'||f.visibility==='owner'&&own||f.visibility==='knowledge'&&knows(s,observerId,e.id))})) as never;
+ const sectionVisible=(section:typeof sections[number]):boolean=>!section.archived&&!!canSee(section.visibility)&&(!section.parentId||!!sections.find(p=>p.id===section.parentId&&sectionVisible(p)));
+ const allowed=new Set(sections.filter(section=>sectionVisible(section)&&section.fields.some(f=>!f.archived&&canSee(f.visibility))).map(x=>x.id));
+ copy.data.sections=sections.filter(section=>allowed.has(section.id)).map(section=>({...section,fields:section.fields.filter(f=>!f.archived&&(f.visibility==='campaign'||f.visibility==='owner'&&own||f.visibility==='knowledge'&&knows(s,observerId,e.id)))})) as never;
  return copy;
 }
 export function observerView(s:State,observerId:string){

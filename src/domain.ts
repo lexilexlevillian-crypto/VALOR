@@ -2,12 +2,16 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { Store } from './db.ts';
 import { ensure, eventSchema, commandSchema } from './contracts.ts';
 import type { Actor, Command, DomainEvent, Scope } from './contracts.ts';
+import {campaignConfigOverridesSchema,defaultCampaignConfig,parseStoredCampaignConfig,resolveCampaignConfig} from './campaign-config.ts';
+import {defaultThemeId,themeIdSchema,themeIds} from './theme.ts';
 
 type RecordRow = {id:string; world_id:string|null; campaign_id:string|null; owner_id:string; kind:string; name:string; visibility:string; revision:number; archived_at:string|null};
 type SectionRow = {id:string; record_id:string; parent_id:string|null; name:string; position:number; visibility:string; archived_at:string|null};
 type FieldRow = {id:string; record_id:string; section_id:string; name:string; position:number; visibility:string; value_type:string; archived_at:string|null};
 type ScopeAccess = {role:string; owner_id:string; revision:number};
 type Receipt = {request_hash:string; response_json:string};
+type AuditContext = {reason?:string; before?:unknown; after?:unknown};
+const auditJson=(value:unknown)=>value===undefined||value===null?null:JSON.stringify(value);
 export type CommandResult = {id:string; revision:number; eventId:string; sectionId?:string; fieldId?:string};
 const clock = () => new Date().toISOString();
 function canonical(value:unknown):string {
@@ -47,7 +51,7 @@ export class Domain {
     ensure(row.request_hash===digest(body),409,'idempotency_conflict');
     return JSON.parse(row.response_json);
   }
-  private async finish(scope:Scope, actor:Actor, key:string, body:unknown, result:Omit<CommandResult,'eventId'>, type:string, payload:Record<string,unknown>, receiptScope=scope.id):Promise<CommandResult> {
+  private async finish(scope:Scope, actor:Actor, key:string, body:unknown, result:Omit<CommandResult,'eventId'>, type:string, payload:Record<string,unknown>, receiptScope=scope.id, audit:AuditContext={before:undefined,after:payload,reason:type}):Promise<CommandResult> {
     const now=clock();
     const event=eventSchema.parse({
       id:randomUUID(),schemaVersion:1,actorId:actor.id,aggregateId:result.id,aggregateRevision:result.revision,
@@ -55,7 +59,9 @@ export class Domain {
     });
     const world=scope.type==='world'?scope.id:null, campaign=scope.type==='campaign'?scope.id:null;
     (await this.store.run('INSERT INTO domain_events VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',event.id,1,world,campaign,actor.id,result.id,result.revision,type,JSON.stringify(event.payload),event.seed,event.rngVersion,now));
-    (await this.store.run('INSERT INTO audit_log VALUES (?,?,?,?,?,?,?,?)',randomUUID(),actor.id,world,campaign,type,result.id,event.id,now));
+    const auditContext=(await this.store.get<{name:string}>("SELECT name FROM pragma_table_info('audit_log') WHERE name='request_id'"));
+    if(auditContext) (await this.store.run('INSERT INTO audit_log(id,actor_id,world_id,campaign_id,action,target_id,event_id,created_at,request_id,reason,before_json,after_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',randomUUID(),actor.id,world,campaign,type,result.id,event.id,now,actor.requestId??null,audit.reason??null,auditJson(audit.before),auditJson(audit.after)));
+    else (await this.store.run('INSERT INTO audit_log(id,actor_id,world_id,campaign_id,action,target_id,event_id,created_at) VALUES (?,?,?,?,?,?,?,?)',randomUUID(),actor.id,world,campaign,type,result.id,event.id,now));
     (await this.store.run('INSERT INTO outbox(event_id,created_at) VALUES (?,?)',event.id,now));
     const response={...result,eventId:event.id};
     (await this.store.run('INSERT INTO command_receipts VALUES (?,?,?,?,?,?,?)',receiptScope,actor.id,key,digest(body),JSON.stringify(response),event.id,now));
@@ -72,17 +78,173 @@ export class Domain {
       return (await this.finish({type:'world',id},actor,key,body,{id,revision:1},'world.created',{name},'world.create'));
     }));
   }
-  async createCampaign(actor:Actor, input:{worldId:string;name:string;startingAt:string;timezone:string},key:string) {
+  async createCampaign(actor:Actor, input:{worldId:string;name:string;startingAt:string;timezone:string;configuration?:{overrides?:unknown}},key:string) {
     return (await this.store.transaction(async ()=>{
       (await this.access(actor,{type:'world',id:input.worldId},true));
       const replay=(await this.replay('campaign.create',actor,key,input)); if(replay) return replay;
-      const id=randomUUID(), now=clock();
+      const id=randomUUID(), now=clock(), defaults=defaultCampaignConfig(input.startingAt,input.timezone), overrides=campaignConfigOverridesSchema.parse(input.configuration?.overrides??{});
+      resolveCampaignConfig(defaults,overrides);
       (await this.store.run('INSERT INTO campaigns(id,owner_id,source_world_id,name,starting_at,timezone,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)',id,actor.id,input.worldId,input.name,input.startingAt,input.timezone,now,now));
+      (await this.store.run('INSERT INTO campaign_configurations(campaign_id,defaults_json,overrides_json,created_at,updated_at,updated_by) VALUES (?,?,?,?,?,?)',id,JSON.stringify(defaults),JSON.stringify(overrides),now,now,actor.id));
+      (await this.store.run('INSERT INTO campaign_theme_settings(campaign_id,recommended_theme_id,allowed_themes_json,created_at,updated_at,updated_by) VALUES (?,?,?,?,?,?)',id,defaultThemeId,JSON.stringify([...themeIds]),now,now,actor.id));
       (await this.store.run('INSERT INTO memberships(campaign_id,user_id,role,created_at,updated_at) VALUES (?,?,?,?,?)',id,actor.id,'creator',now,now));
       return (await this.finish({type:'campaign',id},actor,key,input,{id,revision:1},'campaign.created',input,'campaign.create'));
     }));
   }
-  async setMember(actor:Actor,campaignId:string,input:{userId:string;role:'admin'|'creator'|'player'|'observer'|null;expectedRevision:number},key:string) {
+  async campaignConfig(actor:Actor,campaignId:string){
+    (await this.access(actor,{type:'campaign',id:campaignId}));
+    const row=await this.store.get<{defaults_json:string;overrides_json:string;revision:number;schema_version:number}>('SELECT defaults_json,overrides_json,revision,schema_version FROM campaign_configurations WHERE campaign_id=?',campaignId);
+    ensure(row,404,'campaign_config_unavailable');
+    const stored=parseStoredCampaignConfig(row);
+    return {...stored,resolved:resolveCampaignConfig(stored.defaults,stored.overrides)};
+  }
+  async setCampaignConfig(actor:Actor,campaignId:string,input:{expectedRevision:number;overrides:unknown;reason?:string},key:string){
+    const scope:Scope={type:'campaign',id:campaignId};
+    return await this.store.transaction(async()=>{
+      const access=await this.access(actor,scope,true),body={type:'campaign.configuration',...input};
+      const replay=await this.replay(campaignId,actor,key,body);if(replay)return replay;
+      const row=await this.store.get<{defaults_json:string;overrides_json:string;revision:number;schema_version:number}>('SELECT defaults_json,overrides_json,revision,schema_version FROM campaign_configurations WHERE campaign_id=?',campaignId);
+      ensure(row,404,'campaign_config_unavailable');ensure(row.revision===input.expectedRevision,409,'revision_conflict');
+      const stored=parseStoredCampaignConfig(row),overrides=campaignConfigOverridesSchema.parse(input.overrides),resolved=resolveCampaignConfig(stored.defaults,overrides),before={defaults:stored.defaults,overrides:stored.overrides,resolved};
+      const now=clock(),configRevision=row.revision+1,campaignRevision=access.revision+1;
+      await this.store.run('UPDATE campaign_configurations SET overrides_json=?,revision=?,updated_at=?,updated_by=? WHERE campaign_id=?',JSON.stringify(overrides),configRevision,now,actor.id,campaignId);
+      await this.store.run('UPDATE campaigns SET revision=revision+1,updated_at=? WHERE id=?',now,campaignId);
+      const result=await this.finish(scope,actor,key,body,{id:campaignId,revision:campaignRevision},'campaign.configuration.updated',{configRevision,resolved},campaignId,{before,after:{overrides,resolved},reason:input.reason??'campaign.configuration'});
+      return {...result,configRevision};
+    });
+  }
+  private async canonSnapshot(recordId:string){
+    return {
+      record:await this.store.get('SELECT * FROM records WHERE id=?',recordId),
+      canon:await this.store.get('SELECT * FROM canon_records WHERE record_id=?',recordId),
+      sections:await this.store.all('SELECT * FROM sections WHERE record_id=? ORDER BY id',recordId),
+      fields:await this.store.all('SELECT f.*,v.value_json,v.revision AS value_revision FROM fields f LEFT JOIN field_values v ON f.id=v.field_id WHERE f.record_id=? ORDER BY f.id',recordId),
+      links:await this.store.all('SELECT * FROM canon_record_links WHERE source_record_id=? OR target_record_id=? ORDER BY source_record_id,target_record_id,relation',recordId,recordId)
+    };
+  }
+  async canonRecords(actor:Actor,worldId:string){
+    await this.access(actor,{type:'world',id:worldId});
+    const rows=await this.store.all<{record_id:string;slug:string;aliases_json:string;source_status:string;valid_from:string|null;valid_until:string|null;revision:number;updated_at:string}>('SELECT record_id,slug,aliases_json,source_status,valid_from,valid_until,revision,updated_at FROM canon_records WHERE world_id=? AND archived_at IS NULL ORDER BY slug,record_id',worldId);
+    return {items:rows.map(row=>({...row,aliases:JSON.parse(row.aliases_json)}))};
+  }
+  async setCanonRecord(actor:Actor,worldId:string,input:{recordId:string;slug:string;aliases:string[];sourceStatus:'draft'|'published'|'archived';validFrom:string|null;validUntil:string|null;expectedRevision?:number;links?:{targetRecordId:string;relation:string}[]},key:string){
+    const scope:Scope={type:'world',id:worldId};
+    return await this.store.transaction(async()=>{
+      await this.access(actor,scope,true);
+      const body={type:'canon.record.set',...input},replay=await this.replay(worldId,actor,key,body);if(replay)return replay;
+      const record=await this.store.get<{id:string;revision:number}>('SELECT id,revision FROM records WHERE id=? AND world_id=?',input.recordId,worldId);ensure(record,404,'not_found');
+      const current=await this.store.get<{revision:number}>('SELECT revision FROM canon_records WHERE record_id=? AND world_id=?',input.recordId,worldId);
+      if(current)ensure(current.revision===input.expectedRevision,409,'revision_conflict');else ensure(input.expectedRevision===undefined||input.expectedRevision===0,409,'revision_conflict');
+      const aliases=JSON.stringify([...new Set(input.aliases.map(value=>value.trim()).filter(Boolean))]),now=clock(),revision=(current?.revision??0)+1;
+      const before=current?await this.canonSnapshot(input.recordId):undefined;
+      if(current) await this.store.run('UPDATE canon_records SET slug=?,aliases_json=?,source_status=?,valid_from=?,valid_until=?,revision=?,updated_at=?,updated_by=?,archived_at=? WHERE record_id=?',input.slug,aliases,input.sourceStatus,input.validFrom,input.validUntil,revision,now,actor.id,input.sourceStatus==='archived'?now:null,input.recordId);
+      else await this.store.run('INSERT INTO canon_records(record_id,world_id,slug,aliases_json,source_status,valid_from,valid_until,revision,created_at,updated_at,created_by,updated_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',input.recordId,worldId,input.slug,aliases,input.sourceStatus,input.validFrom,input.validUntil,revision,now,now,actor.id,actor.id);
+      await this.store.run('DELETE FROM canon_record_links WHERE source_record_id=?',input.recordId);
+      for(const link of input.links??[]){ensure(link.targetRecordId!==input.recordId,400,'canon_self_link');ensure(await this.store.get('SELECT id FROM records WHERE id=? AND world_id=?',link.targetRecordId,worldId),404,'not_found');await this.store.run('INSERT INTO canon_record_links VALUES (?,?,?,?)',input.recordId,link.targetRecordId,link.relation,now);}
+      const after=await this.canonSnapshot(input.recordId),eventAggregate=randomUUID();
+      const result=await this.finish(scope,actor,key,body,{id:eventAggregate,revision},'canon.record.updated',{recordId:input.recordId,revision},worldId,{before,after,reason:'canon.record.edit'});
+      return {...result,recordId:input.recordId};
+    });
+  }
+  async canonRevisions(actor:Actor,worldId:string){
+    await this.access(actor,{type:'world',id:worldId});
+    return {items:await this.store.all('SELECT id,revision,status,note,created_by,created_at,published_at,archived_at FROM canon_revisions WHERE world_id=? ORDER BY revision DESC',worldId)};
+  }
+  async createCanonRevision(actor:Actor,worldId:string,input:{recordIds:string[];note:string},key:string){
+    const scope:Scope={type:'world',id:worldId};
+    return await this.store.transaction(async()=>{
+      await this.access(actor,scope,true);const body={type:'canon.revision.create',...input},replay=await this.replay(worldId,actor,key,body);if(replay)return replay;
+      const ids=input.recordIds.length?input.recordIds:(await this.store.all<{record_id:string}>('SELECT record_id FROM canon_records WHERE world_id=? AND source_status<>? AND archived_at IS NULL ORDER BY record_id',worldId,'archived')).map(row=>row.record_id);
+      const records=[] as {id:string;revision:number;slug:string;status:string}[];
+      for(const recordId of ids){const row=await this.store.get<{id:string;revision:number;name:string}>('SELECT id,revision,name FROM records WHERE id=? AND world_id=? AND archived_at IS NULL',recordId,worldId);ensure(row,404,'not_found');const meta=await this.store.get<{slug:string;source_status:string}>('SELECT slug,source_status FROM canon_records WHERE record_id=? AND world_id=?',recordId,worldId);ensure(meta,400,'canon_metadata_required');records.push({id:row.id,revision:row.revision,slug:meta.slug,status:meta.source_status});}
+      const prior=await this.store.get<{revision:number}>('SELECT COALESCE(MAX(revision),0) AS revision FROM canon_revisions WHERE world_id=?',worldId),revision=(prior?.revision??0)+1,id=randomUUID(),now=clock(),manifest={revision,records};
+      await this.store.run('INSERT INTO canon_revisions(id,world_id,revision,status,note,manifest_json,created_by,created_at) VALUES (?,?,?,?,?,?,?,?)',id,worldId,revision,'draft',input.note,JSON.stringify(manifest),actor.id,now);
+      for(const record of records)await this.store.run('INSERT INTO canon_revision_records VALUES (?,?,?,?)',id,record.id,record.revision,JSON.stringify(await this.canonSnapshot(record.id)));
+      const result=await this.finish(scope,actor,key,body,{id,revision},'canon.revision.created',manifest,worldId,{after:manifest,reason:'canon.revision.create'});
+      return {...result,canonRevisionId:id};
+    });
+  }
+  async setCanonRevisionStatus(actor:Actor,worldId:string,revisionId:string,status:'draft'|'published'|'archived',key:string){
+    const scope:Scope={type:'world',id:worldId};
+    return await this.store.transaction(async()=>{
+      await this.access(actor,scope,true);const row=await this.store.get<{id:string;revision:number;status:string}>('SELECT id,revision,status FROM canon_revisions WHERE id=? AND world_id=?',revisionId,worldId);ensure(row,404,'not_found');
+      const body={type:'canon.revision.status',revisionId,status},replay=await this.replay(worldId,actor,key,body);if(replay)return replay;
+      const now=clock(),before={status:row.status};await this.store.run('UPDATE canon_revisions SET status=?,published_at=?,archived_at=? WHERE id=?',status,status==='published'?now:null,status==='archived'?now:null,revisionId);
+      const result=await this.finish(scope,actor,key,body,{id:randomUUID(),revision:row.revision},'canon.revision.status.updated',{revisionId,status},worldId,{before,after:{status},reason:'canon.revision.status'});
+      return {...result,canonRevisionId:revisionId};
+    });
+  }
+  async bindCampaignCanon(actor:Actor,campaignId:string,canonRevisionId:string|null,key:string){
+    const scope:Scope={type:'campaign',id:campaignId};
+    return await this.store.transaction(async()=>{
+      const access=await this.access(actor,scope,true),campaign=await this.store.get<{source_world_id:string}>('SELECT source_world_id FROM campaigns WHERE id=?',campaignId);ensure(campaign,404,'not_found');
+      if(canonRevisionId){const revision=await this.store.get<{id:string;status:string}>('SELECT id,status FROM canon_revisions WHERE id=? AND world_id=?',canonRevisionId,campaign.source_world_id);ensure(revision,404,'not_found');ensure(revision.status==='published',409,'canon_revision_not_published');}
+      const body={type:'campaign.canon.bind',canonRevisionId},replay=await this.replay(campaignId,actor,key,body);if(replay)return replay;
+      const before=await this.store.get('SELECT * FROM campaign_canon_bindings WHERE campaign_id=?',campaignId),now=clock();
+      if(canonRevisionId)await this.store.run('INSERT INTO campaign_canon_bindings VALUES (?,?,?,?) ON CONFLICT(campaign_id) DO UPDATE SET canon_revision_id=excluded.canon_revision_id,bound_at=excluded.bound_at,bound_by=excluded.bound_by',campaignId,canonRevisionId,now,actor.id);
+      else await this.store.run('DELETE FROM campaign_canon_bindings WHERE campaign_id=?',campaignId);
+      await this.store.run('UPDATE campaigns SET revision=revision+1,updated_at=? WHERE id=?',now,campaignId);
+      const result=await this.finish(scope,actor,key,body,{id:campaignId,revision:access.revision+1},'campaign.canon.bound',{canonRevisionId},campaignId,{before,after:{canonRevisionId},reason:'campaign.canon.bind'});
+      return {...result,canonRevisionId};
+    });
+  }
+  async userMode(actor:Actor){
+    const user=await this.active(actor),row=await this.store.get<{mode:string;revision:number}>('SELECT mode,revision FROM user_mode_preferences WHERE user_id=?',actor.id);
+    const developerAllowed=privileged(user.role),stored=row?.mode==='developer'&&developerAllowed?'developer':'player';
+    return {mode:stored,revision:row?.revision??0,developerAllowed};
+  }
+  async setUserMode(actor:Actor,input:{mode:'player'|'developer';expectedRevision:number}){
+    const user=await this.active(actor);
+    ensure(input.mode==='player'||input.mode==='developer',400,'invalid_mode');
+    ensure(input.mode!=='developer'||privileged(user.role),403,'developer_mode_forbidden');
+    return await this.store.transaction(async()=>{
+      const row=await this.store.get<{mode:string;revision:number}>('SELECT mode,revision FROM user_mode_preferences WHERE user_id=?',actor.id);
+      const currentRevision=row?.revision??0;ensure(currentRevision===input.expectedRevision,409,'revision_conflict');
+      const now=clock(),revision=currentRevision+1,before={mode:row?.mode??'player',revision:currentRevision};
+      await this.store.run('INSERT INTO user_mode_preferences(user_id,mode,revision,created_at,updated_at) VALUES (?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET mode=excluded.mode,revision=excluded.revision,updated_at=excluded.updated_at',actor.id,input.mode,revision,now,now);
+      await this.store.run('INSERT INTO audit_log(id,actor_id,action,target_id,created_at,request_id,reason,before_json,after_json) VALUES (?,?,?,?,?,?,?,?,?)',randomUUID(),actor.id,'user.mode.updated',actor.id,now,actor.requestId??null,'mode.switch',auditJson(before),auditJson({mode:input.mode,revision}));
+      return {mode:input.mode,revision,developerAllowed:privileged(user.role)};
+    });
+  }
+  async userTheme(actor:Actor){
+    await this.active(actor);
+    const row=await this.store.get<{theme_id:string;revision:number}>('SELECT theme_id,revision FROM user_theme_preferences WHERE user_id=?',actor.id);
+    return {themeId:row?.theme_id??defaultThemeId,revision:row?.revision??0};
+  }
+  async setUserTheme(actor:Actor,input:{themeId:string;expectedRevision:number},key:string){
+    const themeId=themeIdSchema.parse(input.themeId);
+    return await this.store.transaction(async()=>{
+      await this.active(actor);
+      const row=await this.store.get<{theme_id:string;revision:number}>('SELECT theme_id,revision FROM user_theme_preferences WHERE user_id=?',actor.id);
+      const currentRevision=row?.revision??0;ensure(currentRevision===input.expectedRevision,409,'revision_conflict');
+      const now=clock(),revision=currentRevision+1,before={themeId:row?.theme_id??defaultThemeId,revision:currentRevision};
+      await this.store.run('INSERT INTO user_theme_preferences(user_id,theme_id,revision,created_at,updated_at) VALUES (?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET theme_id=excluded.theme_id,revision=excluded.revision,updated_at=excluded.updated_at',actor.id,themeId,revision,now,now);
+      await this.store.run('INSERT INTO audit_log(id,actor_id,action,target_id,created_at,request_id,reason,before_json,after_json) VALUES (?,?,?,?,?,?,?,?,?)',randomUUID(),actor.id,'user.theme.updated',actor.id,now,actor.requestId??null,'theme.preference',auditJson({...before}),auditJson({themeId,revision}));
+      return {themeId,revision};
+    });
+  }
+  async campaignTheme(actor:Actor,campaignId:string){
+    await this.access(actor,{type:'campaign',id:campaignId});
+    const row=await this.store.get<{recommended_theme_id:string;allowed_themes_json:string;revision:number}>('SELECT recommended_theme_id,allowed_themes_json,revision FROM campaign_theme_settings WHERE campaign_id=?',campaignId);
+    const allowed=row?JSON.parse(row.allowed_themes_json):[...themeIds];
+    return {recommendedThemeId:row?.recommended_theme_id??defaultThemeId,allowedThemes:allowed,revision:row?.revision??0};
+  }
+  async setCampaignTheme(actor:Actor,campaignId:string,input:{recommendedThemeId:string;allowedThemes:string[];expectedRevision:number;reason?:string},key:string){
+    const scope:Scope={type:'campaign',id:campaignId};
+    return await this.store.transaction(async()=>{
+      const access=await this.access(actor,scope,true),recommended=themeIdSchema.parse(input.recommendedThemeId),allowed=[...new Set(input.allowedThemes.map(value=>themeIdSchema.parse(value)))];
+      ensure(allowed.length>0&&allowed.includes(recommended),400,'theme_recommendation_not_allowed');
+      const current=await this.store.get<{recommended_theme_id:string;allowed_themes_json:string;revision:number}>('SELECT recommended_theme_id,allowed_themes_json,revision FROM campaign_theme_settings WHERE campaign_id=?',campaignId);
+      const currentRevision=current?.revision??0;ensure(currentRevision===input.expectedRevision,409,'revision_conflict');
+      const body={type:'campaign.theme.set',recommendedThemeId:recommended,allowedThemes:allowed,reason:input.reason};
+      const replay=await this.replay(campaignId,actor,key,body);if(replay)return replay;
+      const now=clock(),revision=currentRevision+1,campaignRevision=access.revision+1,before=current?{recommendedThemeId:current.recommended_theme_id,allowedThemes:JSON.parse(current.allowed_themes_json),revision:current.revision}:undefined;
+      await this.store.run('INSERT INTO campaign_theme_settings(campaign_id,recommended_theme_id,allowed_themes_json,revision,created_at,updated_at,updated_by) VALUES (?,?,?,?,?,?,?) ON CONFLICT(campaign_id) DO UPDATE SET recommended_theme_id=excluded.recommended_theme_id,allowed_themes_json=excluded.allowed_themes_json,revision=excluded.revision,updated_at=excluded.updated_at,updated_by=excluded.updated_by',campaignId,recommended,JSON.stringify(allowed),revision,now,now,actor.id);
+      await this.store.run('UPDATE campaigns SET revision=revision+1,updated_at=? WHERE id=?',now,campaignId);
+      const result=await this.finish(scope,actor,key,body,{id:campaignId,revision:campaignRevision},'campaign.theme.updated',{recommendedThemeId:recommended,allowedThemes:allowed},campaignId,{before,after:{recommendedThemeId:recommended,allowedThemes:allowed,revision},reason:input.reason??'campaign.theme'});
+      return {...result,recommendedThemeId:recommended,allowedThemes:allowed,themeRevision:revision};
+    });
+  }  async setMember(actor:Actor,campaignId:string,input:{userId:string;role:'admin'|'creator'|'player'|'observer'|null;expectedRevision:number},key:string) {
     const scope:Scope={type:'campaign',id:campaignId};
     return (await this.store.transaction(async ()=>{
       const access=(await this.access(actor,scope,true));
@@ -91,6 +253,7 @@ export class Domain {
       ensure((await this.store.get('SELECT id FROM users WHERE id=? AND archived_at IS NULL',input.userId)),404,'not_found');
       const replay=(await this.replay(campaignId,actor,key,{type:'member.set',...input})); if(replay)return replay;
       ensure(access.revision===input.expectedRevision,409,'revision_conflict');
+      const before=await this.store.get('SELECT campaign_id,user_id,role,revision FROM memberships WHERE campaign_id=? AND user_id=?',campaignId,input.userId);
       const now=clock();
       if(input.role) (await this.store.run('INSERT INTO memberships(campaign_id,user_id,role,created_at,updated_at) VALUES (?,?,?,?,?) ON CONFLICT(campaign_id,user_id) DO UPDATE SET role=excluded.role,updated_at=excluded.updated_at,revision=memberships.revision+1',campaignId,input.userId,input.role,now,now));
       else {
@@ -98,7 +261,7 @@ export class Domain {
         (await this.store.run('DELETE FROM memberships WHERE campaign_id=? AND user_id=?',campaignId,input.userId));
       }
       (await this.store.run('UPDATE campaigns SET revision=revision+1,updated_at=? WHERE id=?',now,campaignId));
-      return (await this.finish(scope,actor,key,{type:'member.set',...input},{id:campaignId,revision:access.revision+1},'member.set',input));
+      return (await this.finish(scope,actor,key,{type:'member.set',...input},{id:campaignId,revision:access.revision+1},'member.set',input,scope.id,{before,after:{membership:input,campaignRevision:access.revision+1},reason:'membership.edit'}));
     }));
   }
   private async record(scope:Scope,id:string, includeArchived=false) {
@@ -148,6 +311,7 @@ export class Domain {
       }
       const record=(await this.record(scope,command.recordId));
       ensure(record.revision===command.expectedRevision,409,'revision_conflict');
+      const before=await this.snapshot(record.id);
       const result:Omit<CommandResult,'eventId'>={id:record.id,revision:record.revision+1};
       switch(command.type) {
         case 'record.update':
@@ -189,7 +353,8 @@ export class Domain {
           break;
       }
       (await this.store.run('UPDATE records SET revision=revision+1,updated_at=?,updated_by=? WHERE id=?',now,actor.id,record.id));
-      return (await this.finish(scope,actor,key,command,result,command.type,(await this.snapshot(record.id))));
+      const after=await this.snapshot(record.id);
+      return (await this.finish(scope,actor,key,command,result,command.type,after,scope.id,{before,after,reason:command.type}));
     }));
   }
   private async copyStructure(sourceId:string,targetId:string,actor:Actor,now:string) {
@@ -250,7 +415,7 @@ export class Domain {
   }
   async audits(actor:Actor,scope:Scope,after='') {
     (await this.access(actor,scope,true));
-    return (await this.store.all('SELECT id,actor_id,action,target_id,event_id,created_at FROM audit_log WHERE '+column(scope)+'=? AND rowid>COALESCE((SELECT rowid FROM audit_log WHERE id=? AND '+column(scope)+'=?),0) ORDER BY rowid LIMIT 100',scope.id,after,scope.id));
+    return (await this.store.all('SELECT id,actor_id,action,target_id,event_id,created_at,request_id,reason,before_json,after_json FROM audit_log WHERE '+column(scope)+'=? AND rowid>COALESCE((SELECT rowid FROM audit_log WHERE id=? AND '+column(scope)+'=?),0) ORDER BY rowid LIMIT 100',scope.id,after,scope.id));
   }
 }
 
