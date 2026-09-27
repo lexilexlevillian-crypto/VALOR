@@ -117,7 +117,7 @@ export function buildApp(store:Store,settings:Config,logging:boolean|{write(chun
     return domain.setUserMode(actor(request),b);
   });
   app.post('/me/developer-access',async(request)=>{
-    const current=actor(request),b=z.strictObject({accessKey:z.string().min(1).max(256),expectedRevision:z.number().int().nonnegative()}).parse(request.body);
+    const current=actor(request),b=z.strictObject({accessKey:z.string().trim().min(1).max(256),expectedRevision:z.number().int().nonnegative()}).parse(request.body);
     await auth.limit('developer-key-user',current.id,settings.loginLimit,900000);
     await auth.limit('developer-key-ip',request.ip,settings.loginLimit*3,900000);
     return auth.grantDeveloperAccess(current,b.accessKey,b.expectedRevision,request.id);

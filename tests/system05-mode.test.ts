@@ -38,7 +38,7 @@ test('System 05 access key grants audited Developer Mode only to the authenticat
   const player=await login({...f,app},'player@example.test'),headers={cookie:player.cookie,origin:f.settings.origin,'x-csrf-token':player.csrf};
   const wrong=await app.inject({method:'POST',url:'/me/developer-access',headers,payload:{accessKey:'wrong-key',expectedRevision:0}});
   assert.equal(wrong.statusCode,403);assert.equal((await f.store.get<{role:string}>('SELECT role FROM users WHERE id=?',f.player.id))!.role,'player');
-  const granted=await app.inject({method:'POST',url:'/me/developer-access',headers,payload:{accessKey,expectedRevision:0}});
+  const granted=await app.inject({method:'POST',url:'/me/developer-access',headers,payload:{accessKey:` \n${accessKey}\t `,expectedRevision:0}});
   assert.equal(granted.statusCode,200,granted.body);assert.equal(granted.json().user.role,'creator');assert.equal(granted.json().mode,'developer');
   assert.equal((await f.store.get<{role:string}>('SELECT role FROM memberships WHERE campaign_id=? AND user_id=?',f.campaign.id,f.player.id))!.role,'creator');
   const overview=await app.inject({url:'/game/timelines/'+(await new Game(f.store).initialize(f.creator,f.campaign.id)).id+'/developer/overview',headers:{cookie:player.cookie}});
