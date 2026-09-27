@@ -5,6 +5,7 @@ export type Config = {
   tursoDatabaseUrl?:string; tursoAuthToken?:string;
   rateLimitSecret:string; sessionHours:number; requestLimit:number; loginLimit:number;
   mutationLimit:number; aiCallLimit:number; exportLimit:number; exportBytes:number; importBytes:number;
+  developerAccessKey?:string;
 };
 export function config(env:NodeJS.ProcessEnv=process.env):Config {
   const production=env.NODE_ENV==='production';
@@ -26,6 +27,8 @@ export function config(env:NodeJS.ProcessEnv=process.env):Config {
   const gatewayUrl=env.AI_GATEWAY_URL?.trim(),gatewaySecret=env.AI_GATEWAY_SECRET?.trim();
   if(!!gatewayUrl!==!!gatewaySecret)throw new Error('Set both AI_GATEWAY_URL and AI_GATEWAY_SECRET');
   if(gatewaySecret&&gatewaySecret.length<32)throw new Error('AI_GATEWAY_SECRET must be at least 32 characters');
+  const developerAccessKey=env.DEVELOPER_ACCESS_KEY?.trim();
+  if(developerAccessKey&&(developerAccessKey.length<32||developerAccessKey.length>256))throw new Error('DEVELOPER_ACCESS_KEY must be 32-256 characters');
   const bounded=(value:string|undefined,fallback:number,min:number,max:number)=>z.coerce.number().int().min(min).max(max).parse(value??fallback);
   return {production,origin,databasePath,tursoDatabaseUrl,tursoAuthToken,rateLimitSecret,host:env.HOST??(production?'0.0.0.0':'127.0.0.1'),
     port:z.coerce.number().int().min(0).max(65535).parse(env.PORT??3000),
@@ -36,5 +39,6 @@ export function config(env:NodeJS.ProcessEnv=process.env):Config {
     aiCallLimit:bounded(env.AI_CALL_LIMIT,10,1,100),
     exportLimit:bounded(env.EXPORT_LIMIT,10,1,100),
     exportBytes:bounded(env.EXPORT_MAX_BYTES,8*1024*1024,1024,64*1024*1024),
-    importBytes:bounded(env.IMPORT_MAX_BYTES,8*1024*1024,1024,64*1024*1024)};
+    importBytes:bounded(env.IMPORT_MAX_BYTES,8*1024*1024,1024,64*1024*1024),
+    developerAccessKey};
 }

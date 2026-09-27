@@ -37,6 +37,7 @@ test('production refuses unsafe environment and uses host-only secure cookies',a
   assert.throws(()=>config({APP_ORIGIN:'https://example.com/path'}),/origin/);
   assert.throws(()=>config({AI_GATEWAY_URL:'https://gateway.example'}),/both AI_GATEWAY_URL and AI_GATEWAY_SECRET/);
   assert.throws(()=>config({AI_GATEWAY_URL:'https://gateway.example',AI_GATEWAY_SECRET:'short'}),/at least 32 characters/);
+  assert.throws(()=>config({DEVELOPER_ACCESS_KEY:'short'}),/32-256 characters/);
   assert.throws(()=>config({MUTATION_LIMIT:'0'}),/>=1/);
   assert.throws(()=>config({EXPORT_MAX_BYTES:String(65*1024*1024)}),/<=67108864/);
   const f=await fixture();

@@ -14,6 +14,8 @@ The response sets an HttpOnly session cookie and returns {user:{id,role},csrfTok
 
 Every authenticated mutation requires the cookie, matching Origin, and X-CSRF-Token. Authoring/management mutations additionally require Idempotency-Key: a fresh UUID (or 16-128 ASCII letters/digits/underscore/hyphen). Preserve the key when retrying the same operation.
 
+An authenticated player may submit `{accessKey,expectedRevision}` to `POST /me/developer-access`. When the server-only `DEVELOPER_ACCESS_KEY` matches, the transaction grants that account the global Creator role, upgrades only its existing campaign memberships to Creator, enters Developer Mode, and appends redacted audit records. It never adds the account to an unrelated campaign, returns the key, or stores it in the database or browser. Invalid attempts are rate-limited and audited.
+
 ## Scopes
 
 - POST /worlds: {name}; global creator/admin required, returned world is owned by the caller.

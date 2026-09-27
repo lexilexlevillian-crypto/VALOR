@@ -78,6 +78,32 @@ export class Auth {
     }
     return {token,csrfToken:csrfFor(token),user:{id,role:'player' as const}};
   }
+  async grantDeveloperAccess(actor:Actor,accessKey:string,expectedRevision:number,requestId?:string) {
+    const configured=this.settings.developerAccessKey;
+    const supplied=Buffer.from(hash(accessKey),'hex'),expected=Buffer.from(hash(configured??'valor-unconfigured-developer-access-key'),'hex');
+    const accepted=Boolean(configured)&&timingSafeEqual(supplied,expected);
+    if(!accepted){
+      await this.store.run('INSERT INTO audit_log(id,actor_id,action,target_id,created_at,request_id,reason) VALUES (?,?,?,?,?,?,?)',randomUUID(),actor.id,'developer.access.denied',actor.id,new Date().toISOString(),requestId??null,'invalid-access-key');
+      ensure(false,403,'invalid_developer_access_key');
+    }
+    return this.store.transaction(async()=>{
+      const user=await this.store.get<{id:string;role:Actor['role'];revision:number}>('SELECT id,role,revision FROM users WHERE id=? AND archived_at IS NULL',actor.id);ensure(user,401,'unauthenticated');
+      const preference=await this.store.get<{mode:string;revision:number}>('SELECT mode,revision FROM user_mode_preferences WHERE user_id=?',actor.id),currentRevision=preference?.revision??0;
+      ensure(currentRevision===expectedRevision,409,'revision_conflict');
+      const memberships=await this.store.all<{campaign_id:string;role:string}>('SELECT campaign_id,role FROM memberships WHERE user_id=? ORDER BY campaign_id',actor.id);
+      const now=new Date().toISOString(),role:Actor['role']=user.role==='player'?'creator':user.role,revision=currentRevision+1;
+      if(user.role==='player')await this.store.run('UPDATE users SET role=?,revision=revision+1,updated_at=? WHERE id=? AND revision=?',role,now,actor.id,user.revision);
+      for(const membership of memberships){
+        if(membership.role==='admin'||membership.role==='creator')continue;
+        await this.store.run('UPDATE memberships SET role=?,revision=revision+1,updated_at=? WHERE campaign_id=? AND user_id=?','creator',now,membership.campaign_id,actor.id);
+        await this.store.run('INSERT INTO audit_log(id,actor_id,campaign_id,action,target_id,created_at,request_id,reason,before_json,after_json,note) VALUES (?,?,?,?,?,?,?,?,?,?,?)',randomUUID(),actor.id,membership.campaign_id,'membership.developer_access.granted',actor.id,now,requestId??null,'developer-access-key',JSON.stringify({role:membership.role}),JSON.stringify({role:'creator'}),null);
+      }
+      await this.store.run('INSERT INTO user_mode_preferences(user_id,mode,revision,created_at,updated_at) VALUES (?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET mode=excluded.mode,revision=excluded.revision,updated_at=excluded.updated_at',actor.id,'developer',revision,now,now);
+      const campaignRoles=memberships.map(row=>({campaignId:row.campaign_id,role:row.role==='admin'||row.role==='creator'?row.role:'creator'}));
+      await this.store.run('INSERT INTO audit_log(id,actor_id,action,target_id,created_at,request_id,reason,before_json,after_json,note) VALUES (?,?,?,?,?,?,?,?,?,?)',randomUUID(),actor.id,'developer.access.granted',actor.id,now,requestId??null,'developer-access-key',JSON.stringify({role:user.role,mode:preference?.mode??'player',campaignRoles:memberships}),JSON.stringify({role,mode:'developer',campaignRoles}),null);
+      return {user:{id:actor.id,role},mode:'developer' as const,revision,developerAllowed:true,campaignRoles};
+    });
+  }
   async authenticate(token:string|undefined):Promise<Actor> {
     ensure(token && /^[a-f0-9]{64}$/.test(token),401,'unauthenticated');
     const actor=(await this.store.get<Actor>('SELECT u.id,u.role FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=? AND s.expires_at>? AND u.archived_at IS NULL',hash(token),new Date().toISOString()));

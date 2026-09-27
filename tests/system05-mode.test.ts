@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {fixture,key,login} from './helpers.ts';
 import {Game} from '../src/game/engine.ts';
+import {buildApp} from '../src/app.ts';
 
 test('System 05 mode preference is revisioned, role-gated, audited, and persisted',async()=>{
  const f=await fixture();
@@ -31,9 +32,26 @@ test('System 05 mode preference is revisioned, role-gated, audited, and persiste
  }finally{await f.close();}
 });
 
+test('System 05 access key grants audited Developer Mode only to the authenticated account and its existing campaigns',async()=>{
+ const f=await fixture(),accessKey='developer-test-key-'.repeat(3),app=buildApp(f.store,{...f.settings,developerAccessKey:accessKey},false);
+ try{
+  const player=await login({...f,app},'player@example.test'),headers={cookie:player.cookie,origin:f.settings.origin,'x-csrf-token':player.csrf};
+  const wrong=await app.inject({method:'POST',url:'/me/developer-access',headers,payload:{accessKey:'wrong-key',expectedRevision:0}});
+  assert.equal(wrong.statusCode,403);assert.equal((await f.store.get<{role:string}>('SELECT role FROM users WHERE id=?',f.player.id))!.role,'player');
+  const granted=await app.inject({method:'POST',url:'/me/developer-access',headers,payload:{accessKey,expectedRevision:0}});
+  assert.equal(granted.statusCode,200,granted.body);assert.equal(granted.json().user.role,'creator');assert.equal(granted.json().mode,'developer');
+  assert.equal((await f.store.get<{role:string}>('SELECT role FROM memberships WHERE campaign_id=? AND user_id=?',f.campaign.id,f.player.id))!.role,'creator');
+  const overview=await app.inject({url:'/game/timelines/'+(await new Game(f.store).initialize(f.creator,f.campaign.id)).id+'/developer/overview',headers:{cookie:player.cookie}});
+  assert.equal(overview.statusCode,200,overview.body);
+  assert.equal((await f.store.get<{role:string}>('SELECT role FROM users WHERE id=?',f.other.id))!.role,'admin');
+  const audits=JSON.stringify(await f.store.all('SELECT action,reason,before_json,after_json FROM audit_log WHERE actor_id=? AND action LIKE ?',f.player.id,'developer.access.%'));
+  assert.match(audits,/developer.access.denied/);assert.match(audits,/developer.access.granted/);assert.doesNotMatch(audits,new RegExp(accessKey));
+ }finally{await app.close();await f.close();}
+});
+
 test('System 05 static shell exposes safe-area switch styling and does not cache game state',()=>{
  const css=readFileSync('public/style.css','utf8'),sw=readFileSync('public/sw.js','utf8'),app=readFileSync('public/app.js','utf8');
  assert.match(css,/env\(safe-area-inset-bottom\)/);assert.match(css,/mode-switch/);assert.match(css,/mode-dialog/);
- assert.match(app,/Developer Mode/);assert.match(app,/clearDeveloperState/);
- assert.match(sw,/valor-shell-v3/);assert.match(sw,/theme\.js/);assert.doesNotMatch(sw,/game\/timelines|\/me\/mode|creator/);
+ assert.match(app,/Developer Mode/);assert.match(app,/clearDeveloperState/);assert.match(app,/\/me\/developer-access/);
+ assert.match(sw,/valor-shell-v4/);assert.match(sw,/theme\.js/);assert.doesNotMatch(sw,/game\/timelines|\/me\/mode|creator/);
 });

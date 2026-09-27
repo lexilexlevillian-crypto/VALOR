@@ -1,6 +1,6 @@
 import {ensure} from './contracts.ts';
 
-const sensitiveKey=/^(?:password(?:_hash)?|passphrase|token(?:_hash)?|accessToken|refreshToken|secrets?|instructions?|credentials?|authorization|cookie|csrf(?:Token)?|contacts?|phone(?:Number)?|email|messageBody|messageText|body)$/i;
+const sensitiveKey=/^(?:password(?:_hash)?|passphrase|token(?:_hash)?|accessToken|refreshToken|access_?key|secrets?|instructions?|credentials?|authorization|cookie|csrf(?:Token)?|contacts?|phone(?:Number)?|email|messageBody|messageText|body)$/i;
 
 export function redactSensitive(value:unknown,depth=0):unknown{
  if(depth>20)return '[REDACTED:DEPTH]';
