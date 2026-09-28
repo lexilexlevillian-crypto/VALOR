@@ -5,8 +5,10 @@ import {atLocation,add,advance,emit,isOpen,timeParts} from './simulation.ts';
 import type {Effect} from './simulation.ts';
 import {fact,observe,remember,visible} from './epistemics.ts';
 import {randomSource} from '../random.ts';
+import {choiceAccess,resolveTraitEffects} from './traits.ts';
 export type CheckOutcome='critical'|'partial'|'success'|'success-at-cost'|'failure-with-information'|'failure-with-consequence'|'impossible'|'no-roll';
-export type CheckRecord={id:string;eventId:string;characterId:string;checkDefinitionId:string|null;attribute:string;skillId:string|null;context:string;difficulty:number;dieValue:number|null;attributeValue:number;skillValue:number;total:number|null;outcome:CheckOutcome;modifiers:{name:string;value:number;sourceId?:string}[];provenance:Record<string,unknown>};
+export type CheckModifier={kind:'trait'|'injury'|'context'|'condition'|'equipment';name:string;value:number;sourceId?:string};
+export type CheckRecord={id:string;eventId:string;characterId:string;checkDefinitionId:string|null;attribute:string;skillId:string|null;context:string;difficulty:number;dieValue:number|null;attributeValue:number;skillValue:number;total:number|null;outcome:CheckOutcome;modifiers:CheckModifier[];provenance:Record<string,unknown>};
 import {extendedAction} from './extended-actions.ts';
 import {damageVehicle,vehicleOperational,vehiclePenalty as vehiclePenaltyFor} from './vehicle.ts';
 const requireRule=(s:State)=>{if(!s.settings.rules)throw new Error('configure_resolution_rules_first');return s.settings.rules;};
@@ -17,7 +19,8 @@ export function resolveAction(s:State,actorId:string,action:Action,eventId:strin
  const actor=getEntity(s,actorId,'character');let pc=data(actor,'character');const effects:Effect[]=[];
  const rng=randomSource(seed);let minutes=0;let arrivalId:string|null=null;
  assert(pc.condition==='conscious','character_cannot_act');
- assert(!pc.restrainedBy||['look','say','wait','surrender','pay-bail'].includes(action.type),'character_restrained');
+ assert(!pc.restrainedBy||['look','inspect','say','wait','surrender','pay-bail'].includes(action.type),'character_restrained');
+ const choice=choiceAccess(s,actorId,action.type,action.type);assert(choice.allowed,'trait_choice_restricted');
  const say=(text:string,type:string=action.type,subjectId=actorId,observers=[actorId])=>emit(effects,text,observers,type,subjectId);
  const nearby=(target:Entity)=>{assert(target.data.locationId===pc.locationId&&pc.locationId&&visible(s,target,actorId),'target_not_present');};
  const owned=(id:string)=>{const item=getEntity(s,id,'item');assert(item.data.ownerId===actorId&&visible(s,item,actorId),'item_not_owned');return item;};
@@ -36,32 +39,43 @@ export function resolveAction(s:State,actorId:string,action:Action,eventId:strin
   if(definition)assert(visible(s,definition,actorId),'check_unavailable');
   const check=definition?data(definition,'checkDefinition'):null;
   const chosenAttribute=(check?.attribute??attribute) as keyof typeof pc.attributes,chosenSkill=check?.skillId??skillId;
-  const target=Number(check?.difficulty??difficulty??rule.threshold),attributeValue=Number(pc.attributes[chosenAttribute]??0),skillValue=chosenSkill?Number(pc.skills[chosenSkill]??0):0;
-  const modifiers:{name:string;value:number;sourceId?:string}[]=[];
-  for(const traitId of pc.traits){const traitEntity=getEntity(s,traitId,'trait'),trait=data(traitEntity,'trait'),value=Number(trait.modifiers[chosenAttribute]??0);if(value)modifiers.push({name:'Trait: '+traitEntity.name,value,sourceId:traitId});}
-  for(const injury of s.entities.filter(e=>e.kind==='injury'&&!e.archived&&e.data.characterId===actorId)){const value=Number(data(injury,'injury').modifiers[chosenAttribute]??0);if(value)modifiers.push({name:'Condition: '+injury.name,value,sourceId:injury.id});}
-  const contextName=context||String(check?.context??''),contextValue=Number(check?.contextModifiers?.[contextName]??0);if(contextName&&contextValue)modifiers.push({name:'Context: '+contextName,value:contextValue});
-  const conditionValue=Number(check?.conditionModifiers?.[pc.condition]??0);if(conditionValue)modifiers.push({name:'Condition state: '+pc.condition,value:conditionValue});
+  const target=Number(check?.difficulty??difficulty??rule.threshold),attributeValue=Number(pc.attributes[chosenAttribute]??0),skillValue=chosenSkill?Number(pc.skills[chosenSkill]??0):0,contextName=context||String(check?.context??'');
+  const modifiers:CheckModifier[]=[];
+  for(const traitId of pc.traits){
+   const traitEntity=getEntity(s,traitId,'trait'),trait=data(traitEntity,'trait'),value=Number(trait.modifiers[chosenAttribute]??0);
+   if(value)modifiers.push({kind:'trait',name:'Trait: '+traitEntity.name,value,sourceId:traitId});
+   for(const scoped of trait.scopedCheckModifiers){
+    if(scoped.attribute&&scoped.attribute!==chosenAttribute||scoped.skillId&&scoped.skillId!==chosenSkill||scoped.contexts.length&&!scoped.contexts.includes(contextName))continue;
+    modifiers.push({kind:'trait',name:'Trait: '+traitEntity.name+' / '+scoped.name,value:scoped.value,sourceId:traitId});
+   }
+  }
+  const authoredTraitEffects=resolveTraitEffects(s,actorId,'check-modifier',{attribute:String(chosenAttribute),skillId:chosenSkill,context:contextName});
+  for(const effect of authoredTraitEffects.applied)if(effect.value)modifiers.push({kind:'trait',name:'Trait: '+effect.traitName+' / '+effect.effectName,value:effect.value,sourceId:effect.traitId});
+  for(const injury of s.entities.filter(e=>e.kind==='injury'&&!e.archived&&e.data.characterId===actorId)){const value=Number(data(injury,'injury').modifiers[chosenAttribute]??0);if(value)modifiers.push({kind:'injury',name:'Condition: '+injury.name,value,sourceId:injury.id});}
+  const contextValue=Number(check?.contextModifiers?.[contextName]??0);if(contextName&&contextValue)modifiers.push({kind:'context',name:'Context: '+contextName,value:contextValue});
+  const conditionValue=Number(check?.conditionModifiers?.[pc.condition]??0);if(conditionValue)modifiers.push({kind:'condition',name:'Condition state: '+pc.condition,value:conditionValue});
   const requiredTraits=(check?.requiredTraits??[]) as string[],missingTrait=requiredTraits.find(id=>!pc.traits.includes(id));
   const equipmentTags=(check?.requiredEquipmentTags??[]) as string[],equippedTags=new Set(s.entities.filter(e=>e.kind==='item'&&!e.archived&&e.data.ownerId===actorId&&e.data.equipped).flatMap(e=>e.data.tags as string[])),missingEquipment=equipmentTags.find(tag=>!equippedTags.has(tag));
-  const equipmentValue=missingTrait||missingEquipment?0:Number(check?.equipmentModifier??0);if(equipmentValue)modifiers.push({name:'Equipment',value:equipmentValue});
+  const equipmentValue=missingTrait||missingEquipment?0:Number(check?.equipmentModifier??0);if(equipmentValue)modifiers.push({kind:'equipment',name:'Equipment: '+equipmentTags.join(', '),value:equipmentValue});
   const formula=(check?.formula??rule.formula) as 'additive-die'|'additive-no-die'|'authored-total',mode=(check?.outcomeMode??rule.outcomeMode) as 'legacy-binary'|'configured-bands',bands=check?.outcomeBands??rule.outcomeBands;
   let dieValue:number|null=null,total:number|null=null,outcome:CheckOutcome;
-  if(missingTrait||missingEquipment){outcome='impossible';}
-  else if(check?.rollMode==='no-roll'){outcome='no-roll';}
-  else if(formula==='authored-total'){outcome='no-roll';}
+  let resolutionReason='authored-formula';
+  if(missingTrait||missingEquipment){outcome='impossible';resolutionReason='missing-authored-requirement';}
+  else if(check?.rollMode==='no-roll'){outcome='no-roll';resolutionReason='no-meaningful-uncertainty';}
+  else if(formula==='authored-total'){outcome='no-roll';resolutionReason='authored-resolver-unavailable';}
   else{
    dieValue=formula==='additive-die'?rng.integer(rule.dieSides)+1:0;
    total=dieValue+attributeValue+skillValue+modifiers.reduce((sum,entry)=>sum+entry.value,0);
    outcome=classify(total-target,bands,mode);
   }
-  checks.push({id:randomUUID(),eventId,characterId:actorId,checkDefinitionId:checkId,attribute:String(chosenAttribute),skillId:chosenSkill,context:contextName,difficulty:target,dieValue,attributeValue,skillValue,total,outcome,modifiers,provenance:{formula,dieSides:formula==='additive-die'?rule.dieSides:null,ruleOutcomeMode:mode,condition:pc.condition,requiredTraits,equipmentTags}});
+  const skillEntity=chosenSkill?s.entities.find(entity=>entity.id===chosenSkill&&entity.kind==='skill'):null;
+  checks.push({id:randomUUID(),eventId,characterId:actorId,checkDefinitionId:checkId,attribute:String(chosenAttribute),skillId:chosenSkill,context:contextName,difficulty:target,dieValue,attributeValue,skillValue,total,outcome,modifiers,provenance:{formula,dieSides:formula==='additive-die'?rule.dieSides:null,outcomeMode:mode,outcomeBands:bands,margin:total===null?null:total-target,resolutionReason,attribute:{name:String(chosenAttribute),value:attributeValue},skill:skillEntity?{id:skillEntity.id,name:skillEntity.name,value:skillValue}:null,condition:pc.condition,traitEffectResolution:{applied:authoredTraitEffects.applied.map(effect=>({traitId:effect.traitId,effectId:effect.effectId,key:effect.key})),suppressed:authoredTraitEffects.suppressed.map(effect=>({traitId:effect.traitId,effectId:effect.effectId,key:effect.key}))},requiredTraits,equipmentTags,missingRequirements:[...(missingTrait?[{kind:'trait',id:missingTrait}]:[]),...(missingEquipment?[{kind:'equipment',tag:missingEquipment}]:[])]}});
   say(outcome==='impossible'?'Check impossible: authored requirement not met.':outcome==='no-roll'?'No roll: authored rule provided no uncertainty.':'Check: '+String(total)+' against '+target+'. Outcome: '+outcome+'.','check');
   return ['critical','success','success-at-cost'].includes(outcome);
  };
  const activeCombat=()=>s.entities.find(e=>e.kind==='combat'&&!e.archived&&e.data.active&&(e.data.participants as string[]).includes(actorId));
  const combatTurn=()=>{const combat=activeCombat();assert(combat,'combat_not_active');const d=data(combat!,'combat');assert(d.participants[d.turnIndex]===actorId,'not_your_turn');return combat!;};
- if(activeCombat()&&!['look','say','surrender'].includes(action.type)){
+ if(activeCombat()&&!['look','inspect','say','surrender'].includes(action.type)){
   assert(['attack','defend','grapple','restrain','disarm','shove','flee','reload','cover','consume','treat','tactical-move'].includes(action.type),'use_combat_action_or_flee');
   combatTurn();
  }
@@ -81,6 +95,12 @@ export function resolveAction(s:State,actorId:string,action:Action,eventId:strin
    if(e.kind==='character'||e.kind==='vehicle'||e.kind==='item')say(e.name+' is present.','observation',e.id);
   }
   break;
+ }
+ case 'inspect':{
+  const target=getEntity(s,action.targetId);assert(visible(s,target,actorId),'target_not_observable');
+  if('locationId'in target.data&&target.data.locationId!==null&&target.data.locationId!==pc.locationId&&target.data.ownerId!==actorId)throw new Error('target_not_present');
+  const description=typeof target.data.description==='string'&&target.data.description.trim()?target.data.description.trim():'No further visible detail is authored.';
+  say(`${target.name}\n\n${description}`,'inspection',target.id);fact(s,target.id,'inspected',true,eventId,[actorId]);minutes=1;break;
  }
  case 'wait': minutes=action.minutes;say('Time passes.');break;
  case 'sleep':minutes=action.minutes;pc.fatigue=Math.max(0,pc.fatigue-action.minutes/6);say('The rest interval passes.');break;
@@ -237,15 +257,25 @@ export function resolveAction(s:State,actorId:string,action:Action,eventId:strin
  case 'train':{
   const targetSkill=action.skillId?getEntity(s,action.skillId,'skill'):null,targetDefinition=targetSkill?data(targetSkill,'skill'):null;
   const attribute=action.attribute,trainingConfig=targetDefinition?.training??{minutesPerPoint:s.settings.advancement.attributeMinutesPerPoint,practiceMinutesPerPoint:0,costCentsPerHour:s.settings.advancement.attributeCostCentsPerHour,trainerRequired:false,requiresMilestone:false};
-  if(targetSkill){assert(targetSkill.visibility!=='creator'&&visible(s,targetSkill,actorId),'skill_unavailable');for(const prerequisite of targetDefinition!.prerequisites)assert(Number(pc.skills[prerequisite]??0)>0,'skill_prerequisite_required');if(trainingConfig.trainerRequired){assert(action.trainerId&&action.trainerId!==actorId,'trainer_required');const trainer=getEntity(s,action.trainerId!,'character');assert(trainer.data.locationId===pc.locationId&&visible(s,trainer,actorId),'trainer_unavailable');}}
+  if(targetSkill){assert(targetSkill.visibility!=='creator'&&visible(s,targetSkill,actorId),'skill_unavailable');for(const prerequisite of targetDefinition!.prerequisites)assert(Number(pc.skills[prerequisite]??0)>0,'skill_prerequisite_required');}
   if(attribute)assert(!targetSkill,'training_target_required');
-  const key=targetSkill?.id??'attribute:'+attribute,existing=pc.training.find(t=>t.skillId===(targetSkill?.id??null)&&t.attribute===attribute&&t.status==='active');
-  const record=existing??{id:randomUUID(),skillId:targetSkill?.id??null,attribute:attribute??null,trainerId:action.trainerId,source:targetSkill?.name??attribute!,startedAt:s.clock,minutesInvested:0,requiredMinutes:trainingConfig.minutesPerPoint,practiceMinutes:0,requiredPracticeMinutes:trainingConfig.practiceMinutesPerPoint,costPaidCents:0,requiredCostCents:Math.ceil(action.minutes/60)*trainingConfig.costCentsPerHour,milestoneReached:action.milestoneReached,status:'active',completedAt:null,notes:''};
+  const existing=pc.training.find(t=>t.skillId===(targetSkill?.id??null)&&t.attribute===attribute&&t.status==='active');
+  const trainer=action.trainerId?getEntity(s,action.trainerId,'character'):null;
+  if(trainer){assert(trainer.id!==actorId&&trainer.data.locationId===pc.locationId&&visible(s,trainer,actorId),'trainer_unavailable');}
+  if(trainingConfig.trainerRequired&&action.mode==='instruction')assert(trainer,'trainer_required');
+  if(trainingConfig.trainerRequired&&!existing&&!trainer)assert(false,'trainer_required');
+  const source=action.source.trim()||trainer?.name||existing?.source||(action.mode==='practice'?'Self-directed practice':'Self-directed study');
+  const record=existing??{id:randomUUID(),skillId:targetSkill?.id??null,attribute:attribute??null,trainerId:trainer?.id??null,source,startedAt:s.clock,minutesInvested:0,requiredMinutes:trainingConfig.minutesPerPoint,practiceMinutes:0,requiredPracticeMinutes:trainingConfig.practiceMinutesPerPoint,costPaidCents:0,requiredCostCents:Math.ceil(trainingConfig.minutesPerPoint*trainingConfig.costCentsPerHour/60),milestoneReached:false,status:'active',completedAt:null,notes:''};
   if(!existing)pc.training.push(record);
-  assert(record.milestoneReached||!trainingConfig.requiresMilestone,'training_milestone_required');
-  const cost=Math.ceil(action.minutes/60)*trainingConfig.costCentsPerHour;assert(pc.cash>=cost,'insufficient_training_funds');pc.cash-=cost;record.costPaidCents+=cost;record.minutesInvested+=action.minutes;record.practiceMinutes+=action.minutes;
-  const current=targetSkill?Number(pc.skills[targetSkill.id]??0):Number(pc.attributes[attribute!]??0),maximum=targetSkill?targetDefinition!.scale.max:s.settings.attributeScale.max;
-  if(record.minutesInvested>=record.requiredMinutes&&record.practiceMinutes>=record.requiredPracticeMinutes&&record.costPaidCents>=record.requiredCostCents){const next=Math.min(maximum,current+1);if(targetSkill)pc.skills[targetSkill.id]=next;else pc.attributes[attribute!]=next;record.status='completed';record.completedAt=s.clock;say((targetSkill?.name??attribute)+' advanced to '+next+'.');}else say((targetSkill?.name??attribute)+' training recorded; progress is '+record.minutesInvested+'/'+record.requiredMinutes+' minutes.');minutes=action.minutes;break;
+  if(trainer&&!record.trainerId)record.trainerId=trainer.id;if(action.milestoneReached)record.milestoneReached=true;
+  const cost=action.mode==='instruction'?Math.ceil(action.minutes*trainingConfig.costCentsPerHour/60):0;assert(pc.cash>=cost,'insufficient_training_funds');pc.cash-=cost;record.costPaidCents+=cost;
+  if(action.mode==='practice')record.practiceMinutes+=action.minutes;else record.minutesInvested+=action.minutes;
+  const current=targetSkill?Number(pc.skills[targetSkill.id]??0):Number(pc.attributes[attribute!]??0),scale=targetSkill?targetDefinition!.scale:s.settings.attributeScale,maximum=scale.max;
+  assert(current<maximum,'training_target_at_maximum');
+  const complete=record.minutesInvested>=record.requiredMinutes&&record.practiceMinutes>=record.requiredPracticeMinutes&&record.costPaidCents>=record.requiredCostCents&&(!trainingConfig.requiresMilestone||record.milestoneReached);
+  if(complete){const next=Math.min(maximum,current+scale.step);if(targetSkill)pc.skills[targetSkill.id]=next;else pc.attributes[attribute!]=next;record.status='completed';record.completedAt=s.clock;say((targetSkill?.name??attribute)+' advanced to '+next+'.');}
+  else say((targetSkill?.name??attribute)+' training recorded; instruction '+record.minutesInvested+'/'+record.requiredMinutes+' minutes, practice '+record.practiceMinutes+'/'+record.requiredPracticeMinutes+' minutes'+(trainingConfig.requiresMilestone&&!record.milestoneReached?', milestone pending':'')+'.');
+  minutes=action.minutes;break;
  } case 'combat':{
   requireRule(s);const target=getEntity(s,action.targetId,'character');nearby(target);assert(target.id!==actorId&&!activeCombat(),'combat_unavailable');
   const order=[actor,target].sort((a,b)=>Number(b.data.attributes&& (b.data.attributes as Record<string,number>).Agility)-Number(a.data.attributes&&(a.data.attributes as Record<string,number>).Agility)||a.id.localeCompare(b.id));

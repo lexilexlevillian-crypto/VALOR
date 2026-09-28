@@ -127,7 +127,7 @@ test('AI proposals cannot mutate state or invent arguments and share campaign na
   let calls=0;
   const provider={id:'mock-intent',estimateIntentTokens:()=>600,async interpret(context:ReturnType<typeof intentContext>){calls++;assert.doesNotMatch(JSON.stringify(context),/HIDDEN_INTENT/);return {choice:'0'};}};
   const gateway=new IntentGateway(f.game,[provider]),before=await f.state(),revision=await f.revision();
-  const proposal=await gateway.propose(f.player,f.timeline.id,f.pc,'I want to see what is here.',provider.id);assert.deepEqual(proposal,{action:{type:'look'},requiresConfirmation:true});
+  const proposal=await gateway.propose(f.player,f.timeline.id,f.pc,'I want to see what is here.',provider.id);assert.deepEqual(proposal,{action:{type:'look'},requiresConfirmation:true,originalText:'I want to see what is here.',classification:'proposal'});
   assert.deepEqual(await f.state(),before);assert.equal(await f.revision(),revision);
   await assert.rejects(()=>gateway.propose(f.player,f.timeline.id,f.pc,'Again',provider.id),/ai_budget_exceeded/);assert.equal(calls,1);
   const turn=await f.turn({type:'look'}),narrator=new NarrativeGateway(f.game,[{id:'mock-narration',estimateTokens:()=>250,async arrange(){throw new Error('must_not_call');}}]);

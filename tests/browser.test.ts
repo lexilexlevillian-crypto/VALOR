@@ -14,6 +14,7 @@ test('iPad shell, keyboard login, Creator form, long prose, reduced motion and o
  await page.route('**/game/catalog',async route=>{const response=await route.fetch(),catalog=await response.json();catalog.providers=['grounded','gemini'];await route.fulfill({response,json:catalog});});
  await page.route('**/narrate',async route=>{assert.equal(route.request().postDataJSON().provider,'gemini');narrationRequests++;await route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:'test_provider_unavailable'})});});
  await page.route('**/interpret',async route=>{assert.equal(route.request().postDataJSON().provider,'gemini');await route.fulfill({json:{action:{type:'wait',minutes:1},requiresConfirmation:true}});});
+ await page.route('**/narrate/stream',async route=>{await new Promise(resolve=>setTimeout(resolve,300));try{await route.fulfill({status:200,contentType:'application/x-ndjson',body:JSON.stringify({type:'paragraph',text:'This must stay buffered.'})+'\n'+JSON.stringify({type:'complete',status:'validated'})+'\n'});}catch{/* The browser intentionally canceled this request. */}});
  try{
   const address=await f.app.listen({host:'127.0.0.1',port:0});
   // Origin is deployment configuration, not a header supplied by browser code.
@@ -77,14 +78,16 @@ test('iPad shell, keyboard login, Creator form, long prose, reduced motion and o
   await page.getByRole('button',{name:'Continue as Browser test character'}).waitFor();
   const rosterHit=await page.evaluate(()=>{const button=document.querySelector('.roster-copy button.primary')!,portrait=document.querySelector('.roster-portrait')!,copy=document.querySelector('.roster-copy')!,card=document.querySelector('.roster-card')!,rect=button.getBoundingClientRect(),toBox=(node:Element)=>{const box=node.getBoundingClientRect();return {left:box.left,top:box.top,right:box.right,bottom:box.bottom,width:box.width,height:box.height,z:getComputedStyle(node).zIndex};},hit=document.elementFromPoint(rect.left+rect.width/2,rect.top+rect.height/2);return {button:toBox(button),portrait:toBox(portrait),copy:toBox(copy),card:toBox(card),hit:hit?.tagName+'.'+hit?.className};});assert.match(rosterHit.hit,/^BUTTON\./,'roster Continue touch target: '+JSON.stringify(rosterHit));
   await page.getByRole('button',{name:'Continue as Browser test character'}).click({force:true});
-  await page.getByRole('button',{name:'Look around',exact:true}).click();
+  await page.getByRole('button',{name:'Look around',exact:true}).click({force:true});
   await page.locator('.turn .prose').waitFor();
   assert.ok((await page.locator('.turn .prose').textContent())!.length>3000);
+  const originalProse=await page.locator('.turn .prose').first().textContent();await page.getByRole('button',{name:'Rebuild narration without rerolling',exact:true}).first().click();await page.getByRole('button',{name:'Cancel rebuild',exact:true}).click();await page.getByText('Narration rebuild canceled. The previous prose remains displayed.',{exact:true}).waitFor();assert.equal(await page.locator('.turn .prose').first().textContent(),originalProse);
   await page.locator('.composer').scrollIntoViewIfNeeded();
   assert.equal(await page.evaluate(()=>{const composer=document.querySelector('.composer'),switcher=document.querySelector('.mode-switch');if(!composer||!switcher)return false;const a=composer.getBoundingClientRect(),b=switcher.getBoundingClientRect();return !(a.right>b.left&&a.left<b.right&&a.bottom>b.top&&a.top<b.bottom);}),true,'bottom-edge switch does not cover the composer');
   const beforeProposal=(await game.access(f.creator,timeline.id)).t.revision;
-  await page.getByLabel('Your explicit action').fill('wait 1');
-  await page.getByRole('button',{name:'Review action',exact:false}).click();
+  const draft='I pause at the window.\nI listen for footsteps.';await page.getByLabel('Your explicit action').fill(draft);await page.getByRole('button',{name:'Inventory',exact:true}).click();await page.getByRole('heading',{name:'Inventory.'}).waitFor();await page.getByRole('button',{name:'Chronicle',exact:true}).click();assert.equal(await page.getByLabel('Your explicit action').inputValue(),draft);
+  await page.getByRole('button',{name:'Example: Look around',exact:true}).click();assert.match(await page.getByLabel('Your explicit action').inputValue(),/Look around$/);assert.equal((await game.access(f.creator,timeline.id)).t.revision,beforeProposal,'examples only edit the draft');
+  await page.getByLabel('Your explicit action').fill('wait 1');await page.getByLabel('Your explicit action').press('Control+Enter');
   await page.getByRole('button',{name:'Confirm this action',exact:true}).waitFor();
   assert.equal((await game.access(f.creator,timeline.id)).t.revision,beforeProposal);
   await page.getByRole('button',{name:'Confirm this action',exact:true}).click();
@@ -97,6 +100,7 @@ test('iPad shell, keyboard login, Creator form, long prose, reduced motion and o
   await page.getByRole('button',{name:'Cancel proposal',exact:true}).click();assert.equal((await game.access(f.creator,timeline.id)).t.revision,beforeAI);
   assert.deepEqual((await new AxeBuilder({page}).analyze()).violations.map(v=>v.id),[]);
   await page.screenshot({path:'artifacts/chronicle.png'});
+  const reconnectDraft='This draft survives a reconnect.\nIt is still not an action.';await page.getByLabel('Your explicit action').fill(reconnectDraft);await page.reload();await page.getByRole('heading',{name:'Choose your story.'}).waitFor();assert.equal(await page.evaluate(()=>Object.entries(sessionStorage).find(([key])=>key.startsWith('valor.draft.'))?.[1]),reconnectDraft);
   await page.setViewportSize({width:390,height:844});
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
   await page.getByRole('button',{name:'Toggle navigation'}).click();

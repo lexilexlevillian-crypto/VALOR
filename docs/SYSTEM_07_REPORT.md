@@ -1,6 +1,6 @@
 # SYSTEM 07 — Character Creator and Shared Character Data
 
-Status: implemented and tested. Work stops at System 07 pending explicit approval for System 08.
+Status: implemented and tested.
 
 ## Goal
 
@@ -11,6 +11,7 @@ Player characters and NPCs now use the same validated character entity architect
 Added:
 
 - migrations/014_system07_character_profile.sql
+- migrations/020_system07_character_templates.sql
 - tests/system07-character.test.ts
 - docs/SYSTEM_07_REPORT.md
 
@@ -28,37 +29,39 @@ Changed:
 
 The validated character data contract now includes:
 
-- identity: legal name, aliases, date of birth, sex, gender, pronouns, optional identity map, nationality, authored culture context, origin location, and class context;
-- appearance: structured appearance map, height, build, hair, eyes, complexion, features, scars, tattoos, disabilities, presentation, and authored social-presentation context;
+- identity: legal name, aliases, date of birth, authored age, sex, gender, pronouns, optional identity map, nationality, authored culture/ethnicity context, origin location/neighborhood, and class context;
+- appearance: structured appearance map, rich descriptive prose, height, build, hair, eyes, complexion, features, scars, tattoos, disabilities, presentation, and contextual social interpretation;
 - background: structured background map, family background, employer/occupation, education, and beliefs context;
-- authored voice, Creator instructions, secrets, notes, mood, goals, fears, needs/health, schedule, plans, preferences, and compatibility;
+- authored voice, Creator instructions, AI behavior, secrets, notes, mood, goals, fears, needs/health, schedule, plans, preferences, and compatibility;
 - the existing attributes, skills, traits, faction, housing, money, location, condition, reproductive settings, and other state fields.
 
-Social presentation is descriptive authored context. No universal attractiveness score or mechanic was introduced. Identity and culture fields do not automatically derive mechanics.
+Social presentation and attractiveness context are descriptive, authored prose. No universal attractiveness score or mechanic was introduced. Identity and culture fields do not automatically derive mechanics.
 
-Every character carries characterSchemaVersion, currently version 2. Existing fields retain their prior defaults through additive parsing.
+Every character carries characterSchemaVersion, currently version 3. Existing fields retain their prior defaults through additive parsing and migration.
 
 ## Custom section architecture
 
 Character records contain stable-ID custom sections and fields:
 
-- section ID, name, parent section ID, position, visibility, help text, editability, repeatability, archive state;
-- field ID, name, type (text, number, boolean, or JSON), visibility, value, help text, repeatability, and archive state.
+- section ID, name, reusable dossier category, parent section ID, position, visibility, help text, editability, repeatability, archive state;
+- field ID, name, position, type (text, number, boolean, or JSON), biographical/current/subjective classification, visibility, value, help text, editability, repeatability, and archive state.
 
 Sections support nested parent relationships. Server validation rejects duplicate IDs, missing parents, cycles, invalid field values, and malformed visibility. Practical bounds are 1,000 sections and 1,000 fields per section to keep requests and renders safe; this is an implementation safety bound rather than a positional data model.
 
-Presentation edits change labels, positions, and hierarchy metadata without changing IDs or values.
+Presentation edits change labels, positions, subsection ownership, and hierarchy metadata without changing IDs or values. Repeatable fields use typed arrays; schema-v2 scalar values remain readable and are normalized by the v3 Creator editor.
+
+World-owned profile templates snapshot these stable-ID section definitions with blank defaults, not a source character's personal values. Applying a template keeps the current value contract for every matching field ID, even when the template moves or relabels it. Fields omitted by the template remain persisted as archived fields/sections, so replacement is non-destructive.
 
 ## Migration and backfill
 
-Migration 014 adds character_profile_schema_versions keyed by timeline and character. It:
+Migration 014 adds character_profile_schema_versions keyed by timeline and character. Migration 020:
 
-- backfills all existing character entities as schema version 2;
-- maintains metadata for new and updated character records through database triggers;
-- adds a character lookup index;
+- advances existing character entities and metadata to schema version 3;
+- replaces the profile-version triggers so new and updated characters remain at version 3;
+- adds world-owned character_profile_templates with active-name uniqueness and lookup indexes;
 - preserves the existing entity JSON as the authoritative profile payload.
 
-No destructive migration or data rewrite is required. The migration is additive and tested through fresh migration, restart, libSQL, and native SQLite compatibility paths. A failed entity mutation rolls back the entity, revision, event, receipt, audit, outbox, and autosave transaction using the existing game mutation boundary.
+The migration is forward-only and changes only the character schema-version marker inside existing JSON; authored values are not rewritten or dropped. It is tested through fresh migration, restart, libSQL, and native SQLite compatibility paths. A failed entity mutation rolls back the entity, revision, event, receipt, audit, outbox, and autosave transaction using the existing game mutation boundary.
 
 ## API and state contracts
 
@@ -75,6 +78,11 @@ System 07 uses the existing authoritative entity contracts:
   - authorized Creator/Developer view of full character records and custom fields.
 - GET /game/timelines/:id/view?characterId=...
   - controlled-player view projected through observer permissions.
+- GET/POST /game/timelines/:id/character-profile-templates
+  - lists or creates reusable world-owned dossier layouts for authorized Creators.
+- POST /game/timelines/:id/character-profile-templates/use
+  - applies a replacement layout through the audited, optimistic, idempotent mutation boundary;
+  - preserves matching stable-ID values and archives omitted values.
 
 The server stores complete entity data. The browser editor only edits a draft and refreshes from the authoritative response after save.
 
@@ -94,12 +102,13 @@ NPC presentation remains a projection of known data. Exact hidden state stays se
 
 Developer Studio uses the same editor for player and NPC records. Character editing is organized as a dossier with:
 
-- identity/overview and visibility;
+- explicit Biography, Appearance, Current State, Mechanics, and Subjective Notes regions;
 - reusable custom sections for Identity, Appearance, Background, Stats, Skills, Traits, Health, Inventory, Relationships, Affiliations, Knowledge, Notes, or any other Creator-defined category;
 - built-in validated character data below the custom section editor;
 - add, rename, reorder, duplicate, archive, and delete actions for sections and fields;
 - parent-section selection for nested presentation;
-- field type, visibility, help text, and value controls;
+- field order, subsection destination, type, fact/state/note class, visibility, help text, editability, repeatability, and value controls;
+- reusable dossier-template save and reviewed replacement controls;
 - stable-ID display to make persistence explicit.
 
 Existing record duplication assigns a new entity ID, and record archive remains subject to reference protection. State repairs and privileged edits continue through the existing server-side role checks, revision checks, audit, and transaction boundary.
@@ -121,7 +130,7 @@ Existing record duplication assigns a new entity ID, and record archive remains 
 Focused:
 
 - node tests/run.ts tests/system07-character.test.ts
-  - 2 passed, 0 failed.
+  - 4 passed, 0 failed.
 
 The focused suite covers:
 
@@ -131,18 +140,16 @@ The focused suite covers:
 - Player Mode removal of hidden character fields;
 - campaign versus Creator custom-field visibility;
 - stable custom section and field IDs through rename, reorder, parent changes, save, reload, and migration;
+- stable field values through cross-subsection moves and template replacement;
+- archival preservation for values omitted by a replacement template;
+- typed repeatable fields plus field position, editability, and classification metadata;
 - cycle rejection.
 
 Regression groups:
 
-- npm run check
-  - passed.
-- node --check public/app.js
-  - passed.
-- Foundation, migration, libSQL, and native compatibility tests
-  - 10 foundation tests passed;
-  - 3 libSQL tests passed;
-  - 4 Turso/native compatibility tests passed.
+- npm run check: passed.
+- node --check public/app.js: passed.
+- npm test: 116 passed, 0 failed, including browser, foundation/migration, libSQL, native SQLite/Turso compatibility, visibility, and integrated gameplay groups.
 
 ## Manual acceptance
 
@@ -152,12 +159,13 @@ Regression groups:
 4. Add an Identity section and a campaign-visible field; add a Creator-only field beside it.
 5. Rename and reorder the section, rename the field, and save.
 6. Reload Developer Studio and confirm the values remain attached to their stable IDs.
-7. Duplicate the section and fields, archive one field, and delete another.
-8. Create a controlled playable character and an NPC in the same location.
-9. Sign in as Player and confirm only permitted character fields and custom fields appear.
-10. Confirm Creator-only fields, secrets, instructions, plans, and private notes do not appear in Player Mode.
-11. Attempt a cyclic custom-section parent assignment and confirm the server rejects it without changing the saved profile.
-12. Confirm a malformed custom field type or invalid origin location is rejected before commit.
+7. Move a field to another subsection, toggle editability/repeatability, duplicate the section and fields, archive one field, and delete another.
+8. Save the persisted dossier as a reusable template, change and save a matching field value, then reapply the template and confirm the value remains.
+9. Create a controlled playable character and an NPC in the same location.
+10. Sign in as Player and confirm only permitted character fields and custom fields appear.
+11. Confirm Creator-only fields, secrets, instructions, AI behavior, plans, and private notes do not appear in Player Mode.
+12. Attempt a cyclic custom-section parent assignment and confirm the server rejects it without changing the saved profile.
+13. Confirm a malformed repeated field value or invalid origin location is rejected before commit.
 
 ## Performance, accessibility, and cost
 
@@ -165,6 +173,6 @@ The editor uses bounded server-validated JSON and does not call an AI provider. 
 
 Large Creator profiles can still become dense if a user authorizes hundreds of sections. The practical bounds, compact field grids, and per-section controls keep that risk bounded; virtualization or search-inside-profile can be added if real authored dossiers require it.
 
-## Genuine undecided design question
+## Cross-system ownership
 
-The character schema currently stores rich relationships, inventory, phone data, memories, and knowledge as separate entity systems rather than duplicating those records inside the character JSON. This preserves authoritative references and avoids divergent copies. A later Creator presentation pass may add configurable cross-system section bindings so those separate records can be reordered into a dossier without changing their ownership or canonical storage.
+Rich relationships, inventory, possessions, vehicles, phone/contact data, memories, knowledge, affiliations, and housing remain referenced authoritative records rather than duplicated character JSON. Relationship and phone contact entries reference character IDs, never display names. Dossier categories provide coherent presentation while preserving those ownership boundaries and avoiding divergent copies.

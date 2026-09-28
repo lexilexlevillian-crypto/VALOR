@@ -3,7 +3,7 @@ import type {State} from './game/model.ts';
 
 type ChronicleEntry={
  id:string;character_id:string;user_id:string;input_text:string;narration:string;
- narration_status:string;created_at:string;source_event_id:string;
+ narration_status:string;created_at:string;source_event_id:string;notices_json:string;scene_json:string;
 };
 
 // Rebuildable, observer-scoped read models. Canonical authority remains in State
@@ -28,7 +28,8 @@ export function buildFoundationProjections(state:State,observerId:string,chronic
   chronicle:{
    entries:chronicle.filter(entry=>entry.character_id===observerId).slice(-100).map(entry=>({
     id:entry.id,input:entry.input_text,narration:entry.narration,status:entry.narration_status,
-    createdAt:entry.created_at,sourceEventId:entry.source_event_id
+    createdAt:entry.created_at,sourceEventId:entry.source_event_id,
+    notices:JSON.parse(entry.notices_json),scene:JSON.parse(entry.scene_json)
    }))
   },
   roster:{

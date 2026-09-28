@@ -186,9 +186,9 @@ test('game HTTP APIs enforce auth, controller ownership and optimistic revisions
   const session=await login(f,'player@example.test'),headers={cookie:session.cookie,origin:f.settings.origin,'x-csrf-token':session.csrf,'idempotency-key':key()};
   const url='/game/timelines/'+f.timeline.id;
   assert.equal((await f.app.inject({url:url+'/creator',headers})).statusCode,403);
-  const response=await f.app.inject({url:url+'/turns',method:'POST',headers,payload:{revision:(await f.revision()),characterId:f.pc,action:{type:'look'}}});
+  const before=await f.game.view(f.player,f.timeline.id,f.pc),response=await f.app.inject({url:url+'/turns',method:'POST',headers,payload:{revision:before.timeline.revision,cursor:before.timeline.turnCursor,characterId:f.pc,action:{type:'look'}}});
   assert.equal(response.statusCode,200,response.body);
-  const denied=await f.app.inject({url:url+'/turns',method:'POST',headers:{...headers,'idempotency-key':key()},payload:{revision:(await f.revision()),characterId:f.npc,action:{type:'look'}}});
+  const current=await f.game.view(f.player,f.timeline.id,f.pc),denied=await f.app.inject({url:url+'/turns',method:'POST',headers:{...headers,'idempotency-key':key()},payload:{revision:current.timeline.revision,cursor:current.timeline.turnCursor,characterId:f.npc,action:{type:'look'}}});
   assert.equal(denied.statusCode,403);
   const catalog=await f.app.inject({url:'/game/catalog',headers});assert.equal(catalog.statusCode,200,catalog.body);
   assert.ok(catalog.json().schemas.character);

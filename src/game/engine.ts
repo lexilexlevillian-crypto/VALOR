@@ -4,17 +4,20 @@ import {Store} from '../db.ts';
 import {Domain} from '../domain.ts';
 import {ensure} from '../contracts.ts';
 import type {Actor} from '../contracts.ts';
-import {actionSchema,data,entitySchema,getEntity,refs,settingsSchema,validateEntity,validateState} from './model.ts';
+import {actionSchema,applyCharacterProfileTemplate,beliefSchema,characterProfileTemplateSchema,data,entitySchema,factSchema,getEntity,knowledgeSchema,memorySchema,refs,settingsSchema,validateEntity,validateState} from './model.ts';
 import type {Action,Entity,State} from './model.ts';
-import {observerView,retrieve,observe,fact,visible} from './epistemics.ts';
+import {observerView,retrieve,observe,fact,gossip,remember,visible} from './epistemics.ts';
 import {resolveAction} from './actions.ts';
 import type {CheckRecord} from './actions.ts';
 import {advance,type Effect} from './simulation.ts';
-import {skillNames,traitGroups} from './catalog.ts';
+import {skillNames,traitBackgroundRequirements,traitGenerationTags,traitGroups,traitOppositions} from './catalog.ts';
+import {generateNpcTraitSelection,validateTraitSelection} from './traits.ts';
 import type {InStatement,InValue} from '@libsql/client';
-import {contextBrief} from './context.ts';
+import {buildContextManifest,contextBrief} from './context.ts';
 import {proposeIntent} from './intent.ts';
 import type {IntentProposal} from './intent.ts';
+import type {RetrievalFilters} from './epistemics.ts';
+import {TurnTraceRecorder,beginTurnTrace,failureReason,persistTurnTrace} from './turn-pipeline.ts';
 import {encodeSnapshot,decodeSnapshot} from './snapshots.ts';
 import {mediaBytes} from './media.ts';
 import {defaultCampaignConfig,parseStoredCampaignConfig,resolveCampaignConfig} from '../campaign-config.ts';
@@ -22,6 +25,7 @@ import {buildFoundationProjections} from '../foundation-projections.ts';
 import {auditJson,ensureJsonBytes} from '../security.ts';
 import {canonSourceSchema,canonSnapshotSchema} from './canon.ts';
 import type {CanonSource} from './canon.ts';
+import {chronicleNoticeSchema,chroniclePresentation,chronicleSceneSchema} from './chronicle.ts';
 type Timeline={id:string;campaign_id:string;parent_id:string|null;parent_save_id:string|null;name:string;revision:number;clock:string;settings_json:string};
 type Mutation<T>={result:T;effects?:Effect[];draws?:number;checks?:CheckRecord[];characterId?:string;turnText?:string};
 const now=()=>new Date().toISOString();
@@ -53,12 +57,13 @@ const packageInputSchema=z.strictObject({
  visibility:z.enum(['creator','campaign']).default('campaign'),status:z.enum(['draft','published','archived']).default('draft'),
  definition:z.unknown()
 });
-const transcriptSchema=z.strictObject({id:z.uuid(),character_id:z.uuid(),user_id:z.uuid(),input_text:z.string().max(1000),narration:z.string().max(200000),narration_status:z.string().max(100),created_at:z.iso.datetime(),source_event_id:z.uuid()});
+const transcriptSchema=z.strictObject({id:z.uuid(),character_id:z.uuid(),user_id:z.uuid(),input_text:z.string().max(1000),narration:z.string().max(200000),narration_status:z.string().max(100),created_at:z.iso.datetime(),source_event_id:z.uuid(),notices_json:z.string().max(100000).default('[]'),scene_json:z.string().max(10000).default('{}')});
+const presentTranscript=(turn:z.infer<typeof transcriptSchema>)=>{
+ const notices=z.array(chronicleNoticeSchema).safeParse(JSON.parse(turn.notices_json)),scene=chronicleSceneSchema.safeParse(JSON.parse(turn.scene_json));
+ return {...turn,notices:notices.success?notices.data:[],scene:scene.success?scene.data:{clock:turn.created_at,locationId:null,locationName:null}};
+};
 const snapshotSchema=z.strictObject({version:z.literal(1),worldHistory:z.array(z.strictObject({eventId:z.uuid(),canonRevisionId:z.uuid().nullable(),configuration:z.json()})).default([]),transcript:z.array(transcriptSchema).default([]),state:z.strictObject({canon:canonSourceSchema.nullable().optional(),clock:z.iso.datetime(),settings:settingsSchema,entities:z.array(entitySchema).max(20000),
- facts:z.array(z.strictObject({id:z.uuid(),subjectId:z.uuid(),predicate:z.string().max(160),value:z.json(),eventId:z.uuid(),at:z.iso.datetime(),retiredAt:z.iso.datetime().nullable()})),
- knowledge:z.array(z.strictObject({observerId:z.uuid(),factId:z.uuid(),source:z.string(),at:z.iso.datetime()})),
- beliefs:z.array(z.strictObject({id:z.uuid(),observerId:z.uuid(),proposition:z.string().max(16000),confidence:z.number().min(0).max(1),source:z.string(),at:z.iso.datetime(),correctedBy:z.uuid().nullable()})),
- memories:z.array(z.strictObject({id:z.uuid(),observerId:z.uuid(),text:z.string().max(16000),salience:z.number().min(0).max(1),decayPerDay:z.number().min(0).max(1),eventId:z.uuid(),at:z.iso.datetime(),private:z.boolean()}))
+ facts:z.array(factSchema),knowledge:z.array(knowledgeSchema),beliefs:z.array(beliefSchema),memories:z.array(memorySchema),eventIds:z.array(z.uuid()).max(100000).optional()
 })});
 export class Game {
  store:Store;domain:Domain;readonly exportBytes:number;readonly importBytes:number;
@@ -102,11 +107,12 @@ export class Game {
   return this.store.transaction(async()=>{
   const t=(await this.store.get<Timeline>('SELECT * FROM timelines WHERE id=?',id))!;
   const entities=(await this.store.all<{id:string;kind:Entity['kind'];name:string;visibility:Entity['visibility'];data_json:string;revision:number;archived_at:string|null}>('SELECT * FROM game_entities WHERE timeline_id=? ORDER BY id',id)).map(e=>({id:e.id,kind:e.kind,name:e.name,visibility:e.visibility,data:JSON.parse(e.data_json),revision:e.revision,archived:!!e.archived_at}));
-  const facts=(await this.store.all<Record<string,unknown>>('SELECT * FROM world_facts WHERE timeline_id=? ORDER BY id',id)).map(r=>({id:r.id as string,subjectId:r.subject_id as string,predicate:r.predicate as string,value:JSON.parse(r.value_json as string),eventId:r.source_event_id as string,at:r.created_at as string,retiredAt:r.retired_at as string|null}));
-  const knowledge=(await this.store.all<Record<string,string>>('SELECT * FROM character_knowledge WHERE timeline_id=?',id)).map(r=>({observerId:r.observer_id!,factId:r.fact_id!,source:r.source!,at:r.learned_at!}));
-  const beliefs=(await this.store.all<Record<string,unknown>>('SELECT * FROM character_beliefs WHERE timeline_id=?',id)).map(r=>({id:r.id as string,observerId:r.observer_id as string,proposition:r.proposition as string,confidence:r.confidence as number,source:r.source as string,at:r.updated_at as string,correctedBy:r.corrected_by as string|null}));
-  const memories=(await this.store.all<Record<string,unknown>>('SELECT * FROM character_memories WHERE timeline_id=?',id)).map(r=>({id:r.id as string,observerId:r.observer_id as string,text:r.text as string,salience:r.salience as number,decayPerDay:r.decay_per_day as number,eventId:r.source_event_id as string,at:r.created_at as string,private:!!r.private}));
-  return {canon:await this.canon(id),clock:t.clock,settings:settingsSchema.parse(JSON.parse(t.settings_json)),entities,facts,knowledge,beliefs,memories};
+  const facts=(await this.store.all<Record<string,unknown>>('SELECT * FROM world_facts WHERE timeline_id=? ORDER BY id',id)).map(r=>factSchema.parse({id:r.id,subjectId:r.subject_id,predicate:r.predicate,objectId:r.object_id,value:JSON.parse(String(r.value_json)),qualifiers:JSON.parse(String(r.qualifiers_json)),source:r.source,truthStatus:r.truth_status,audience:JSON.parse(String(r.audience_json)),confidence:r.confidence,observedAt:r.observed_at,learnedAt:r.learned_at,validFrom:r.valid_from,validUntil:r.valid_until,eventId:r.source_event_id,eventIds:JSON.parse(String(r.event_ids_json)),evidenceIds:JSON.parse(String(r.evidence_ids_json)),tags:JSON.parse(String(r.tags_json)),at:r.created_at,retiredAt:r.retired_at}));
+  const knowledge=(await this.store.all<Record<string,unknown>>('SELECT * FROM character_knowledge WHERE timeline_id=?',id)).map(r=>knowledgeSchema.parse({observerId:r.observer_id,factId:r.fact_id,source:r.source,at:r.learned_at,confidence:r.confidence,observedAt:r.observed_at,expiresAt:r.expires_at,evidenceIds:JSON.parse(String(r.evidence_ids_json))}));
+  const beliefs=(await this.store.all<Record<string,unknown>>('SELECT * FROM character_beliefs WHERE timeline_id=?',id)).map(r=>beliefSchema.parse({id:r.id,observerId:r.observer_id,proposition:r.proposition,subjectId:r.subject_id,predicate:r.predicate,objectId:r.object_id,value:JSON.parse(String(r.value_json)),qualifiers:JSON.parse(String(r.qualifiers_json)),confidence:r.confidence,source:r.source,truthStatus:r.truth_status,audience:JSON.parse(String(r.audience_json)),observedAt:r.observed_at,validFrom:r.valid_from,validUntil:r.valid_until,eventIds:JSON.parse(String(r.event_ids_json)),evidenceIds:JSON.parse(String(r.evidence_ids_json)),tags:JSON.parse(String(r.tags_json)),at:r.updated_at,correctedBy:r.corrected_by}));
+  const memories=(await this.store.all<Record<string,unknown>>('SELECT * FROM character_memories WHERE timeline_id=?',id)).map(r=>memorySchema.parse({id:r.id,observerId:r.observer_id,text:r.text,interpretation:r.interpretation,salience:r.salience,decayPerDay:r.decay_per_day,eventId:r.source_event_id,eventRefs:JSON.parse(String(r.event_refs_json)),at:r.created_at,private:!!r.private,privacy:r.privacy,recallConditions:JSON.parse(String(r.recall_conditions_json)),lastRefreshedAt:r.last_refreshed_at,refreshCount:r.refresh_count,expiresAt:r.expires_at,tags:JSON.parse(String(r.tags_json))}));
+  const inherited=await this.store.get<{history_json:string}>('SELECT history_json FROM timeline_world_history WHERE timeline_id=?',id),currentEvents=await this.store.all<{id:string}>('SELECT id FROM game_events WHERE timeline_id=? ORDER BY revision',id),eventIds=[...new Set([...(inherited?JSON.parse(inherited.history_json).map((row:{eventId:string})=>row.eventId):[]),...currentEvents.map(row=>row.id)])];
+  return {canon:await this.canon(id),clock:t.clock,settings:settingsSchema.parse(JSON.parse(t.settings_json)),entities,facts,knowledge,beliefs,memories,eventIds};
   },'read');
  }
  async persist(id:string,s:State){
@@ -124,10 +130,10 @@ export class Game {
     id,e.id,e.kind,e.name,e.visibility,json,e.revision,timestamp,timestamp,e.archived?timestamp:null);
   }
   for(const e of s.entities)for(const ref of refs(e))write('INSERT INTO entity_links VALUES (?,?,?)',id,e.id,ref);
-  for(const f of s.facts)write('INSERT INTO world_facts VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(timeline_id,id) DO UPDATE SET retired_at=excluded.retired_at',id,f.id,f.subjectId,f.predicate,JSON.stringify(f.value),f.eventId,f.at,f.retiredAt);
-  for(const k of s.knowledge)write('INSERT INTO character_knowledge VALUES (?,?,?,?,?) ON CONFLICT DO NOTHING',id,k.observerId,k.factId,k.source,k.at);
-  for(const b of s.beliefs)write('INSERT INTO character_beliefs VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(timeline_id,id) DO UPDATE SET proposition=excluded.proposition,confidence=excluded.confidence,source=excluded.source,updated_at=excluded.updated_at,corrected_by=excluded.corrected_by',id,b.id,b.observerId,b.proposition,b.confidence,b.source,b.at,b.correctedBy);
-  for(const m of s.memories)write('INSERT INTO character_memories VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(timeline_id,id) DO UPDATE SET salience=excluded.salience,decay_per_day=excluded.decay_per_day,created_at=excluded.created_at',id,m.id,m.observerId,m.text,m.salience,m.decayPerDay,m.eventId,m.at,m.private?1:0);
+  for(const raw of s.facts){const f=factSchema.parse(raw),eventIds=[...new Set([f.eventId,...f.eventIds])];write('INSERT INTO world_facts(timeline_id,id,subject_id,predicate,value_json,source_event_id,created_at,retired_at,object_id,qualifiers_json,source,truth_status,audience_json,confidence,observed_at,learned_at,valid_from,valid_until,event_ids_json,evidence_ids_json,tags_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(timeline_id,id) DO UPDATE SET retired_at=excluded.retired_at,truth_status=excluded.truth_status',id,f.id,f.subjectId,f.predicate,JSON.stringify(f.value),f.eventId,f.at,f.retiredAt,f.objectId,JSON.stringify(f.qualifiers),f.source,f.truthStatus,JSON.stringify(f.audience),f.confidence,f.observedAt,f.learnedAt,f.validFrom,f.validUntil,JSON.stringify(eventIds),JSON.stringify(f.evidenceIds),JSON.stringify(f.tags));}
+  for(const raw of s.knowledge){const k=knowledgeSchema.parse(raw);write('INSERT INTO character_knowledge(timeline_id,observer_id,fact_id,source,learned_at,confidence,observed_at,expires_at,evidence_ids_json) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING',id,k.observerId,k.factId,k.source,k.at,k.confidence,k.observedAt,k.expiresAt,JSON.stringify(k.evidenceIds));}
+  for(const raw of s.beliefs){const b=beliefSchema.parse(raw);write('INSERT INTO character_beliefs(timeline_id,id,observer_id,proposition,confidence,source,updated_at,corrected_by,subject_id,predicate,object_id,value_json,qualifiers_json,truth_status,audience_json,observed_at,valid_from,valid_until,event_ids_json,evidence_ids_json,tags_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(timeline_id,id) DO UPDATE SET proposition=excluded.proposition,confidence=excluded.confidence,source=excluded.source,updated_at=excluded.updated_at,corrected_by=excluded.corrected_by,truth_status=excluded.truth_status,audience_json=excluded.audience_json,valid_until=excluded.valid_until,event_ids_json=excluded.event_ids_json,evidence_ids_json=excluded.evidence_ids_json,tags_json=excluded.tags_json',id,b.id,b.observerId,b.proposition,b.confidence,b.source,b.at,b.correctedBy,b.subjectId,b.predicate,b.objectId,JSON.stringify(b.value),JSON.stringify(b.qualifiers),b.truthStatus,JSON.stringify(b.audience),b.observedAt,b.validFrom,b.validUntil,JSON.stringify(b.eventIds),JSON.stringify(b.evidenceIds),JSON.stringify(b.tags));}
+  for(const raw of s.memories){const m=memorySchema.parse(raw),eventRefs=[...new Set([m.eventId,...m.eventRefs])];write('INSERT INTO character_memories(timeline_id,id,observer_id,text,salience,decay_per_day,source_event_id,created_at,private,interpretation,privacy,recall_conditions_json,last_refreshed_at,refresh_count,expires_at,event_refs_json,tags_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(timeline_id,id) DO UPDATE SET text=excluded.text,interpretation=excluded.interpretation,salience=excluded.salience,decay_per_day=excluded.decay_per_day,created_at=excluded.created_at,private=excluded.private,privacy=excluded.privacy,recall_conditions_json=excluded.recall_conditions_json,last_refreshed_at=excluded.last_refreshed_at,refresh_count=excluded.refresh_count,expires_at=excluded.expires_at,event_refs_json=excluded.event_refs_json,tags_json=excluded.tags_json',id,m.id,m.observerId,m.text,m.salience,m.decayPerDay,m.eventId,m.at,m.private?1:0,m.interpretation,m.privacy,JSON.stringify(m.recallConditions),m.lastRefreshedAt,m.refreshCount,m.expiresAt,JSON.stringify(eventRefs),JSON.stringify(m.tags));}
   write('UPDATE timelines SET clock=?,settings_json=? WHERE id=?',s.clock,JSON.stringify(s.settings),id);
   for(let offset=0;offset<statements.length;offset+=100)await this.store.batch(statements.slice(offset,offset+100));
  }
@@ -242,8 +248,9 @@ export class Game {
    const effects:Effect[]=[{id:randomUUID(),text:'A new playable life is ready in the roster.',observers:[character.id],type:'start.created',subjectId:character.id}];
    return {result:{characterId:character.id,packageId:parsed.packageId??null},effects,characterId:character.id,turnText:'start.character'};
   });
- } async view(actor:Actor,id:string,characterId:string){const {t,access}=(await this.access(actor,id));const s=(await this.load(id));this.controlled(actor,s,characterId,access.role);
-  return {timeline:{id:t.id,name:t.name,revision:t.revision},...observerView(s,characterId),checks:await this.checkHistory(id,characterId),turns:(await this.transcript(id)).filter(turn=>turn.character_id===characterId&&turn.user_id===actor.id).slice(-100)};}
+ } async view(actor:Actor,id:string,characterId:string){return this.store.transaction(async()=>{const {t,access}=(await this.access(actor,id));const s=(await this.load(id));this.controlled(actor,s,characterId,access.role);
+  const cursor=await this.store.get<{revision:number;cursor:string}>('SELECT revision,cursor FROM timeline_turn_cursors WHERE timeline_id=?',id);ensure(cursor&&cursor.revision===t.revision,409,'turn_cursor_desynchronized');
+  return {timeline:{id:t.id,name:t.name,revision:cursor.revision,turnCursor:cursor.cursor},...observerView(s,characterId),checks:await this.checkHistory(id,characterId,false,s),turns:(await this.transcript(id)).filter(turn=>turn.character_id===characterId&&turn.user_id===actor.id).slice(-100).map(presentTranscript)};},'read');}
  async projections(actor:Actor,id:string,characterId:string){
   const {access}=await this.access(actor,id),state=await this.load(id);
   this.controlled(actor,state,characterId,access.role);
@@ -254,10 +261,39 @@ export class Game {
   const state=await this.load(id);
   if(!privileged(access.role))this.controlled(actor,state,characterId,access.role);
   else getEntity(state,characterId,'character');
-  return this.checkHistory(id,characterId);
- } async checkHistory(id:string,characterId:string){
-  return (await this.store.all<Record<string,unknown>>('SELECT id,event_id,character_id,check_definition_id,attribute,skill_id,context,difficulty,die_value,attribute_value,skill_value,total,outcome,modifiers_json,provenance_json,created_at FROM check_records WHERE timeline_id=? AND character_id=? ORDER BY rowid DESC LIMIT 200',id,characterId)).map(row=>({...row,modifiers:JSON.parse(String(row.modifiers_json)),provenance:JSON.parse(String(row.provenance_json))}));
+  return this.checkHistory(id,characterId,privileged(access.role),state);
+ } async checkHistory(id:string,characterId:string,revealSources=false,state?:State){
+  const rows=(await this.store.all<Record<string,unknown>>('SELECT id,event_id,character_id,check_definition_id,attribute,skill_id,context,difficulty,die_value,attribute_value,skill_value,total,outcome,modifiers_json,provenance_json,created_at FROM check_records WHERE timeline_id=? AND character_id=? ORDER BY rowid DESC LIMIT 200',id,characterId)).map(row=>({...row,modifiers:JSON.parse(String(row.modifiers_json)) as Array<{kind?:string;name:string;value:number;sourceId?:string}>,provenance:JSON.parse(String(row.provenance_json)) as Record<string,unknown>}));
+  if(revealSources)return rows;const snapshot=state??await this.load(id);
+  return rows.map(row=>({...row,modifiers:row.modifiers.map(modifier=>{if(!modifier.sourceId)return modifier;const source=snapshot.entities.find(entity=>entity.id===modifier.sourceId);return source&&visible(snapshot,source,characterId)?modifier:{kind:modifier.kind,name:'Private authored modifier',value:modifier.value};}),provenance:Object.fromEntries(Object.entries(row.provenance).filter(([key])=>!['requiredTraits','missingRequirements','traitEffectResolution'].includes(key)))}));
  } async creator(actor:Actor,id:string){const {t}=(await this.access(actor,id,true));return {timeline:t,...(await this.load(id)),references:(await this.store.all('SELECT entity_id,target_id FROM entity_links WHERE timeline_id=?',id))};}
+ async characterProfileTemplates(actor:Actor,id:string){
+  const {t}=await this.access(actor,id,true),campaign=await this.store.get<{source_world_id:string}>('SELECT source_world_id FROM campaigns WHERE id=?',t.campaign_id);
+  return (await this.store.all<{id:string;name:string;template_json:string;revision:number;created_at:string;updated_at:string}>('SELECT id,name,template_json,revision,created_at,updated_at FROM character_profile_templates WHERE world_id=? AND archived_at IS NULL ORDER BY name,id',campaign!.source_world_id))
+   .map(row=>({id:row.id,name:row.name,definition:characterProfileTemplateSchema.parse(JSON.parse(row.template_json)),revision:row.revision,createdAt:row.created_at,updatedAt:row.updated_at}));
+ }
+ async createCharacterProfileTemplate(actor:Actor,id:string,input:{name:string;characterId:string}){
+  return this.store.transaction(async()=>{
+   const {t}=await this.access(actor,id,true),state=await this.load(id),character=getEntity(state,input.characterId,'character'),profile=data(character,'character');
+   const campaign=await this.store.get<{source_world_id:string}>('SELECT source_world_id FROM campaigns WHERE id=?',t.campaign_id),templateName=z.string().trim().min(1).max(160).parse(input.name),templateId=randomUUID(),timestamp=now();
+   ensure(!(await this.store.get('SELECT id FROM character_profile_templates WHERE world_id=? AND name=? AND archived_at IS NULL',campaign!.source_world_id,templateName)),409,'character_profile_template_name_taken');
+   const layout=profile.sections.map(section=>({...section,fields:section.fields.map(field=>({...field,value:field.repeatable?[]:field.type==='number'?0:field.type==='boolean'?false:field.type==='json'?{}:''}))}));
+   const definition=characterProfileTemplateSchema.parse({schemaVersion:1,sections:layout});
+   await this.store.run('INSERT INTO character_profile_templates(id,world_id,name,template_json,revision,created_by,created_at,updated_at,archived_at) VALUES (?,?,?,?,1,?,?,?,NULL)',templateId,campaign!.source_world_id,templateName,JSON.stringify(definition),actor.id,timestamp,timestamp);
+   await this.audit(actor,t.campaign_id,'character.profile-template.created',templateId,{after:{name:templateName,characterId:character.id,sections:definition.sections.length}});
+   return {id:templateId};
+  });
+ }
+ async useCharacterProfileTemplate(actor:Actor,id:string,input:{revision:number;templateId:string;characterId:string},key:string){
+  const {t}=await this.access(actor,id,true),campaign=await this.store.get<{source_world_id:string}>('SELECT source_world_id FROM campaigns WHERE id=?',t.campaign_id);
+  const row=await this.store.get<{template_json:string}>('SELECT template_json FROM character_profile_templates WHERE id=? AND world_id=? AND archived_at IS NULL',input.templateId,campaign!.source_world_id);
+  ensure(row,404,'character_profile_template_unavailable');const definition=characterProfileTemplateSchema.parse(JSON.parse(row.template_json));
+  return this.mutate(actor,id,input.revision,key,input,'creator.character-profile-template',true,s=>{
+   const character=getEntity(s,input.characterId,'character'),profile=data(character,'character');
+   profile.sections=applyCharacterProfileTemplate(profile.sections,definition);profile.characterSchemaVersion=3;character.data=profile as Entity['data'];
+   validateEntity(character);return {result:{characterId:character.id,templateId:input.templateId}};
+  });
+ }
  async preview(actor:Actor,id:string,characterId:string){await this.access(actor,id,true);const s=await this.load(id);getEntity(s,characterId,'character');return observerView(s,characterId);}
  async media(actor:Actor,id:string,mediaId:string,characterId:string){
   const {access}=await this.access(actor,id),s=await this.load(id);this.controlled(actor,s,characterId,access.role);const entity=getEntity(s,mediaId,'media');ensure(visible(s,entity,characterId),404,'media_unavailable');const m=data(entity,'media');return {mime:m.mime,bytes:mediaBytes(m.mime,m.body)};
@@ -275,32 +311,43 @@ export class Game {
   },'read');
  }
  async saveCompatibility(actor:Actor,id:string,saveId:string){await this.access(actor,id,true);const saved=await this.savedSnapshot(id,saveId);saved.state.entities=saved.state.entities.map(validateEntity);validateState(saved.state);return {valid:true,version:1,revision:saved.revision,entities:saved.state.entities.length,transcriptTurns:saved.transcript.length};}
- private async mutate<T extends object>(actor:Actor,id:string,expectedRevision:number,key:string,body:unknown,type:string,creator:boolean,fn:(s:State,eventId:string,seed:string,role:string)=>Mutation<T>|Promise<Mutation<T>>){
-  keySchema.parse(key);
+ private async mutate<T extends object>(actor:Actor,id:string,expectedRevision:number,key:string,body:unknown,type:string,creator:boolean,fn:(s:State,eventId:string,seed:string,role:string)=>Mutation<T>|Promise<Mutation<T>>,trace?:{recorder:TurnTraceRecorder;expectedCursor?:string}){
+  keySchema.parse(key);const recorder=trace?.recorder;
+  const run=<R>(stage:string,task:()=>R|Promise<R>,details:Record<string,unknown>={})=>recorder?recorder.run(stage,task,details):Promise.resolve().then(task);
   return (await this.store.transaction(async ()=>{
-   const {t,access}=(await this.access(actor,id,creator));
-   const receipt=(await this.store.get<{body_hash:string;result_json:string}>('SELECT * FROM game_receipts WHERE timeline_id=? AND actor_id=? AND key=?',id,actor.id,key));
-   if(receipt){ensure(receipt.body_hash===checksum(body),409,'idempotency_conflict');return JSON.parse(receipt.result_json);}
-   ensure(t.revision===expectedRevision,409,'revision_conflict');
-   const s=(await this.load(id)),eventId=randomUUID(),seed=randomBytes(32).toString('hex');
+   const {t,access}=await run('server-validation',()=>this.access(actor,id,creator),{operation:type});
+   const receipt=await this.store.get<{body_hash:string;result_json:string}>('SELECT * FROM game_receipts WHERE timeline_id=? AND actor_id=? AND key=?',id,actor.id,key);
+   if(receipt){ensure(receipt.body_hash===checksum(body),409,'idempotency_conflict');recorder?.mark('idempotency-replay','replayed',{requestKey:key});return JSON.parse(receipt.result_json);}
+   const cursor=await this.store.get<{revision:number;cursor:string}>('SELECT revision,cursor FROM timeline_turn_cursors WHERE timeline_id=?',id);
+   ensure(cursor,409,'turn_cursor_unavailable');ensure(t.revision===expectedRevision,409,'revision_conflict');ensure(cursor.revision===t.revision,409,'turn_cursor_desynchronized');
+   if(trace?.expectedCursor!==undefined)ensure(cursor.cursor===trace.expectedCursor,409,'turn_cursor_conflict');
+   recorder?.mark('turn-lock','succeeded',{protocol:'database-compare-and-swap',revision:t.revision,cursorMatched:trace?.expectedCursor!==undefined});
+   const s=await run('state-load',()=>this.load(id)),beforeState=structuredClone(s),eventId=randomUUID(),seed=randomBytes(32).toString('hex');
    const beforeDeath=s.settings.campaign?.saveBehavior.branchOnDeath?structuredClone(s):null;
-   const action=await fn(s,eventId,seed,access.role);(await this.persist(id,s));
-   const revision=t.revision+1;
-   (await this.store.run('UPDATE timelines SET revision=? WHERE id=?',revision,id));
-   (await this.store.run('INSERT INTO game_events VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',eventId,id,revision,actor.id,action.characterId??null,type,JSON.stringify(body),JSON.stringify(action.effects??[]),seed,action.draws??0,s.clock,now()));
-   for(const check of action.checks??[])await this.store.run('INSERT INTO check_records (id,timeline_id,event_id,character_id,check_definition_id,attribute,skill_id,context,difficulty,die_value,attribute_value,skill_value,total,outcome,modifiers_json,provenance_json,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',check.id,id,eventId,check.characterId,check.checkDefinitionId,check.attribute,check.skillId,check.context,check.difficulty,check.dieValue,check.attributeValue,check.skillValue,check.total,check.outcome,JSON.stringify(check.modifiers),JSON.stringify(check.provenance),now());
-   const eventCanonId=s.canon?.revisionId;
-   if(eventCanonId)await this.store.run('INSERT INTO event_canon_bindings VALUES (?,?,?)',eventId,eventCanonId,now());
-   await this.store.run('INSERT INTO event_world_context VALUES (?,?,?)',eventId,s.canon?.revisionId??null,JSON.stringify(s.settings.campaign));
-   await this.store.run('INSERT INTO game_outbox(event_id,created_at) VALUES (?,?)',eventId,now());
-   if(action.characterId){
-    const permitted=(action.effects??[]).filter(e=>e.observers.includes(action.characterId!));
-    const narration=permitted.map(e=>e.text).join('\n\n')||'The action is recorded.';
-    (await this.store.run('INSERT INTO story_turns VALUES (?,?,?,?,?,?,?,?,?,?)',eventId,id,actor.id,action.characterId,action.turnText??type,JSON.stringify(permitted),narration,'grounded','grounded-v1',now()));
+   const action=await run('deterministic-simulation',()=>fn(s,eventId,seed,access.role),{eventId,seedDigest:checksum(seed)});
+   await run('state-projection',()=>this.persist(id,s));
+   const revision=t.revision+1,nextCursor=randomUUID();
+   const timelineUpdate=await this.store.run('UPDATE timelines SET revision=? WHERE id=? AND revision=?',revision,id,t.revision);ensure(timelineUpdate.rowsAffected===1,409,'revision_conflict');
+   const cursorUpdate=await this.store.run('UPDATE timeline_turn_cursors SET revision=?,cursor=?,updated_at=? WHERE timeline_id=? AND revision=? AND cursor=?',revision,nextCursor,now(),id,t.revision,cursor.cursor);ensure(cursorUpdate.rowsAffected===1,409,'turn_cursor_conflict');
+   await run('domain-event-append',async()=>{
+    await this.store.run('INSERT INTO game_events VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',eventId,id,revision,actor.id,action.characterId??null,type,JSON.stringify(body),JSON.stringify(action.effects??[]),seed,action.draws??0,s.clock,now());
+    for(const check of action.checks??[])await this.store.run('INSERT INTO check_records (id,timeline_id,event_id,character_id,check_definition_id,attribute,skill_id,context,difficulty,die_value,attribute_value,skill_value,total,outcome,modifiers_json,provenance_json,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',check.id,id,eventId,check.characterId,check.checkDefinitionId,check.attribute,check.skillId,check.context,check.difficulty,check.dieValue,check.attributeValue,check.skillValue,check.total,check.outcome,JSON.stringify(check.modifiers),JSON.stringify(check.provenance),now());
+    const eventCanonId=s.canon?.revisionId;if(eventCanonId)await this.store.run('INSERT INTO event_canon_bindings VALUES (?,?,?)',eventId,eventCanonId,now());
+    await this.store.run('INSERT INTO event_world_context VALUES (?,?,?)',eventId,s.canon?.revisionId??null,JSON.stringify(s.settings.campaign));
+    await this.store.run('INSERT INTO game_outbox(event_id,created_at) VALUES (?,?)',eventId,now());
+   },{eventId,revision,rngDraws:action.draws??0});
+   const characterId=action.characterId;
+   if(characterId){
+    await run('grounded-summary',async()=>{
+     const permitted=(action.effects??[]).filter(e=>e.observers.includes(characterId));
+     const narration=permitted.map(e=>e.text).join('\n\n')||'The action resolved. No observer-visible change was recorded.';
+     const presentation=chroniclePresentation(beforeState,s,characterId);
+     await this.store.run('INSERT INTO story_turns (id,timeline_id,user_id,character_id,input_text,permitted_json,narration,narration_status,prompt_version,created_at,notices_json,scene_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',eventId,id,actor.id,characterId,action.turnText??type,JSON.stringify(permitted),narration,'grounded','grounded-v1',now(),JSON.stringify(presentation.notices),JSON.stringify(presentation.scene));
+    },{eventId,mechanicsPreserved:true});
    }
-   (await this.audit(actor,t.campaign_id,type,eventId,{reason:type,before:creator?{revision:t.revision,command:body}:undefined,after:creator?{revision,effects:action.effects??[]}:undefined}));
-   const response={revision,eventId,...action.result};
-   (await this.store.run('INSERT INTO game_receipts VALUES (?,?,?,?,?)',id,actor.id,key,checksum(body),JSON.stringify(response)));
+   await this.audit(actor,t.campaign_id,type,eventId,{reason:type,before:creator?{revision:t.revision,command:body}:undefined,after:creator?{revision,effects:action.effects??[]}:undefined});
+   const response={revision,eventId,turnCursor:nextCursor,...action.result};
+   await this.store.run('INSERT INTO game_receipts VALUES (?,?,?,?,?)',id,actor.id,key,checksum(body),JSON.stringify(response));
    if((s.settings.campaign?.saveBehavior.autosave??'safe-commit')==='safe-commit')await this.saveInternal(actor,id,'Autosave '+revision,s,revision,true);
    if(beforeDeath&&s.entities.some(e=>e.kind==='character'&&e.data.playable&&e.data.condition==='dead'&&beforeDeath.entities.some(old=>old.id===e.id&&old.data.condition!=='dead'))){
     const saveId=await this.saveInternal(actor,id,'Before death',beforeDeath,t.revision,true);
@@ -309,8 +356,7 @@ export class Game {
    }
    return response;
   }));
- }
- async developerValidate(actor:Actor,id:string,input:{revision:number;entities:unknown[]}){
+ } async developerValidate(actor:Actor,id:string,input:{revision:number;entities:unknown[]}){
   const {t}=await this.access(actor,id,true);ensure(t.revision===input.revision,409,'revision_conflict');
   const entities=z.array(entitySchema).min(1).max(100).parse(input.entities).map(validateEntity);ensure(new Set(entities.map(entity=>entity.id)).size===entities.length,400,'duplicate_entity_id');
   const state=await this.load(id),staged=structuredClone(state);
@@ -342,10 +388,16 @@ export class Game {
    const previous=s.entities.find(e=>e.id===entity.id);ensure(!previous||previous.kind===entity.kind,400,'entity_kind_immutable');
    if(entity.kind==='character'&&entity.data.controllerUserId)ensure((await this.store.get('SELECT user_id FROM memberships WHERE campaign_id=(SELECT campaign_id FROM timelines WHERE id=?) AND user_id=?',id,String(entity.data.controllerUserId))),400,'controller_not_member');
    if(entity.kind==='character'){
-    const c=data(entity,'character');let spent=0;const seen=new Set(c.traits);ensure(seen.size===c.traits.length,400,'duplicate_traits');
-    for(const traitId of c.traits){const t=data(getEntity(s,traitId,'trait'),'trait');ensure(t.prerequisites.every(x=>seen.has(x))&&!t.opposes.some(x=>seen.has(x)),400,'trait_prerequisite_or_opposition');if(t.mode==='costed')spent+=Math.max(0,t.cost);}
-    ensure(spent<=s.settings.traitBudget,400,'trait_budget_exceeded');
-    if(previous)for(const old of data(previous,'character').traits){const trait=data(getEntity(s,old,'trait'),'trait');ensure(!trait.permanent||seen.has(old),400,'permanent_trait');}
+    const c=data(entity,'character');const seen=new Set(c.traits);ensure(seen.size===c.traits.length,400,'duplicate_traits');
+    const aligned=(value:number,min:number,step:number)=>Math.abs((value-min)/step-Math.round((value-min)/step))<1e-9;
+    for(const value of Object.values(c.attributes)){ensure(value>=s.settings.attributeScale.min&&value<=s.settings.attributeScale.max,400,'attribute_out_of_scale');ensure(aligned(value,s.settings.attributeScale.min,s.settings.attributeScale.step),400,'attribute_step_mismatch');}
+    for(const [skillId,value] of Object.entries(c.skills)){const skill=data(getEntity(s,skillId,'skill'),'skill');ensure(value>=skill.scale.min&&value<=skill.scale.max,400,'skill_out_of_scale');ensure(aligned(value,skill.scale.min,skill.scale.step),400,'skill_step_mismatch');}
+    validateTraitSelection(s,c.traits);
+    if(previous){
+     const before=new Set(data(previous,'character').traits);
+     for(const old of before){const trait=data(getEntity(s,old,'trait'),'trait');ensure(!trait.permanent&&trait.loss.mode!=='never'||seen.has(old),400,'permanent_trait');}
+     for(const added of seen)if(!before.has(added)){const trait=data(getEntity(s,added,'trait'),'trait');ensure(trait.acquirable,400,'trait_not_acquirable');ensure(['creator','either'].includes(trait.acquisition.mode),400,'trait_acquisition_requires_event');}
+    }
    }
    if(entity.archived)ensure(!s.entities.some(e=>!e.archived&&e.id!==entity.id&&refs(e).includes(entity.id)),409,'entity_has_active_references');
    if(previous)s.entities[s.entities.indexOf(previous)]=entity;else s.entities.push(entity);
@@ -393,32 +445,38 @@ export class Game {
   const parsed=settingsSchema.parse(settings);new Intl.DateTimeFormat('en-US',{timeZone:parsed.timezone});
   return (await this.mutate(actor,id,revision,key,{revision,settings:parsed},'creator.settings',true,s=>{s.settings=parsed;return {result:{}};}));
  }
- async epistemic(actor:Actor,id:string,revision:number,input:{layer:'truth'|'knowledge'|'belief'|'memory'|'correct-belief'|'retire-truth'|'refresh-memory';subjectId:string;text:string;factId?:string;confidence?:number;recordId?:string;salience?:number;decayPerDay?:number},key:string){
+ async epistemic(actor:Actor,id:string,revision:number,input:{layer:'truth'|'knowledge'|'belief'|'memory'|'gossip'|'correct-belief'|'retire-truth'|'refresh-memory';subjectId:string;text:string;factId?:string;confidence?:number;recordId?:string;targetId?:string;salience?:number;decayPerDay?:number;predicate?:string;value?:unknown;propositionSubjectId?:string|null;objectId?:string|null;qualifiers?:Record<string,unknown>;source?:string;truthStatus?:'verified'|'asserted'|'disputed'|'false'|'superseded'|'believed'|'doubted'|'disproven'|'confirmed';audience?:string[];observedAt?:string|null;learnedAt?:string|null;validFrom?:string|null;validUntil?:string|null;eventIds?:string[];evidenceIds?:string[];tags?:string[];interpretation?:string;privacy?:'private'|'shared';recallConditions?:{entityIds?:string[];tags?:string[];locationId?:string|null;from?:string|null;until?:string|null};expiresAt?:string|null},key:string){
   return (await this.mutate(actor,id,revision,key,input,'creator.epistemic',true,(s,eventId)=>{
-   getEntity(s,input.subjectId);
-   if(['knowledge','belief','memory','correct-belief','refresh-memory'].includes(input.layer))getEntity(s,input.subjectId,'character');
-   if(input.layer==='truth')fact(s,input.subjectId,'authored',input.text,eventId);
-   if(input.layer==='knowledge'){ensure(input.factId,400,'fact_required');observe(s,input.subjectId,input.factId,'Creator');}
-   if(input.layer==='belief')s.beliefs.push({id:randomUUID(),observerId:input.subjectId,proposition:input.text,confidence:input.confidence??0.5,source:'Creator',at:s.clock,correctedBy:null});
-   if(input.layer==='memory')s.memories.push({id:randomUUID(),observerId:input.subjectId,text:input.text,salience:input.salience??1,decayPerDay:input.decayPerDay??0.01,eventId,at:s.clock,private:true});
-   if(input.layer==='correct-belief'){const belief=s.beliefs.find(b=>b.id===input.recordId&&b.observerId===input.subjectId);ensure(belief&&input.factId,400,'belief_and_correction_required');observe(s,input.subjectId,input.factId,'correction:'+eventId);belief.correctedBy=input.factId;belief.at=s.clock;}
-   if(input.layer==='retire-truth'){const old=s.facts.find(f=>f.id===input.factId&&f.subjectId===input.subjectId);ensure(old,400,'fact_required');old.retiredAt=s.clock;fact(s,input.subjectId,old.predicate,input.text,eventId);}
-   if(input.layer==='refresh-memory'){const memory=s.memories.find(m=>m.id===input.recordId&&m.observerId===input.subjectId);ensure(memory,400,'memory_required');memory.at=s.clock;memory.salience=input.salience??memory.salience;memory.decayPerDay=input.decayPerDay??memory.decayPerDay;}
-   return {result:{}};
+   getEntity(s,input.subjectId);if(input.propositionSubjectId)getEntity(s,input.propositionSubjectId);if(input.objectId)getEntity(s,input.objectId);for(const evidenceId of input.evidenceIds??[])getEntity(s,evidenceId,'evidence');
+   if(['knowledge','belief','memory','gossip','correct-belief','refresh-memory'].includes(input.layer))getEntity(s,input.subjectId,'character');
+   let recordId=input.recordId??input.factId??null;
+   if(input.layer==='truth')recordId=fact(s,input.subjectId,input.predicate??'authored',input.value??input.text,eventId,[],{objectId:input.objectId,qualifiers:input.qualifiers,source:input.source??'Creator',truthStatus:['verified','asserted','disputed','false','superseded'].includes(input.truthStatus??'')?input.truthStatus as 'verified'|'asserted'|'disputed'|'false'|'superseded':'verified',audience:input.audience,confidence:input.confidence,observedAt:input.observedAt,learnedAt:input.learnedAt,validFrom:input.validFrom,validUntil:input.validUntil,eventIds:input.eventIds,evidenceIds:input.evidenceIds,tags:input.tags});
+   if(input.layer==='knowledge'){ensure(input.factId,400,'fact_required');observe(s,input.subjectId,input.factId,input.source??'Creator',{confidence:input.confidence,observedAt:input.observedAt,expiresAt:input.validUntil,evidenceIds:input.evidenceIds});recordId=input.factId;}
+   if(input.layer==='belief'){recordId=randomUUID();s.beliefs.push({id:recordId,observerId:input.subjectId,proposition:input.text,subjectId:input.propositionSubjectId??input.subjectId,predicate:input.predicate??'believes',objectId:input.objectId??null,value:input.value??input.text,qualifiers:input.qualifiers??{},confidence:input.confidence??0.5,source:input.source??'Creator',truthStatus:['believed','doubted','disproven','confirmed'].includes(input.truthStatus??'')?input.truthStatus as 'believed'|'doubted'|'disproven'|'confirmed':'believed',audience:input.audience??[input.subjectId],observedAt:input.observedAt??null,validFrom:input.validFrom??s.clock,validUntil:input.validUntil??null,eventIds:[...new Set([eventId,...(input.eventIds??[])])],evidenceIds:input.evidenceIds??[],tags:input.tags??[],at:s.clock,correctedBy:null});}
+   if(input.layer==='memory'){remember(s,input.subjectId,input.text,eventId,input.salience??1,{interpretation:input.interpretation,privacy:input.privacy,recallConditions:input.recallConditions,decayPerDay:input.decayPerDay,expiresAt:input.expiresAt,eventRefs:input.eventIds,tags:input.tags});recordId=s.memories.at(-1)!.id;}
+   if(input.layer==='gossip'){ensure(input.recordId&&input.targetId,400,'belief_and_target_required');recordId=gossip(s,input.subjectId,input.targetId,input.recordId,eventId,Math.max(0,Math.min(1,1-(input.confidence??0.8))));}
+   if(input.layer==='correct-belief'){const belief=s.beliefs.find(b=>b.id===input.recordId&&b.observerId===input.subjectId);ensure(belief&&input.factId,400,'belief_and_correction_required');observe(s,input.subjectId,input.factId,'correction:'+eventId,{observedAt:s.clock,evidenceIds:input.evidenceIds});belief.correctedBy=input.factId;belief.truthStatus='disproven';belief.at=s.clock;recordId=belief.id;}
+   if(input.layer==='retire-truth'){const old=s.facts.find(f=>f.id===input.factId&&f.subjectId===input.subjectId);ensure(old,400,'fact_required');old.retiredAt=s.clock;old.truthStatus='superseded';recordId=fact(s,input.subjectId,input.predicate??old.predicate,input.value??input.text,eventId,[],{objectId:input.objectId??old.objectId,qualifiers:input.qualifiers??old.qualifiers,source:input.source??'Creator correction',truthStatus:'verified',audience:input.audience??old.audience,confidence:input.confidence??old.confidence,observedAt:input.observedAt??s.clock,validFrom:input.validFrom??s.clock,validUntil:input.validUntil,eventIds:input.eventIds,evidenceIds:input.evidenceIds??old.evidenceIds,tags:input.tags??old.tags});}
+   if(input.layer==='refresh-memory'){const memory=s.memories.find(m=>m.id===input.recordId&&m.observerId===input.subjectId);ensure(memory,400,'memory_required');memory.at=s.clock;memory.lastRefreshedAt=s.clock;memory.refreshCount=(memory.refreshCount??0)+1;memory.salience=input.salience??memory.salience;memory.decayPerDay=input.decayPerDay??memory.decayPerDay;if(input.expiresAt!==undefined)memory.expiresAt=input.expiresAt;if(input.interpretation!==undefined)memory.interpretation=input.interpretation;recordId=memory.id;}
+   return {result:{recordId}};
   }));
- }
- async turn(actor:Actor,id:string,input:{revision:number;characterId:string;action:Action;text?:string},key:string){
-  const action=actionSchema.parse(input.action);
-  (await this.authorizeCharacter(actor,id,input.characterId));
-  return (await this.mutate(actor,id,input.revision,key,{...input,action},'story.turn',false,(s,eventId,seed,role)=>{
-   this.controlled(actor,s,input.characterId,role);
-   const resolved=resolveAction(s,input.characterId,action,eventId,seed);
-   const permitted=resolved.effects.filter(e=>e.observers.includes(input.characterId));
-   const narration=permitted.map(e=>e.text).join('\n\n')||'The action is recorded.';
-   return {result:{narration,permitted,checks:resolved.checks??[]},effects:resolved.effects,draws:resolved.draws,checks:resolved.checks,characterId:input.characterId,turnText:input.text??action.type};
-  }));
- }
- async triggerWatcher(actor:Actor,id:string,revision:number,watcherId:string,key:string){
+ } async turn(actor:Actor,id:string,input:{revision:number;characterId:string;action:Action;text?:string;cursor?:string},key:string){
+  keySchema.parse(key);const action=actionSchema.parse(input.action),body={...input,action},authorizationStarted=Date.now();
+  // Authorization precedes trace creation so an unauthorized caller cannot write into another tenant's trace ledger.
+  await this.authorizeCharacter(actor,id,input.characterId);
+  const trace=await beginTurnTrace(this.store,{timelineId:id,actorId:actor.id,requestKey:key,bodyHash:checksum(body),originalText:input.text??'',expectedRevision:input.revision,expectedCursor:input.cursor});
+  const recorder=new TurnTraceRecorder(trace.traceId);recorder.mark('input-preservation','succeeded',{originalTextPresent:input.text!==undefined,bytes:Buffer.byteLength(input.text??'')});recorder.mark('intent-confirmed','succeeded',{actionType:action.type,requiresServerValidation:true});recorder.mark('character-authorization','succeeded',{authorizedBeforeTraceWrite:true},undefined,Date.now()-authorizationStarted);
+  try{
+   const result=await recorder.run('atomic-commit',()=>this.mutate(actor,id,input.revision,key,body,'story.turn',false,(s,eventId,seed,role)=>{
+    this.controlled(actor,s,input.characterId,role);
+    const resolved=resolveAction(s,input.characterId,action,eventId,seed);
+    const permitted=resolved.effects.filter(e=>e.observers.includes(input.characterId));
+    const narration=permitted.map(e=>e.text).join('\n\n')||'The action resolved. No observer-visible change was recorded.';
+    return {result:{narration,permitted,checks:resolved.checks??[]},effects:resolved.effects,draws:resolved.draws,checks:resolved.checks,characterId:input.characterId,turnText:input.text??action.type};
+   },{recorder,expectedCursor:input.cursor}),{rollbackOnFailure:true});
+   const typed=result as {eventId:string};await persistTurnTrace(this.store,trace.traceId,recorder.steps,'committed',typed.eventId);return {...result,traceId:trace.traceId};
+  }catch(error){await persistTurnTrace(this.store,trace.traceId,recorder.steps,'failed',undefined,failureReason(error)).catch(()=>{});throw error;}
+ } async triggerWatcher(actor:Actor,id:string,revision:number,watcherId:string,key:string){
   return this.mutate(actor,id,revision,key,{revision,watcherId},'creator.watcher.trigger',true,s=>{
    const watcher=getEntity(s,watcherId,'watcher');
    ensure(!watcher.data.fired,409,'watcher_already_fired');
@@ -474,7 +532,21 @@ export class Game {
    (await this.audit(actor,t.campaign_id,'timeline.imported',child,{before:{parentTimelineId:id},after:{timelineId:child,name,entities:state.entities.length,clock:state.clock}}));(await this.saveInternal(actor,child,'Import origin',state,1,true));return {id:child};}));
  }
  async history(actor:Actor,id:string){(await this.access(actor,id,true));return (await this.store.all('SELECT * FROM game_events WHERE timeline_id=? ORDER BY rowid DESC LIMIT 100',id));}
- async context(actor:Actor,id:string,characterId:string,query:string){const {access}=(await this.access(actor,id));const s=(await this.load(id));this.controlled(actor,s,characterId,access.role);return {...retrieve(s,characterId,query),brief:contextBrief(s,characterId,query,s.settings.contextTokens)};}
+ async context(actor:Actor,id:string,characterId:string,query:string){
+  const {access}=await this.access(actor,id),s=await this.load(id);this.controlled(actor,s,characterId,access.role);
+  const recent=(await this.store.all<{id:string;input_text:string;narration:string}>('SELECT id,input_text,narration FROM story_turns WHERE timeline_id=? AND character_id=? ORDER BY rowid DESC LIMIT 8',id,characterId)).reverse().map(turn=>({id:turn.id,input:turn.input_text,narration:turn.narration}));
+  const events=(await this.store.all<{effects_json:string}>('SELECT effects_json FROM game_events WHERE timeline_id=? ORDER BY revision DESC LIMIT 8',id)).flatMap(row=>(JSON.parse(row.effects_json) as Effect[]).filter(effect=>effect.observers.includes(characterId)));
+  return {...retrieve(s,characterId,query),brief:contextBrief(s,characterId,query,s.settings.contextTokens,{currentEvents:events,recentConversation:recent}),manifest:buildContextManifest(s,characterId,query,{maxTokens:s.settings.contextTokens,currentEvents:events,recentConversation:recent})};
+ }
+ async developerContextManifest(actor:Actor,id:string,characterId:string,query:string){
+  await this.access(actor,id,true);const s=await this.load(id);getEntity(s,characterId,'character');
+  const recent=(await this.store.all<{id:string;input_text:string;narration:string}>('SELECT id,input_text,narration FROM story_turns WHERE timeline_id=? AND character_id=? ORDER BY rowid DESC LIMIT 8',id,characterId)).reverse().map(turn=>({id:turn.id,input:turn.input_text,narration:turn.narration}));
+  const events=(await this.store.all<{effects_json:string}>('SELECT effects_json FROM game_events WHERE timeline_id=? ORDER BY revision DESC LIMIT 8',id)).flatMap(row=>(JSON.parse(row.effects_json) as Effect[]).filter(effect=>effect.observers.includes(characterId)));
+  return buildContextManifest(s,characterId,query,{maxTokens:s.settings.contextTokens,currentEvents:events,recentConversation:recent,developer:true});
+ } async semanticRetrieval(actor:Actor,id:string,characterId:string,query:string,filters:RetrievalFilters={},developer=false){
+  const {access}=await this.access(actor,id,developer),s=await this.load(id);if(developer)getEntity(s,characterId,'character');else this.controlled(actor,s,characterId,access.role);
+  return retrieve(s,characterId,query,50,[],filters,developer);
+ }
  async template(actor:Actor,id:string,name:string){
   const {t}=(await this.access(actor,id,true)),campaign=(await this.store.get<{source_world_id:string}>('SELECT source_world_id FROM campaigns WHERE id=?',t.campaign_id))!;
   (await this.domain.access(actor,{type:'world',id:campaign.source_world_id},true));const bundle=(await this.export(actor,id)),templateId=randomUUID();
@@ -483,21 +555,44 @@ export class Game {
  async installCatalog(actor:Actor,id:string,revision:number,key:string){
   return (await this.mutate(actor,id,revision,key,{revision,type:'catalog.install'},'creator.catalog',true,s=>{
    let count=0;
-   const add=(kind:'trait'|'skill',name:string,category:string)=>{
+   const addSkill=(name:string)=>{
+    const kind='skill' as const,category='skill';
     if(s.entities.some(e=>e.kind===kind&&e.name===name))return;
     s.entities.push(validateEntity({id:randomUUID(),kind,name,visibility:'campaign',data:{category,mode:'descriptive',description:'Creator-editable '+category+' descriptor. Mechanical effects and prerequisites must be authored.'}}));count++;
    };
-   for(const name of skillNames)add('skill',name,'skill');
-   for(const[category,names]of Object.entries(traitGroups))for(const name of names)add('trait',name,category);
+   for(const name of skillNames)addSkill(name);
+   const traitIds=new Map<string,string>();
+   for(const name of Object.values(traitGroups).flat()){const existing=s.entities.find(entity=>entity.kind==='trait'&&entity.name===name);traitIds.set(name,existing?.id??randomUUID());}
+   for(const[category,names]of Object.entries(traitGroups))for(const name of names){
+    if(s.entities.some(entity=>entity.kind==='trait'&&entity.name===name))continue;
+    const social=/appearance|Affluent|Poor|Working class|Connected|Respected|Feared|Notorious|Affiliated|reputation/i.test(name);
+    s.entities.push(validateEntity({id:traitIds.get(name)!,kind:'trait',name,visibility:'campaign',data:{category,mode:'descriptive',
+     description:social?'An authored social-presentation descriptor. Its meaning depends on observer and context; it is not an objective moral or attraction score.':'A Creator-editable characterization descriptor. It grants no broad capability unless a scoped effect is explicitly authored.',
+     opposes:(traitOppositions[name]??[]).map(opposition=>traitIds.get(opposition)!),
+     generation:{weight:1,tags:traitGenerationTags[name]??[],requiresBackgroundTags:traitBackgroundRequirements[name]??[]}
+    }}));count++;
+   }
+   const addTemplate=(name:string,data:Record<string,unknown>)=>{if(s.entities.some(entity=>entity.kind==='traitTemplate'&&entity.name===name))return;s.entities.push(validateEntity({id:randomUUID(),kind:'traitTemplate',name,visibility:'creator',data}));count++;};
+   const tagCaps={stature:1,build:1,strength:1,coordination:1,'trust-style':1,'empathy-style':1,'truth-style':1,'social-class':1};
+   addTemplate('Grounded civilian traits',{description:'Weighted, contradiction-checked NPC characterization without specialized police, military, firearms, or criminal background.',backgroundTags:[],categoryWeights:{physical:2,personality:3,experience:1,social:2},minTraits:4,maxTraits:7,budget:0,categoryCaps:{physical:3,personality:3,experience:1,social:2},tagCaps});
+   addTemplate('Police-background traits',{description:'Weighted NPC characterization for an explicitly authored police background.',backgroundTags:['police','firearms'],categoryWeights:{physical:2,personality:3,experience:2,social:2},requiredTraitIds:[traitIds.get('Police training')!],minTraits:5,maxTraits:8,budget:0,categoryCaps:{physical:3,personality:3,experience:2,social:2},tagCaps});
    return {result:{created:count}};
   }));
  }
+ async generateNpcTraits(actor:Actor,id:string,input:{revision:number;characterId:string;templateId:string;seed:string},key:string){
+  return this.mutate(actor,id,input.revision,key,input,'creator.traits.generate',true,async s=>{
+   const character=getEntity(s,input.characterId,'character');ensure(!character.data.playable,400,'npc_required');
+   const generated=generateNpcTraitSelection(s,input.templateId,input.seed),candidate=structuredClone(character),definition=data(candidate,'character');
+   definition.traits=generated.traitIds;candidate.data=definition as Entity['data'];await this.applyEntity(id,s,candidate);
+   return {result:{characterId:character.id,templateId:input.templateId,seed:input.seed,traitIds:generated.traitIds,balance:generated.balance}};
+  });
+ }
  async transcript(id:string){
-  return [...(await this.store.all<z.infer<typeof transcriptSchema>>('SELECT id,character_id,user_id,input_text,narration,narration_status,created_at,source_event_id FROM archived_chronicle WHERE timeline_id=? ORDER BY rowid',id)),
-   ...(await this.store.all<z.infer<typeof transcriptSchema>>('SELECT id,character_id,user_id,input_text,narration,narration_status,created_at,id AS source_event_id FROM story_turns WHERE timeline_id=? ORDER BY rowid',id))];
+  return [...(await this.store.all<z.infer<typeof transcriptSchema>>('SELECT id,character_id,user_id,input_text,narration,narration_status,created_at,source_event_id,notices_json,scene_json FROM archived_chronicle WHERE timeline_id=? ORDER BY rowid',id)),
+   ...(await this.store.all<z.infer<typeof transcriptSchema>>('SELECT id,character_id,user_id,input_text,narration,narration_status,created_at,id AS source_event_id,notices_json,scene_json FROM story_turns WHERE timeline_id=? ORDER BY rowid',id))];
  }
  private async restoreTranscript(id:string,turns:z.infer<typeof transcriptSchema>[]){
-  for(const turn of turns)(await this.store.run('INSERT INTO archived_chronicle VALUES (?,?,?,?,?,?,?,?,?)',id,turn.id,turn.character_id,turn.user_id,turn.input_text,turn.narration,turn.narration_status,turn.created_at,turn.source_event_id));
+  for(const turn of turns)(await this.store.run('INSERT INTO archived_chronicle (timeline_id,id,character_id,user_id,input_text,narration,narration_status,created_at,source_event_id,notices_json,scene_json) VALUES (?,?,?,?,?,?,?,?,?,?,?)',id,turn.id,turn.character_id,turn.user_id,turn.input_text,turn.narration,turn.narration_status,turn.created_at,turn.source_event_id,turn.notices_json,turn.scene_json));
  }
  async templates(actor:Actor,id:string){
   const {t}=(await this.access(actor,id,true)),campaign=(await this.store.get<{source_world_id:string}>('SELECT source_world_id FROM campaigns WHERE id=?',t.campaign_id))!;

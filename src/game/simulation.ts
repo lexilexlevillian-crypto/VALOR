@@ -1,17 +1,22 @@
 import {randomUUID} from 'node:crypto';
 import {data,getEntity,validateEntity} from './model.ts';
-import type {Entity,State} from './model.ts';
+import type {Data,Entity,State} from './model.ts';
 import {fact,observe,remember} from './epistemics.ts';
 import {matchesCondition} from './conditions.ts';
 import {advanceLifecycle,startNpcJourney,finishNpcJourney} from './lifecycle.ts';
 import {authoredCompatibility} from './compatibility.ts';
 import {injuryRate,needsRate} from './policy.ts';
+import {resolveTraitEffects,socialPresentationDescriptors} from './traits.ts';
 export type Effect={id:string;text:string;observers:string[];type:string;subjectId:string};
 export function emit(effects:Effect[],text:string,observers:string[],type:string,subjectId:string){effects.push({id:randomUUID(),text,observers:[...new Set(observers)],type,subjectId});}
 export function atLocation(s:State,locationId:string|null){return s.entities.filter(e=>e.kind==='character'&&!e.archived&&e.data.locationId===locationId&&locationId&&e.data.condition==='conscious');}
 export function add(s:State,kind:Entity['kind'],name:string,raw:Record<string,unknown>,visibility:Entity['visibility']='knowledge'){
  const entity=validateEntity({id:randomUUID(),kind,name,visibility,data:raw});s.entities.push(entity);return entity;
 }
+const traitTrace=(character:Data<'character'>,rows:Array<{traitId:string;effectId:string;type:string;value:number}>,target:string,decision:string,at:string)=>{
+ for(const row of rows)character.traitEffectTrace.push({at,traitId:row.traitId,effectId:row.effectId,type:row.type as 'schedule-priority'|'ai-priority'|'need-rate'|'first-impression',target,value:row.value,decision});
+ if(character.traitEffectTrace.length>500)character.traitEffectTrace.splice(0,character.traitEffectTrace.length-500);
+};
 const timeFormatters=new Map<string,Intl.DateTimeFormat>();
 export function timeParts(at:string,timezone:string){
  let formatter=timeFormatters.get(timezone);
@@ -44,8 +49,9 @@ function advanceStep(s:State,minutes:number,eventId:string,effects:Effect[],play
   for(const parts of slots){
    if(!d.schedule.length)break;
    if(s.settings.npcRouteTravel)finishNpcJourney(s,npc,d,parts.at,eventId,effects);
-   const due=d.schedule.filter(x=>x.minute===parts.minute&&x.days.includes(parts.day)).sort((a,b)=>a.id.localeCompare(b.id));
-   for(const entry of due){const location=getEntity(s,entry.locationId,'location');
+   const due=d.schedule.filter(x=>x.minute===parts.minute&&x.days.includes(parts.day)).map(entry=>{const resolution=resolveTraitEffects(s,npc.id,'schedule-priority',{planType:entry.activity,context:entry.activity});return {entry,resolution,priority:resolution.applied.reduce((sum,effect)=>sum+effect.value,0)};}).sort((a,b)=>b.priority-a.priority||a.entry.id.localeCompare(b.entry.id));
+   for(const scheduled of due){const entry=scheduled.entry,location=getEntity(s,entry.locationId,'location');
+    traitTrace(d,scheduled.resolution.applied,entry.activity,'schedule selected at priority '+scheduled.priority,new Date(parts.at).toISOString());
     if(s.settings.npcRouteTravel){if(d.locationId===location.id)d.activity=entry.activity;else startNpcJourney(s,npc,d,location.id,parts.at,entry.activity);continue;}
     d.locationId=location.id;d.activity=entry.activity;
     const observers=atLocation(s,location.id).filter(e=>e.data.playable).map(e=>e.id);
@@ -77,7 +83,10 @@ function advanceStep(s:State,minutes:number,eventId:string,effects:Effect[],play
    d.intoxication=Math.max(0,d.intoxication-rules.soberingPerHour*minutes/60);
    if(d.dependence>0&&d.lastDoseAt)d.withdrawal=Math.min(100,d.withdrawal+rules.withdrawalPerDay*minutes/1440*d.dependence/100);
   }
-  if(s.settings.needs&&needsMultiplier>0){d.hunger=Math.min(100,d.hunger+minutes/60*needsMultiplier);d.thirst=Math.min(100,d.thirst+minutes/30*needsMultiplier);d.fatigue=Math.min(100,d.fatigue+minutes/120*needsMultiplier);d.hygiene=Math.max(0,d.hygiene-minutes/240*needsMultiplier);}
+  if(s.settings.needs&&needsMultiplier>0){
+   const rate=(need:'hunger'|'thirst'|'fatigue'|'hygiene')=>{const resolution=resolveTraitEffects(s,character.id,'need-rate',{need,context:'time-passage'});traitTrace(d,resolution.applied,need,'need rate applied',s.clock);return Math.max(0,1+resolution.applied.reduce((sum,effect)=>sum+effect.value,0));};
+   d.hunger=Math.min(100,d.hunger+minutes/60*needsMultiplier*rate('hunger'));d.thirst=Math.min(100,d.thirst+minutes/30*needsMultiplier*rate('thirst'));d.fatigue=Math.min(100,d.fatigue+minutes/120*needsMultiplier*rate('fatigue'));d.hygiene=Math.max(0,d.hygiene-minutes/240*needsMultiplier*rate('hygiene'));
+  }
   const wounds=s.entities.filter(e=>e.kind==='injury'&&!e.archived&&e.data.characterId===character.id);
   for(const wound of wounds){
    const injury=data(wound,'injury');
@@ -152,8 +161,8 @@ function advanceStep(s:State,minutes:number,eventId:string,effects:Effect[],play
   const player=s.entities.find(e=>e.id===playerId);
   const tier=d.locationId===player?.data.locationId?'active':d.goals.length?'relevant':'distant';
   const minInterval=tier==='active'?15:tier==='relevant'?30:60;
-  const plans=[...d.plans].filter(p=>p.enabled).sort((a,b)=>b.priority-a.priority||a.id.localeCompare(b.id));
-  for(const plan of plans){
+  const plans=[...d.plans].filter(p=>p.enabled).map(plan=>{const resolution=resolveTraitEffects(s,npc.id,'ai-priority',{planType:plan.type,context:plan.type});return {plan,resolution,priority:plan.priority+resolution.applied.reduce((sum,effect)=>sum+effect.value,0)};}).sort((a,b)=>b.priority-a.priority||a.plan.id.localeCompare(b.plan.id));
+  for(const candidate of plans){const plan=candidate.plan;
    if(d.preferences[plan.type]==='off')continue;
    if(!plan.conditions.every(c=>matchesCondition(s,c)))continue;
    if(!plan.lastRun)plan.lastRun=new Date(start).toISOString();
@@ -183,8 +192,9 @@ function advanceStep(s:State,minutes:number,eventId:string,effects:Effect[],play
    }
    if(plan.type==='socialize'&&target.kind==='character'&&target.data.locationId===d.locationId&&target.id!==npc.id){
     let relation=s.entities.find(e=>e.kind==='relationship'&&!e.archived&&e.data.fromId===npc.id&&e.data.toId===target.id);
-    if(!relation)relation=add(s,'relationship',npc.name+' → '+target.name,{fromId:npc.id,toId:target.id,secret:true},'knowledge');
+    const first=!relation;if(!relation)relation=add(s,'relationship',npc.name+' → '+target.name,{fromId:npc.id,toId:target.id,secret:true},'knowledge');
     const r=data(relation,'relationship');r.familiarity=Math.min(100,r.familiarity+due*(1-r.inertia));r.history.push({at:s.clock,eventId,label:'NPC initiated conversation'});relation.data=r as Entity['data'];
+    if(first)for(const descriptor of socialPresentationDescriptors(s,target.id,'socialize')){r.history.push({at:s.clock,eventId,label:'First impression: '+descriptor.descriptor});traitTrace(d,[{...descriptor,type:'first-impression',value:0}],target.id,'contextual descriptor observed',s.clock);}
     emit(effects,npc.name+' begins a conversation.',observers,'npc.social',npc.id);performed=true;
    }
    if(plan.type==='offer'&&target.kind==='relationship'&&target.data.fromId===npc.id){
@@ -220,7 +230,7 @@ function advanceStep(s:State,minutes:number,eventId:string,effects:Effect[],play
      medicine.data.quantity=Number(medicine.data.quantity)-1;injury.treated=true;injury.bleeding=0;target.data=injury as Entity['data'];performed=true;emit(effects,npc.name+' provides first aid.',observers,'npc.care',npc.id);
     }
    }
-   if(performed){const original=d.plans.find(p=>p.id===plan.id)!;original.lastRun=new Date(previous+due*interval*60000).toISOString();remember(s,npc.id,'Pursued goal: '+plan.type,eventId,0.4);break;}
+   if(performed){const original=d.plans.find(p=>p.id===plan.id)!;original.lastRun=new Date(previous+due*interval*60000).toISOString();traitTrace(d,candidate.resolution.applied,plan.type,'plan selected at effective priority '+candidate.priority,s.clock);remember(s,npc.id,'Pursued goal: '+plan.type,eventId,0.4);break;}
   }
   npc.data=d as Entity['data'];
  }

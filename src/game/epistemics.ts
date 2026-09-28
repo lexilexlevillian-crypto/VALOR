@@ -4,21 +4,28 @@ import {data,getEntity} from './model.ts';
 import type {Entity,State} from './model.ts';
 import {calendarView} from './calendar.ts';
 import {cosine,embedText} from './embedding.ts';
-export function observe(s:State,observerId:string,factId:string,source:string) {
- getEntity(s,observerId,'character');
- if(!s.facts.some(f=>f.id===factId))throw new Error('fact_unavailable');
- if(!s.knowledge.some(k=>k.observerId===observerId&&k.factId===factId))s.knowledge.push({observerId,factId,source,at:s.clock});
+const unique=(values:string[]=[])=>([...new Set(values)].sort());
+const within=(now:number,from?:string|null,until?:string|null)=>!(from&&Date.parse(from)>now)&&!(until&&Date.parse(until)<=now);
+const audienceAllows=(s:State,observerId:string,audience:string[]=[])=>{if(!audience.length||audience.includes('campaign')||audience.includes(observerId))return true;const observer=data(getEntity(s,observerId,'character'),'character');return observer.factionIds.some(id=>audience.includes(id));};
+export type PropositionOptions={objectId?:string|null;qualifiers?:Record<string,unknown>;source?:string;truthStatus?:'verified'|'asserted'|'disputed'|'false'|'superseded';audience?:string[];confidence?:number;observedAt?:string|null;learnedAt?:string|null;validFrom?:string|null;validUntil?:string|null;eventIds?:string[];evidenceIds?:string[];tags?:string[]};
+export function observe(s:State,observerId:string,factId:string,source:string,options:{confidence?:number;observedAt?:string|null;expiresAt?:string|null;evidenceIds?:string[]}={}) {
+ getEntity(s,observerId,'character');const proposition=s.facts.find(f=>f.id===factId);if(!proposition)throw new Error('fact_unavailable');if(!audienceAllows(s,observerId,proposition.audience))throw new Error('fact_audience_denied');
+ if(!s.knowledge.some(k=>k.observerId===observerId&&k.factId===factId))s.knowledge.push({observerId,factId,source,at:s.clock,confidence:options.confidence??proposition.confidence??1,observedAt:options.observedAt??s.clock,expiresAt:options.expiresAt??proposition.validUntil??null,evidenceIds:unique(options.evidenceIds??proposition.evidenceIds)});
 }
-export function fact(s:State,subjectId:string,predicate:string,value:unknown,eventId:string,observers:string[]=[]){
- const id=randomUUID();s.facts.push({id,subjectId,predicate,value,eventId,at:s.clock,retiredAt:null});
- for(const observer of observers)observe(s,observer,id,'witnessed:'+eventId);
- return id;
+export function fact(s:State,subjectId:string,predicate:string,value:unknown,eventId:string,observers:string[]=[],options:PropositionOptions={}){
+ const id=randomUUID();s.facts.push({id,subjectId,predicate,objectId:options.objectId??null,value,qualifiers:options.qualifiers??{},source:options.source??'simulation',truthStatus:options.truthStatus??'verified',audience:unique(options.audience),confidence:options.confidence??1,observedAt:options.observedAt??s.clock,learnedAt:options.learnedAt??null,validFrom:options.validFrom??s.clock,validUntil:options.validUntil??null,eventId,eventIds:unique([eventId,...(options.eventIds??[])]),evidenceIds:unique(options.evidenceIds),tags:unique(options.tags),at:s.clock,retiredAt:null});
+ for(const observer of unique(observers))observe(s,observer,id,'witnessed:'+eventId,{observedAt:s.clock,evidenceIds:options.evidenceIds});return id;
 }
-export function remember(s:State,observerId:string,text:string,eventId:string,salience=0.5){
- s.memories.push({id:randomUUID(),observerId,text,salience,decayPerDay:0.01,eventId,at:s.clock,private:true});
+export function remember(s:State,observerId:string,text:string,eventId:string,salience=0.5,options:{interpretation?:string;privacy?:'private'|'shared';recallConditions?:{entityIds?:string[];tags?:string[];locationId?:string|null;from?:string|null;until?:string|null};decayPerDay?:number;expiresAt?:string|null;eventRefs?:string[];tags?:string[]}={}){
+ getEntity(s,observerId,'character');s.memories.push({id:randomUUID(),observerId,text,interpretation:options.interpretation??text,salience,decayPerDay:options.decayPerDay??0.01,eventId,eventRefs:unique([eventId,...(options.eventRefs??[])]),at:s.clock,private:(options.privacy??'private')==='private',privacy:options.privacy??'private',recallConditions:{entityIds:unique(options.recallConditions?.entityIds),tags:unique(options.recallConditions?.tags),locationId:options.recallConditions?.locationId??null,from:options.recallConditions?.from??null,until:options.recallConditions?.until??null},lastRefreshedAt:s.clock,refreshCount:0,expiresAt:options.expiresAt??null,tags:unique(options.tags)});
 }
+export function gossip(s:State,fromId:string,toId:string,beliefId:string,eventId:string,confidenceLoss=0.2){
+ getEntity(s,fromId,'character');getEntity(s,toId,'character');const source=s.beliefs.find(row=>row.id===beliefId&&row.observerId===fromId);if(!source)throw new Error('belief_unavailable');
+ const id=randomUUID();s.beliefs.push({...structuredClone(source),id,observerId:toId,confidence:Math.max(0,Math.min(1,source.confidence*(1-confidenceLoss))),source:'gossip-from:'+fromId+':'+eventId,truthStatus:'believed',audience:[toId],observedAt:null,eventIds:unique([...(source.eventIds??[]),eventId]),at:s.clock,correctedBy:null});return id;
+}
+export function memorySalience(s:State,memory:State['memories'][number]){const anchor=memory.lastRefreshedAt??memory.at;if(memory.expiresAt&&Date.parse(memory.expiresAt)<=Date.parse(s.clock))return 0;return Math.max(0,memory.salience-(Date.parse(s.clock)-Date.parse(anchor))/86400000*memory.decayPerDay);}
 export function knows(s:State,observerId:string,subjectId:string){
- return s.knowledge.some(k=>k.observerId===observerId&&s.facts.some(f=>f.id===k.factId&&f.subjectId===subjectId&&!f.retiredAt));
+ const now=Date.parse(s.clock);return s.knowledge.some(k=>k.observerId===observerId&&(!k.expiresAt||Date.parse(k.expiresAt)>now)&&s.facts.some(f=>f.id===k.factId&&f.subjectId===subjectId&&!f.retiredAt&&within(now,f.validFrom,f.validUntil)&&audienceAllows(s,observerId,f.audience)));
 }
 export function visible(s:State,e:Entity,observerId:string):boolean{
  if(e.archived)return false;
@@ -56,18 +63,21 @@ export function project(s:State,e:Entity,observerId:string):Entity {
  const own=e.id===observerId||e.data.ownerId===observerId;
  if(e.kind==='character'&&!own){
   const d=data(e,'character'),actor=data(getEntity(s,observerId),'character');
-  copy.data={description:d.description,legalName:d.legalName,aliases:d.aliases,sex:d.sex,gender:d.gender,pronouns:d.pronouns,identity:d.identity,
-   appearance:d.appearance,heightCm:d.heightCm,build:d.build,hair:d.hair,eyes:d.eyes,complexion:d.complexion,features:d.features,scars:d.scars,tattoos:d.tattoos,disabilities:d.disabilities,
-   presentation:d.presentation,locationId:d.locationId===actor.locationId?d.locationId:null,condition:d.condition,characterSchemaVersion:d.characterSchemaVersion,sections:d.sections};
+  copy.data={description:d.description,legalName:d.legalName,aliases:d.aliases,ageYears:d.ageYears,sex:d.sex,gender:d.gender,pronouns:d.pronouns,identity:d.identity,
+   appearance:d.appearance,appearanceDescription:d.appearanceDescription,heightCm:d.heightCm,build:d.build,hair:d.hair,eyes:d.eyes,complexion:d.complexion,features:d.features,scars:d.scars,tattoos:d.tattoos,disabilities:d.disabilities,
+   presentation:d.presentation,socialPresentation:d.socialPresentation,attractivenessContext:d.attractivenessContext,locationId:d.locationId===actor.locationId?d.locationId:null,condition:d.condition,characterSchemaVersion:d.characterSchemaVersion,sections:d.sections};
  }else{
-  for(const k of ['secrets','instructions','hiddenSolution','embedding','pending','preferences','goals','fears','heat','forensicFindings'])delete copy.data[k];
+  for(const k of ['secrets','instructions','aiBehavior','hiddenSolution','embedding','pending','preferences','goals','fears','heat','forensicFindings'])delete copy.data[k];
   if(e.kind==='relationship'){for(const k of ['attraction','desire','affection','trust','respect','attachment','familiarity','jealousy','resentment','fear','loyalty','dependency'])delete copy.data[k];}
   if(!own)for(const k of ['cash','contacts','serial','registration','stock','suspectIds','custody','schedule','lastSimulated','mood','goals','fears','notes','familyBackground','cultureContext','beliefsContext'])delete copy.data[k];
   if(e.kind==='faction')for(const k of ['memberIds','reputation','treasuryCents','groupPolicy','lastGroupAt','dispatchPolicy'])delete copy.data[k];
   if(e.kind==='quest')delete copy.data.branches;
   if(e.kind==='character'&&!s.settings.reproductiveHealth)delete copy.data.reproductive;
   if(e.kind==='combat'){const allowed=new Set(s.entities.filter(entity=>visible(s,entity,observerId)).map(entity=>entity.id));copy.data.participants=(e.data.participants as string[]).filter(id=>allowed.has(id));copy.data.positions=Object.fromEntries(Object.entries(e.data.positions??{}).filter(([id])=>allowed.has(id))) as never;delete copy.data.blockedLines;}
-  if(e.kind==='character')delete copy.data.plans;
+  if(e.kind==='character'){
+   copy.data.traits=(copy.data.traits as string[]).filter(traitId=>{const trait=s.entities.find(entity=>entity.id===traitId&&entity.kind==='trait'&&!entity.archived);return !!trait&&visible(s,trait,observerId);});
+   delete copy.data.plans;delete copy.data.traitEffectTrace;
+  }
   if(e.kind==='location')copy.data.exits=(copy.data.exits as {to:string;interruption?:unknown}[]).filter(exit=>s.entities.some(target=>target.id===exit.to&&visible(s,target,observerId))).map(({interruption,...route})=>route) as never;
  }
  const sections=(copy.data.sections??[]) as {id:string;parentId:string|null;visibility?:string;archived?:boolean;fields:{visibility:string;archived?:boolean}[]}[];
@@ -79,32 +89,37 @@ export function project(s:State,e:Entity,observerId:string):Entity {
  return copy;
 }
 export function observerView(s:State,observerId:string){
- const entities=s.entities.filter(e=>visible(s,e,observerId)).map(e=>project(s,e,observerId));
- const factIds=new Set(s.knowledge.filter(k=>k.observerId===observerId).map(k=>k.factId));
+ const entities=s.entities.filter(e=>visible(s,e,observerId)).map(e=>project(s,e,observerId)),now=Date.parse(s.clock);
+ const factIds=new Set(s.knowledge.filter(k=>k.observerId===observerId&&(!k.expiresAt||Date.parse(k.expiresAt)>now)).map(k=>k.factId));
  return {clock:s.clock,calendar:calendarView(s),settings:{needs:s.settings.needs,fuel:s.settings.fuel,romance:s.settings.romance,intimacy:s.settings.intimacy,intensity:s.settings.intensity,weather:s.settings.weather,rulesConfigured:s.settings.rules!==null},
- entities,facts:s.facts.filter(f=>factIds.has(f.id)&&!f.retiredAt),
- beliefs:s.beliefs.filter(b=>b.observerId===observerId),
- memories:s.memories.filter(m=>m.observerId===observerId).map(m=>({...m,currentSalience:Math.max(0,m.salience-(Date.parse(s.clock)-Date.parse(m.at))/86400000*m.decayPerDay)}))};
+ entities,facts:s.facts.filter(f=>factIds.has(f.id)&&!f.retiredAt&&within(now,f.validFrom,f.validUntil)&&audienceAllows(s,observerId,f.audience)),
+ beliefs:s.beliefs.filter(b=>b.observerId===observerId&&within(now,b.validFrom,b.validUntil)&&audienceAllows(s,observerId,b.audience)),
+ memories:s.memories.filter(m=>m.observerId===observerId&&(!m.expiresAt||Date.parse(m.expiresAt)>now)).map(m=>({...m,currentSalience:memorySalience(s,m)}))};
 }
-export function retrieve(s:State,observerId:string,query:string,limit=12,queryEmbedding:number[]=[]){
- const view=observerView(s,observerId),terms=query.toLowerCase().split(/\W+/).filter(Boolean);
- const localQuery=queryEmbedding.length?queryEmbedding:embedText(query);
- const now=Date.parse(s.clock),location=data(getEntity(s,observerId),'character').locationId;
- const rows=view.entities.filter(e=>['lore','storycard'].includes(e.kind)).filter(e=>{
-  const d=data(getEntity(s,e.id),e.kind as 'lore'|'storycard');
-  return (!d.validFrom||Date.parse(d.validFrom)<=now)&&(!d.validUntil||Date.parse(d.validUntil)>now)&&
-   (!d.activation||(!d.activation.locationId||d.activation.locationId===location)&&(!d.activation.characterId||d.activation.characterId===observerId)&&(!d.activation.keywords.length||d.activation.keywords.some(k=>query.toLowerCase().includes(k.toLowerCase()))));
- }).map(e=>{
-  const source=data(getEntity(s,e.id),e.kind as 'lore'|'storycard');
-  const candidateEmbedding=source.embedding.length===localQuery.length?source.embedding:embedText(source.description+' '+(source.tags as string[]).join(' '),localQuery.length);
-  const semantic=cosine(localQuery,candidateEmbedding);
-  const body=(e.name+' '+e.data.description+' '+(e.data.tags as string[]).join(' ')).toLowerCase();
-  return {id:e.id,name:e.name,text:e.data.description,source:source.source,score:terms.filter(t=>body.includes(t)).length+Math.max(0,semantic)+source.priority};
- });
- rows.push(...canonSources(s).map(r=>({...r,score:terms.filter(t=>(r.name+' '+r.text).toLowerCase().includes(t)).length})));
- rows.sort((a,b)=>b.score-a.score||a.id.localeCompare(b.id));
- rows.splice(Math.min(limit,50));
- return {sources:rows,beliefs:view.beliefs.filter(b=>terms.some(t=>b.proposition.toLowerCase().includes(t))).slice(0,limit),
- memories:view.memories.filter(m=>m.currentSalience>0).sort((a,b)=>b.currentSalience-a.currentSalience).slice(0,limit),
- contradictions:view.beliefs.filter(b=>b.correctedBy).map(b=>({beliefId:b.id,correctedBy:b.correctedBy}))};
+export type RetrievalFilters={entityIds?:string[];tags?:string[];from?:string|null;until?:string|null;placeIds?:string[];personIds?:string[];relationshipIds?:string[];eventIds?:string[];evidenceIds?:string[];factionIds?:string[];kinds?:Array<'lore'|'storycard'|'canon'>};
+const normalizedFilters=(filters:RetrievalFilters):Required<Omit<RetrievalFilters,'from'|'until'>>&Pick<RetrievalFilters,'from'|'until'>=>({entityIds:unique(filters.entityIds),tags:unique(filters.tags?.map(tag=>tag.toLowerCase())),from:filters.from??null,until:filters.until??null,placeIds:unique(filters.placeIds),personIds:unique(filters.personIds),relationshipIds:unique(filters.relationshipIds),eventIds:unique(filters.eventIds),evidenceIds:unique(filters.evidenceIds),factionIds:unique(filters.factionIds),kinds:unique(filters.kinds) as Array<'lore'|'storycard'|'canon'>});
+const overlaps=(left:string[]=[],right:string[]=[])=>!right.length||left.some(value=>right.includes(value));
+const descriptors=(s:State,entity:Entity)=>{const d=data(entity,entity.kind as 'lore'|'storycard'),scope=d.scope,activation=d.activation,evidenceIds=new Set(s.entities.filter(candidate=>candidate.kind==='evidence'&&!candidate.archived).map(candidate=>candidate.id));return {entityIds:unique([entity.id,...d.links,...d.linkDetails.map(link=>link.targetId),...(d.subjectId?[d.subjectId]:[])]),tags:unique(d.tags.map(tag=>tag.toLowerCase())),placeIds:unique([...scope.placeIds,...(activation?.placeIds??[]),...(activation?.locationId?[activation.locationId]:[])]),personIds:unique([...scope.peopleIds,...(activation?.peopleIds??[]),...(activation?.characterId?[activation.characterId]:[])]),relationshipIds:unique([...scope.relationshipIds,...(activation?.relationshipIds??[])]),eventIds:unique([...scope.eventIds,...(activation?.eventIds??[])]),evidenceIds:unique([...d.links,...d.linkDetails.filter(link=>link.type.toLowerCase()==='evidence').map(link=>link.targetId)].filter(id=>evidenceIds.has(id))),factionIds:unique([...scope.factionIds,...(activation?.factionIds??[])])};};
+const matchesFilters=(s:State,entity:Entity,filters:ReturnType<typeof normalizedFilters>)=>{const d=data(entity,entity.kind as 'lore'|'storycard'),x=descriptors(s,entity);return (!filters.kinds.length||filters.kinds.includes(entity.kind as 'lore'|'storycard'))&&overlaps(x.entityIds,filters.entityIds)&&filters.tags.every(tag=>x.tags.includes(tag))&&overlaps(x.placeIds,filters.placeIds)&&overlaps(x.personIds,filters.personIds)&&overlaps(x.relationshipIds,filters.relationshipIds)&&overlaps(x.eventIds,filters.eventIds)&&overlaps(x.evidenceIds,filters.evidenceIds)&&overlaps(x.factionIds,filters.factionIds)&&(!filters.from||!d.validUntil||Date.parse(d.validUntil)>=Date.parse(filters.from))&&(!filters.until||!d.validFrom||Date.parse(d.validFrom)<=Date.parse(filters.until));};
+export function storyCardState(entity:Entity,s:State,observerId:string,query:string):{active:boolean;reason:'expired'|'not-yet-valid'|'scope-mismatch'|'activation-conditions-unmet'|'deactivated'|'active';activatesWhen:unknown;deactivatesWhen:unknown}{
+ const d=data(entity,entity.kind as 'lore'|'storycard'),now=Date.parse(s.clock),observer=data(getEntity(s,observerId,'character'),'character'),location=observer.locationId,events=new Set(s.eventIds??s.facts.flatMap(f=>[f.eventId,...(f.eventIds??[])])),scenePeople=new Set(s.entities.filter(candidate=>candidate.kind==='character'&&candidate.data.locationId===location&&!candidate.archived).map(candidate=>candidate.id)),relations=new Set(s.entities.filter(candidate=>candidate.kind==='relationship'&&!candidate.archived&&(candidate.data.fromId===observerId||candidate.data.toId===observerId)).map(candidate=>candidate.id)),queryLower=query.toLowerCase(),queryTags=new Set(queryLower.split(/\W+/).filter(Boolean));
+ if(!within(now,d.validFrom,d.validUntil))return {active:false,reason:d.validUntil&&Date.parse(d.validUntil)<=now?'expired':'not-yet-valid',activatesWhen:d.activation,deactivatesWhen:d.deactivation};
+ const scope=d.scope,hasAttachment=scope.placeIds.length+scope.peopleIds.length+scope.relationshipIds.length+scope.eventIds.length+scope.factionIds.length>0,scopeChecks=[scope.placeIds.includes(location??''),scope.peopleIds.some(id=>id===observerId||scenePeople.has(id)),scope.relationshipIds.some(id=>relations.has(id)),scope.eventIds.some(id=>events.has(id)),scope.factionIds.some(id=>observer.factionIds.includes(id))];
+ if(hasAttachment&&scope.campaign!==true&&!scopeChecks.some(Boolean))return {active:false,reason:'scope-mismatch',activatesWhen:d.activation,deactivatesWhen:d.deactivation};
+ const activation=d.activation,checks=activation?[!activation.from||Date.parse(activation.from)<=now,!activation.until||Date.parse(activation.until)>now,!activation.locationId||activation.locationId===location,!activation.characterId||activation.characterId===observerId,!activation.placeIds.length||activation.placeIds.includes(location??''),!activation.peopleIds.length||activation.peopleIds.some(id=>id===observerId||scenePeople.has(id)),!activation.relationshipIds.length||activation.relationshipIds.some(id=>relations.has(id)),!activation.eventIds.length||activation.eventIds.some(id=>events.has(id)),!activation.factionIds.length||activation.factionIds.some(id=>observer.factionIds.includes(id)),!activation.keywords.length||activation.keywords.some(keyword=>queryLower.includes(keyword.toLowerCase())),!activation.requiredTags.length||activation.requiredTags.every(tag=>queryTags.has(tag.toLowerCase()))]:[true];
+ const active=activation?.mode==='any'?checks.some(Boolean):checks.every(Boolean);if(!active)return {active:false,reason:'activation-conditions-unmet',activatesWhen:activation,deactivatesWhen:d.deactivation};
+ const deactivation=d.deactivation,deactivationChecks=[!!deactivation.at&&Date.parse(deactivation.at)<=now,!!deactivation.eventIds.length&&deactivation.eventIds.some(id=>events.has(id)),!!deactivation.keywords.length&&deactivation.keywords.some(keyword=>queryLower.includes(keyword.toLowerCase())),!!deactivation.tags.length&&deactivation.tags.some(tag=>queryTags.has(tag.toLowerCase()))],configuredDeactivation=deactivationChecks.filter((_,index)=>index===0?!!deactivation.at:index===1?!!deactivation.eventIds.length:index===2?!!deactivation.keywords.length:!!deactivation.tags.length),deactivated=deactivation.mode==='any'?configuredDeactivation.some(Boolean):deactivation.mode==='all'&&configuredDeactivation.length>0&&configuredDeactivation.every(Boolean);
+ return {active:!deactivated,reason:deactivated?'deactivated':'active',activatesWhen:activation,deactivatesWhen:deactivation};
+}
+const memoryRecallMatches=(s:State,memory:State['memories'][number],query:string,filters:ReturnType<typeof normalizedFilters>)=>{const conditions=memory.recallConditions;if(!conditions)return true;const now=Date.parse(s.clock),location=data(getEntity(s,memory.observerId,'character'),'character').locationId,queryTerms=new Set(query.toLowerCase().split(/\W+/).filter(Boolean)),filterEntities=[...filters.entityIds,...filters.placeIds,...filters.personIds,...filters.relationshipIds,...filters.evidenceIds,...filters.factionIds];return within(now,conditions.from,conditions.until)&&(!conditions.locationId||conditions.locationId===location)&&(!conditions.entityIds.length||conditions.entityIds.some(id=>filterEntities.includes(id)))&&(!conditions.tags.length||conditions.tags.some(tag=>queryTerms.has(tag.toLowerCase())||filters.tags.includes(tag.toLowerCase())));};
+export function retrieve(s:State,observerId:string,query:string,limit=12,queryEmbedding:number[]=[],rawFilters:RetrievalFilters={},developer=false){
+ const view=observerView(s,observerId),terms=query.toLowerCase().split(/\W+/).filter(Boolean),filters=normalizedFilters(rawFilters),localQuery=queryEmbedding.length?queryEmbedding:embedText(query),visibleIds=new Set(view.entities.map(entity=>entity.id));
+ const visibleCandidates=view.entities.filter(e=>['lore','storycard'].includes(e.kind)).filter(e=>matchesFilters(s,e,filters)),rejected:Array<{id:string;reason:string;kind:string}>=[];
+ const rows:Array<{id:string;name:string;text:unknown;source:string;score:number;provenance:{kind:string;revision:string|number;visibility:string;sourceRefs:unknown[];links:unknown[];validFrom:string|null;validUntil:string|null;activation:unknown;matched:{lexical:number;semantic:number;structured:number}}}>=visibleCandidates.flatMap(e=>{const source=data(getEntity(s,e.id),e.kind as 'lore'|'storycard'),state=storyCardState(e,s,observerId,query);if(!state.active){if(developer)rejected.push({id:e.id,reason:state.reason,kind:e.kind});return [];}const candidateEmbedding=source.embedding.length===localQuery.length?source.embedding:embedText(source.description+' '+source.tags.join(' '),localQuery.length),semantic=cosine(localQuery,candidateEmbedding),body=(e.name+' '+e.data.description+' '+source.tags.join(' ')).toLowerCase(),lexical=terms.filter(term=>body.includes(term)).length,structured=Object.values(filters).some(value=>Array.isArray(value)?value.length:Boolean(value))?1:0;return [{id:e.id,name:e.name,text:e.data.description,source:source.source,score:lexical+Math.max(0,semantic)+source.priority+structured,provenance:{kind:e.kind,revision:e.revision,visibility:e.visibility,sourceRefs:source.sourceRefs,links:source.linkDetails,validFrom:source.validFrom,validUntil:source.validUntil,activation:state,matched:{lexical,semantic,structured}}}];});
+ if(developer)for(const entity of s.entities.filter(e=>['lore','storycard'].includes(e.kind)&&!e.archived&&!visibleIds.has(e.id)&&matchesFilters(s,e,filters)))rejected.push({id:entity.id,reason:'permission-filtered',kind:entity.kind});
+ if(!filters.kinds.length||filters.kinds.includes('canon'))rows.push(...canonSources(s).filter(row=>!filters.entityIds.length||filters.entityIds.includes(row.id)).map(row=>({...row,score:terms.filter(term=>(row.name+' '+row.text).toLowerCase().includes(term)).length,provenance:{kind:'canon' as const,revision:row.source,visibility:'campaign' as const,sourceRefs:[],links:[],validFrom:null,validUntil:null,activation:{active:true,reason:'timeline-bound-canon',activatesWhen:null,deactivatesWhen:null},matched:{lexical:terms.filter(term=>(row.name+' '+row.text).toLowerCase().includes(term)).length,semantic:0,structured:filters.entityIds.length?1:0}}})));
+ rows.sort((a,b)=>b.score-a.score||a.id.localeCompare(b.id));rows.splice(Math.min(limit,50));
+ const beliefRows=view.beliefs.filter(b=>(!filters.personIds.length||!!b.subjectId&&filters.personIds.includes(b.subjectId))&&(!filters.entityIds.length||[b.subjectId,b.objectId].some(id=>!!id&&filters.entityIds.includes(id)))&&(!filters.eventIds.length||overlaps(b.eventIds,filters.eventIds))&&(!filters.evidenceIds.length||overlaps(b.evidenceIds,filters.evidenceIds))&&(!filters.tags.length||filters.tags.every(tag=>(b.tags??[]).map(value=>value.toLowerCase()).includes(tag)))&&(!filters.from||!b.validUntil||Date.parse(b.validUntil)>=Date.parse(filters.from))&&(!filters.until||!b.validFrom||Date.parse(b.validFrom)<=Date.parse(filters.until))&&(!terms.length||terms.some(term=>(b.proposition+' '+b.predicate+' '+JSON.stringify(b.value)).toLowerCase().includes(term)))).sort((a,b)=>b.confidence-a.confidence||a.id.localeCompare(b.id)).slice(0,limit);
+ const memoryRows=view.memories.filter(m=>m.currentSalience>0&&memoryRecallMatches(s,m,query,filters)&&(!filters.eventIds.length||overlaps(m.eventRefs??[m.eventId],filters.eventIds))&&(!filters.tags.length||filters.tags.every(tag=>(m.tags??[]).map(value=>value.toLowerCase()).includes(tag)))&&(!filters.from||!m.expiresAt||Date.parse(m.expiresAt)>=Date.parse(filters.from))&&(!filters.until||Date.parse(m.at)<=Date.parse(filters.until))).map(m=>{const text=m.text+' '+(m.interpretation??''),semantic=cosine(localQuery,embedText(text,localQuery.length)),lexical=terms.filter(term=>text.toLowerCase().includes(term)).length;return {...m,retrievalScore:m.currentSalience+Math.max(0,semantic)+lexical};}).sort((a,b)=>b.retrievalScore-a.retrievalScore||a.id.localeCompare(b.id)).slice(0,limit);
+ return {sources:rows,beliefs:beliefRows,memories:memoryRows,contradictions:view.beliefs.filter(b=>b.correctedBy).map(b=>({beliefId:b.id,correctedBy:b.correctedBy})),filters,rejected:developer?rejected.sort((a,b)=>a.id.localeCompare(b.id)):[]};
 }

@@ -7,9 +7,21 @@ const text=z.string().max(16000), short=z.string().max(1000), ref=id.nullable().
 const cents=z.number().int().min(0).max(100000000000), score=z.number().min(-100).max(100), unit=z.number().min(0).max(100), openNumber=z.number().finite().min(-1000000).max(1000000);
 const tags=z.array(z.string().max(80)).max(100).default([]);
 export const attributes=['Strength','Agility','Endurance','Intellect','Perception','Presence','Will'] as const;
-const customField=z.strictObject({id,name,type:z.enum(['text','number','boolean','json']),visibility,value:z.json(),helpText:short.default(''),repeatable:z.boolean().default(false),archived:z.boolean().default(false)});
-const customSection=z.strictObject({id,name,parentId:ref,position:z.number().int().min(0),visibility:visibility.default('creator'),helpText:short.default(''),editable:z.boolean().default(true),repeatable:z.boolean().default(false),archived:z.boolean().default(false),fields:z.array(customField).max(1000)});
-const common={description:text.default(''),tags,sections:z.array(customSection).max(1000).default([]),mediaIds:z.array(id).max(20).default([])};
+export const planTypes=['work','socialize','offer','share','travel','crime','care','message','breakup'] as const;
+export const needTypes=['hunger','thirst','fatigue','hygiene'] as const;
+export const characterSectionKinds=['identity','appearance','background','stats','skills','traits','health','inventory','relationships','affiliations','knowledge','notes','custom'] as const;
+export const characterFieldClasses=['biographical','current','subjective'] as const;
+const valueMatches=(type:'text'|'number'|'boolean'|'json',value:unknown)=>type==='json'||typeof value===(type==='text'?'string':type);
+export const customFieldSchema=z.strictObject({
+ id,name,position:z.number().int().min(0).default(0),type:z.enum(['text','number','boolean','json']),visibility,value:z.json(),helpText:short.default(''),
+ editable:z.boolean().default(true),repeatable:z.boolean().default(false),classification:z.enum(characterFieldClasses).default('subjective'),archived:z.boolean().default(false)
+}).superRefine((field,context)=>{
+ // Scalar repeatable values remain readable for schema-v2 compatibility; every v3 Creator edit normalizes them to arrays.
+ const values=field.repeatable&&Array.isArray(field.value)?field.value:[field.value];
+ if(values.some(value=>!valueMatches(field.type,value)))context.addIssue({code:'custom',message:'custom_field_type'});
+});
+export const customSectionSchema=z.strictObject({id,name,kind:z.enum(characterSectionKinds).default('custom'),parentId:ref,position:z.number().int().min(0),visibility:visibility.default('creator'),helpText:short.default(''),editable:z.boolean().default(true),repeatable:z.boolean().default(false),archived:z.boolean().default(false),fields:z.array(customFieldSchema).max(1000)});
+const common={description:text.default(''),tags,sections:z.array(customSectionSchema).max(1000).default([]),mediaIds:z.array(id).max(20).default([])};
 const schedule=z.strictObject({id,minute:z.number().int().min(0).max(1439),locationId:id,activity:short,days:z.array(z.number().int().min(0).max(6)).default([0,1,2,3,4,5,6])});
 const condition=z.strictObject({kind:z.enum(['time','location','item','relationship','knowledge','health','quest','evidence']),subjectId:ref,targetId:ref,at:z.iso.datetime().nullable().default(null),threshold:z.number().default(0),negate:z.boolean().default(false)});
 const outcome=z.discriminatedUnion('type',[
@@ -23,7 +35,9 @@ const outcome=z.discriminatedUnion('type',[
 const outcomeBands=z.strictObject({
  criticalMargin:openNumber.default(10),successAtCostMargin:openNumber.default(2),
  partialFailureMargin:openNumber.default(-2),failureInformationMargin:openNumber.default(-10)
-});
+}).refine(bands=>bands.criticalMargin>bands.successAtCostMargin&&bands.successAtCostMargin>=0&&bands.partialFailureMargin<=0&&bands.failureInformationMargin<bands.partialFailureMargin,'invalid_outcome_bands');
+const rank=z.strictObject({name:short,min:openNumber,max:openNumber}).refine(value=>value.min<=value.max,'invalid_rank');
+const numericScale=z.strictObject({min:openNumber,max:openNumber,step:z.number().positive().max(1000000),unit:short.default('rating')}).refine(value=>value.min<=value.max,'invalid_scale');
 const rules=z.strictObject({
  dieSides:z.number().int().min(2).max(1000),threshold:openNumber,
  damage:z.number().min(0).max(100),treatmentMinutes:z.number().int().min(1).max(1440),
@@ -41,7 +55,8 @@ export const settingsSchema=z.strictObject({
  rules:rules.nullable().default(null),tokenBudget:z.number().int().min(0).max(1000000).default(0),userTokenBudget:z.number().int().min(0).max(1000000).default(0),
  contextTokens:z.number().int().min(256).max(16000).default(2000),timezone:z.string().default('America/New_York'),
  npcBudget:z.number().int().min(1).max(10000).default(2000),traitBudget:z.number().min(0).max(1000).default(0),
- attributeScale:z.strictObject({min:openNumber,max:openNumber,step:z.number().positive().max(1000000),labels:z.record(z.enum(attributes),short).default({Strength:'Strength',Agility:'Agility',Endurance:'Endurance',Intellect:'Intellect',Perception:'Perception',Presence:'Presence',Will:'Will'})}).default({min:0,max:100,step:1,labels:{Strength:'Strength',Agility:'Agility',Endurance:'Endurance',Intellect:'Intellect',Perception:'Perception',Presence:'Presence',Will:'Will'}}),
+ traitBalance:z.strictObject({maxTraits:z.number().int().min(0).max(1000),maxAdvantages:z.number().int().min(0).max(1000),maxDisadvantages:z.number().int().min(0).max(1000),disadvantageCreditCap:z.number().min(0).max(1000),refundPolicy:z.enum(['none','capped-current'])}).default({maxTraits:100,maxAdvantages:20,maxDisadvantages:20,disadvantageCreditCap:0,refundPolicy:'none'}),
+ attributeScale:z.strictObject({min:openNumber,max:openNumber,step:z.number().positive().max(1000000),ranks:z.array(rank).max(32).default([]),labels:z.record(z.enum(attributes),short).default({Strength:'Strength',Agility:'Agility',Endurance:'Endurance',Intellect:'Intellect',Perception:'Perception',Presence:'Presence',Will:'Will'})}).refine(value=>value.min<=value.max,'invalid_attribute_scale').default({min:0,max:100,step:1,ranks:[],labels:{Strength:'Strength',Agility:'Agility',Endurance:'Endurance',Intellect:'Intellect',Perception:'Perception',Presence:'Presence',Will:'Will'}}),
  advancement:z.strictObject({attributeMinutesPerPoint:z.number().int().min(1).max(1000000),attributeCostCentsPerHour:cents,maxPointsPerTraining:z.number().int().min(1).max(10)}).default({attributeMinutesPerPoint:120,attributeCostCentsPerHour:0,maxPointsPerTraining:1})
  ,weatherSchedule:z.array(z.strictObject({at:z.iso.datetime(),weather:z.enum(['clear','rain','overcast','snow','fog'])})).max(500).default([]),
  holidays:z.array(z.strictObject({date:z.iso.date(),label:name})).max(500).default([]),
@@ -53,16 +68,16 @@ export const settingsSchema=z.strictObject({
 });
 const trainingRecord=z.strictObject({id,skillId:ref,attribute:z.enum(attributes).nullable().default(null),trainerId:ref,source:short.default(''),startedAt:z.iso.datetime(),minutesInvested:z.number().int().min(0).max(1000000).default(0),requiredMinutes:z.number().int().min(1).max(1000000),
  practiceMinutes:z.number().int().min(0).max(1000000).default(0),requiredPracticeMinutes:z.number().int().min(0).max(1000000).default(0),costPaidCents:cents.default(0),requiredCostCents:cents.default(0),milestoneReached:z.boolean().default(false),status:z.enum(['active','completed','blocked']).default('active'),completedAt:z.iso.datetime().nullable().default(null),notes:text.default('')}).refine(v=>Boolean(v.skillId)!==Boolean(v.attribute),'training_target_required');
-const character=z.strictObject({...common,characterSchemaVersion:z.number().int().positive().default(2),playable:z.boolean().default(false),controllerUserId:ref,
- legalName:short.default(''),aliases:tags,dob:z.iso.date().nullable().default(null),sex:short.default(''),gender:short.default(''),pronouns:short.default(''),
- identity:z.record(z.string(),short).default({}),nationality:short.default(''),cultureContext:text.default(''),originLocationId:ref,classContext:short.default(''),
- appearance:z.record(z.string(),short).default({}),heightCm:z.number().min(0).max(300).nullable().default(null),build:short.default(''),hair:short.default(''),eyes:short.default(''),
+const character=z.strictObject({...common,characterSchemaVersion:z.number().int().positive().default(3),playable:z.boolean().default(false),controllerUserId:ref,
+ legalName:short.default(''),aliases:tags,dob:z.iso.date().nullable().default(null),ageYears:z.number().int().min(0).max(200).nullable().default(null),sex:short.default(''),gender:short.default(''),pronouns:short.default(''),
+ identity:z.record(z.string(),short).default({}),nationality:short.default(''),cultureContext:text.default(''),ethnicityContext:text.default(''),originLocationId:ref,originNeighborhood:short.default(''),classContext:short.default(''),
+ appearance:z.record(z.string(),short).default({}),appearanceDescription:text.default(''),heightCm:z.number().min(0).max(300).nullable().default(null),build:short.default(''),hair:short.default(''),eyes:short.default(''),
  complexion:short.default(''),features:tags,scars:tags,tattoos:tags,disabilities:tags,presentation:short.default(''),
- socialPresentation:z.record(z.string(),short).default({}),background:z.record(z.string(),text).default({}),familyBackground:text.default(''),
+ socialPresentation:z.record(z.string(),short).default({}),attractivenessContext:text.default(''),background:z.record(z.string(),text).default({}),familyBackground:text.default(''),
  employerOccupation:short.default(''),education:text.default(''),beliefsContext:text.default(''),
- voice:text.default(''),instructions:text.default(''),secrets:text.default(''),notes:text.default(''),
- attributes:z.record(z.enum(attributes),z.number().min(0).max(100)).default({Strength:0,Agility:0,Endurance:0,Intellect:0,Perception:0,Presence:0,Will:0}),
- skills:z.record(z.string(),z.number().min(0).max(100)).default({}),traits:z.array(id).default([]),
+ voice:text.default(''),instructions:text.default(''),aiBehavior:text.default(''),secrets:text.default(''),notes:text.default(''),needsContext:text.default(''),
+ attributes:z.record(z.enum(attributes),openNumber).default({Strength:0,Agility:0,Endurance:0,Intellect:0,Perception:0,Presence:0,Will:0}),
+ skills:z.record(z.string(),openNumber).default({}),traits:z.array(id).default([]),
  locationId:ref,homeId:ref,factionIds:z.array(id).default([]),cash:cents.default(0),bank:cents.default(0),
  condition:z.enum(['conscious','unconscious','dead']).default('conscious'),blood:unit.default(100),fatigue:unit.default(0),
  hunger:unit.default(0),thirst:unit.default(0),hygiene:unit.default(100),intoxication:unit.default(0),
@@ -70,9 +85,10 @@ const character=z.strictObject({...common,characterSchemaVersion:z.number().int(
  dependence:unit.default(0),withdrawal:unit.default(0),lastDoseAt:z.iso.datetime().nullable().default(null),
  training:z.array(trainingRecord).max(500).default([]),
  schedule:z.array(schedule).max(100).default([]),lastSimulated:z.iso.datetime().nullable().default(null),
- plans:z.array(z.strictObject({id,type:z.enum(['work','socialize','offer','share','travel','crime','care','message','breakup']),targetId:id,auxiliaryId:ref,
+ plans:z.array(z.strictObject({id,type:z.enum(planTypes),targetId:id,auxiliaryId:ref,
    priority:z.number().int().default(0),cooldownMinutes:z.number().int().min(15).max(10080).default(60),
    lastRun:z.iso.datetime().nullable().default(null),enabled:z.boolean().default(true),text:short.default(''),conditions:z.array(condition).max(32).default([])})).max(100).default([]),
+ traitEffectTrace:z.array(z.strictObject({at:z.iso.datetime(),traitId:id,effectId:id,type:z.enum(['schedule-priority','ai-priority','need-rate','first-impression']),target:short,value:openNumber,decision:short})).max(500).default([]),
  preferences:z.record(z.string(),short).default({}),compatibility:z.strictObject({traitWeights:z.record(id,score).default({}),requiredTraits:z.array(id).max(100).default([]),minimum:score.default(-100)}).default({traitWeights:{},requiredTraits:[],minimum:-100}),boundaries:tags,
  journey:z.strictObject({originId:id,destinationId:id,arrivesAt:z.iso.datetime(),activity:short}).nullable().default(null),
  reproductive:z.strictObject({enabled:z.boolean(),cycleStart:z.iso.datetime().nullable().default(null),cycleDays:z.number().int().min(1).max(400),bleedingDays:z.number().int().min(0).max(100),pregnancyStartedAt:z.iso.datetime().nullable().default(null),pregnancyDays:z.number().int().min(1).max(500),phase:z.enum(['inactive','cycle','menstruation','pregnancy','due']).default('inactive')}).nullable().default(null)
@@ -107,16 +123,47 @@ const injury=z.strictObject({...common,characterId:id,bodyPart:name,category:z.e
  severity:unit,bleeding:unit.default(0),pain:unit.default(0),treated:z.boolean().default(false),permanent:z.boolean().default(false),
  startedAt:z.iso.datetime(),recoveryDays:z.number().min(0).max(10000).default(0),substance:short.default(''),infection:unit.default(0),modifiers:z.partialRecord(z.enum(attributes),score).default({})
 });
-const lore=z.strictObject({...common,subjectId:ref,source:text.default('Creator'),validFrom:z.iso.datetime().nullable().default(null),
- validUntil:z.iso.datetime().nullable().default(null),links:z.array(id).default([]),priority:z.number().int().default(0),
- activation:z.strictObject({locationId:ref,characterId:ref,keywords:tags}).nullable().default(null),embedding:z.array(z.number().finite()).max(4096).default([])
+const loreScope=z.strictObject({campaign:z.boolean().nullable().default(null),placeIds:z.array(id).max(100).default([]),peopleIds:z.array(id).max(100).default([]),relationshipIds:z.array(id).max(100).default([]),eventIds:z.array(id).max(100).default([]),factionIds:z.array(id).max(100).default([])}).default({campaign:true,placeIds:[],peopleIds:[],relationshipIds:[],eventIds:[],factionIds:[]});
+const loreActivation=z.strictObject({mode:z.enum(['always','all','any']).default('always'),locationId:ref,characterId:ref,keywords:tags,requiredTags:tags,placeIds:z.array(id).max(100).default([]),peopleIds:z.array(id).max(100).default([]),relationshipIds:z.array(id).max(100).default([]),eventIds:z.array(id).max(100).default([]),factionIds:z.array(id).max(100).default([]),from:z.iso.datetime().nullable().default(null),until:z.iso.datetime().nullable().default(null)}).nullable().default({mode:'always',locationId:null,characterId:null,keywords:[],requiredTags:[],placeIds:[],peopleIds:[],relationshipIds:[],eventIds:[],factionIds:[],from:null,until:null});
+const loreDeactivation=z.strictObject({mode:z.enum(['never','any','all']).default('never'),at:z.iso.datetime().nullable().default(null),eventIds:z.array(id).max(100).default([]),keywords:tags,tags,reason:short.default('')}).default({mode:'never',at:null,eventIds:[],keywords:[],tags:[],reason:''});
+const lore=z.strictObject({...common,schemaVersion:z.number().int().min(1).default(1),subjectId:ref,source:text.default('Creator'),sourceRefs:z.array(short).max(100).default([]),validFrom:z.iso.datetime().nullable().default(null),
+ validUntil:z.iso.datetime().nullable().default(null),links:z.array(id).default([]),linkDetails:z.array(z.strictObject({targetId:id,type:short,note:text.default('')})).max(500).default([]),priority:z.number().int().default(0),scope:loreScope,
+ activation:loreActivation,deactivation:loreDeactivation,embedding:z.array(z.number().finite()).max(4096).default([])
 });
+const scopedCheckModifier=z.strictObject({name:short,value:openNumber,attribute:z.enum(attributes).nullable().default(null),skillId:ref,contexts:tags});
+const traitEffectScope=z.strictObject({attributes:z.array(z.enum(attributes)).max(7).default([]),skillIds:z.array(id).max(100).default([]),contexts:tags,planTypes:z.array(z.enum(planTypes)).max(planTypes.length).default([]),needs:z.array(z.enum(needTypes)).max(needTypes.length).default([]),choiceIds:tags,observerContexts:tags}).default({attributes:[],skillIds:[],contexts:[],planTypes:[],needs:[],choiceIds:[],observerContexts:[]});
+const traitEffect=z.strictObject({id,name,type:z.enum(['check-modifier','choice','need-rate','schedule-priority','ai-priority','first-impression','flavor']),scope:traitEffectScope,
+ stackingRule:z.enum(['stack','highest','lowest','unique']),conflictBehavior:z.enum(['reject','suppress','replace']),key:short,value:openNumber.default(0),
+ operation:z.enum(['modify','unlock','restrict','describe']).default('modify'),description:text.default('')
+}).superRefine((effect,context)=>{
+ if(effect.type==='check-modifier'&&effect.operation!=='modify')context.addIssue({code:'custom',message:'invalid_check_effect'});
+ if(effect.type==='choice'&&(!effect.scope.choiceIds.length||!['unlock','restrict'].includes(effect.operation)))context.addIssue({code:'custom',message:'invalid_choice_effect'});
+ if(effect.type==='need-rate'&&!effect.scope.needs.length)context.addIssue({code:'custom',message:'need_scope_required'});
+ if(['schedule-priority','ai-priority'].includes(effect.type)&&!effect.scope.planTypes.length)context.addIssue({code:'custom',message:'plan_scope_required'});
+ if(effect.type==='first-impression'&&(!effect.scope.observerContexts.length||effect.operation!=='describe'||!effect.description))context.addIssue({code:'custom',message:'observer_context_required'});
+ if(effect.type==='flavor'&&(effect.operation!=='describe'||!effect.description))context.addIssue({code:'custom',message:'flavor_description_required'});
+});
+const traitCombination=z.strictObject({id,name,traitIds:z.array(id).min(1).max(20),description:text.default(''),effects:z.array(traitEffect).max(50).default([])});
 const catalog=z.strictObject({...common,category:short.default(''),cost:z.number().min(-100).max(100).default(0),mode:z.enum(['descriptive','costed']).default('descriptive'),
  prerequisites:z.array(id).default([]),opposes:z.array(id).default([]),modifiers:z.record(z.string(),openNumber).default({}),permanent:z.boolean().default(false),acquirable:z.boolean().default(true),
- scale:z.strictObject({min:openNumber,max:openNumber,step:z.number().positive().max(1000000),unit:short.default('rating')}).default({min:0,max:100,step:1,unit:'rating'}),
- ranks:z.array(z.strictObject({name:short,min:openNumber,max:openNumber})).max(32).default([]),
+ scopedCheckModifiers:z.array(scopedCheckModifier).max(100).default([]),
+ effects:z.array(traitEffect).max(100).default([]),combinations:z.array(traitCombination).max(100).default([]),
+ balance:z.enum(['neutral','advantage','disadvantage']).default('neutral'),
+ acquisition:z.strictObject({mode:z.enum(['creator','earned','either']),requirements:tags,note:text.default('')}).default({mode:'either',requirements:[],note:''}),
+ loss:z.strictObject({mode:z.enum(['never','creator','condition','earned']),requirements:tags,refund:z.enum(['none','prorated','full']),note:text.default('')}).default({mode:'creator',requirements:[],refund:'none',note:''}),
+ generation:z.strictObject({weight:z.number().min(0).max(10000),tags,requiresBackgroundTags:tags}).default({weight:1,tags:[],requiresBackgroundTags:[]}),
+ scale:numericScale.default({min:0,max:100,step:1,unit:'rating'}),
+ ranks:z.array(rank).max(32).default([]),
  training:z.strictObject({minutesPerPoint:z.number().int().min(1).max(1000000),practiceMinutesPerPoint:z.number().int().min(0).max(1000000),costCentsPerHour:cents,trainerRequired:z.boolean(),requiresMilestone:z.boolean()}).default({minutesPerPoint:60,practiceMinutesPerPoint:0,costCentsPerHour:0,trainerRequired:false,requiresMilestone:false})
+}).superRefine((value,context)=>{
+ if(value.category.toLowerCase()==='experience'&&Object.keys(value.modifiers).length)context.addIssue({code:'custom',message:'experience_modifiers_require_scope'});
+ if(value.category.toLowerCase()==='experience'&&value.effects.some(effect=>effect.type==='check-modifier'&&!effect.scope.skillIds.length&&!effect.scope.contexts.length))context.addIssue({code:'custom',message:'experience_modifiers_require_scope'});
+ if(value.mode==='descriptive'&&value.cost!==0)context.addIssue({code:'custom',message:'descriptive_trait_cannot_be_costed'});
+ if(value.balance==='advantage'&&value.cost<=0||value.balance==='disadvantage'&&value.cost>=0)context.addIssue({code:'custom',message:'trait_cost_direction'});
 });
+const traitTemplate=z.strictObject({...common,backgroundTags:tags,categoryWeights:z.record(z.string(),z.number().min(0).max(1000)).default({}),requiredTraitIds:z.array(id).max(100).default([]),excludedTraitIds:z.array(id).max(100).default([]),
+ minTraits:z.number().int().min(0).max(100),maxTraits:z.number().int().min(0).max(100),budget:z.number().min(0).max(1000),categoryCaps:z.record(z.string(),z.number().int().min(0).max(100)).default({}),tagCaps:z.record(z.string(),z.number().int().min(0).max(100)).default({}),allowHidden:z.boolean().default(true)
+}).refine(value=>value.minTraits<=value.maxTraits,'invalid_trait_template_range');
 const checkDefinition=z.strictObject({...common,attribute:z.enum(attributes),skillId:ref,difficulty:openNumber,context:short.default(''),
  formula:z.enum(['additive-die','additive-no-die','authored-total']).default('additive-die'),rollMode:z.enum(['roll','no-roll']).default('roll'),
  requiredTraits:z.array(id).default([]),requiredEquipmentTags:tags,equipmentModifier:openNumber.default(0),
@@ -166,12 +213,46 @@ const media=z.strictObject({...common,ownerId:ref,mime:z.enum(['image/png','imag
 const combat=z.strictObject({...common,participants:z.array(id).min(2),turnIndex:z.number().int().min(0).default(0),round:z.number().int().min(1).default(1),
  active:z.boolean().default(true),cover:z.record(z.string(),unit).default({}),defenses:z.record(z.string(),z.enum(['dodge','block','parry'])).default({}),log:tags,
  positions:z.record(z.string(),z.number().min(0).max(10000)).default({}),blockedLines:z.array(z.strictObject({fromId:id,toId:id})).max(500).default([])});
-export const dataSchemas={character,location,item,vehicle,relationship:relation,injury,lore,storycard:lore,trait:catalog,skill:catalog,checkDefinition,faction,business,job,housing,evidence,case:caseSchema,law,quest,watcher,message,combat,recipe,service,transition,production,dispatch,judgment,estate,socialRule,media};
+export const dataSchemas={character,location,item,vehicle,relationship:relation,injury,lore,storycard:lore,trait:catalog,traitTemplate,skill:catalog,checkDefinition,faction,business,job,housing,evidence,case:caseSchema,law,quest,watcher,message,combat,recipe,service,transition,production,dispatch,judgment,estate,socialRule,media};
 export type Kind=keyof typeof dataSchemas;
 export const kinds=Object.keys(dataSchemas) as [Kind,...Kind[]];
 export const entitySchema=z.strictObject({id,kind:z.enum(kinds),name,visibility, data:z.record(z.string(),z.json()),revision:z.number().int().positive().default(1),archived:z.boolean().default(false)});
 export type Entity=z.infer<typeof entitySchema>;
 export type Data<K extends Kind>=z.infer<(typeof dataSchemas)[K]>;
+export type CustomSection=z.infer<typeof customSectionSchema>;
+export const characterProfileTemplateSchema=z.strictObject({schemaVersion:z.literal(1).default(1),sections:z.array(customSectionSchema).max(1000)});
+export function validateCustomSections(sections:CustomSection[]){
+ const sectionIds=new Set(sections.map(section=>section.id)),fieldIds=new Set<string>();
+ if(sectionIds.size!==sections.length)throw new Error('duplicate_section_id');
+ for(const section of sections){
+  if(section.parentId&&!sectionIds.has(section.parentId))throw new Error('missing_parent_section');
+  let parentId=section.parentId;const seen=new Set([section.id]);
+  while(parentId){if(seen.has(parentId))throw new Error('section_cycle');seen.add(parentId);const parent=sections.find(candidate=>candidate.id===parentId);if(!parent)throw new Error('missing_parent_section');parentId=parent.parentId;}
+  for(const field of section.fields){if(fieldIds.has(field.id))throw new Error('duplicate_field_id');fieldIds.add(field.id);}
+ }
+ return sections;
+}
+export function applyCharacterProfileTemplate(existing:CustomSection[],template:unknown):CustomSection[]{
+ const current=validateCustomSections(z.array(customSectionSchema).max(1000).parse(existing));
+ const replacement=characterProfileTemplateSchema.parse(template).sections;
+ validateCustomSections(replacement);
+ const currentFields=new Map(current.flatMap(section=>section.fields.map(field=>[field.id,field] as const)));
+ const next=structuredClone(replacement).map(section=>({...section,fields:section.fields.map(field=>{
+  const old=currentFields.get(field.id);
+  // A stable field ID owns its value contract. Template presentation may move or relabel it, but cannot reinterpret the saved value.
+  return old?{...field,type:old.type,value:structuredClone(old.value),repeatable:old.repeatable}:field;
+ })}));
+ const nextFields=new Set(next.flatMap(section=>section.fields.map(field=>field.id)));
+ const bySection=new Map(next.map(section=>[section.id,section]));
+ for(const oldSection of current){
+  const leftovers=oldSection.fields.filter(field=>!nextFields.has(field.id)).map(field=>({...structuredClone(field),archived:true}));
+  if(!leftovers.length)continue;
+  const target=bySection.get(oldSection.id);
+  if(target)target.fields.push(...leftovers);
+  else{const archived={...structuredClone(oldSection),parentId:null,archived:true,fields:leftovers};next.push(archived);bySection.set(archived.id,archived);}
+ }
+ return validateCustomSections(next);
+}
 export function data<K extends Kind>(entity:Entity,kind:K):Data<K>{
  if(entity.kind!==kind)throw new Error('entity_kind_mismatch');
  return dataSchemas[kind].parse(entity.data) as Data<K>;
@@ -180,14 +261,7 @@ export function validateEntity(raw:unknown):Entity{
  const e=entitySchema.parse(raw);e.data=dataSchemas[e.kind].parse(e.data) as Entity['data'];
  if(e.kind==='media'){const m=data(e,'media');mediaBytes(m.mime,m.body);}
  if(e.kind==='item'){const d=data(e,'item');if(d.loaded>d.magazine)throw new Error('ammo_capacity');if(d.ownerId && (d.locationId||d.containerId))throw new Error('ambiguous_item_location');if(d.locationId&&d.containerId)throw new Error('ambiguous_item_location');}
- const sections=e.data.sections as z.infer<typeof customSection>[];const sectionIds=new Set(sections.map(s=>s.id)),fieldIds=new Set<string>();
- if(sectionIds.size!==sections.length)throw new Error('duplicate_section_id');
- for(const s of sections){
-  if(s.parentId&&!sectionIds.has(s.parentId))throw new Error('missing_parent_section');
-  let p=s.parentId;const seen=new Set([s.id]);
-  while(p){if(seen.has(p))throw new Error('section_cycle');seen.add(p);const parent=sections.find(x=>x.id===p);if(!parent)throw new Error('missing_parent_section');p=parent.parentId;}
-  for(const f of s.fields){if(fieldIds.has(f.id))throw new Error('duplicate_field_id');fieldIds.add(f.id);if(f.type!=='json'&&typeof f.value!==(f.type==='text'?'string':f.type))throw new Error('custom_field_type');}
- }
+ validateCustomSections(e.data.sections as CustomSection[]);
  return e;
 }
 export const actionSchema=z.discriminatedUnion('type',[
@@ -205,7 +279,7 @@ export const actionSchema=z.discriminatedUnion('type',[
  z.strictObject({type:z.literal('pay-bail'),caseId:id}),
  z.strictObject({type:z.literal('clinical-care'),serviceId:id,injuryId:id}),
  z.strictObject({type:z.literal('forensic-test'),serviceId:id,evidenceId:id,caseId:id}),
- z.strictObject({type:z.literal('look')}),z.strictObject({type:z.literal('wait'),minutes:z.number().int().min(1).max(10080)}),
+ z.strictObject({type:z.literal('look')}),z.strictObject({type:z.literal('inspect'),targetId:id}),z.strictObject({type:z.literal('wait'),minutes:z.number().int().min(1).max(10080)}),
  z.strictObject({type:z.literal('sleep'),minutes:z.number().int().min(1).max(720)}),z.strictObject({type:z.literal('say'),text:short}),
  z.strictObject({type:z.literal('travel'),destinationId:id,mode:z.enum(['walk','drive','transit','taxi']).default('walk'),vehicleId:ref}),
  z.strictObject({type:z.literal('take'),itemId:id}),z.strictObject({type:z.literal('give'),itemId:id,toId:id}),
@@ -222,7 +296,7 @@ export const actionSchema=z.discriminatedUnion('type',[
  z.strictObject({type:z.literal('work'),jobId:id}),z.strictObject({type:z.literal('pay-rent'),housingId:id}),
  z.strictObject({type:z.literal('social'),targetId:id,intent:z.enum(['greet','trust','flirt','date','commit','cohabit','marry','reconcile','breakup','intimacy','decline']),consent:z.boolean().default(false)}),
  z.strictObject({type:z.literal('share'),targetId:id,factId:id}),
- z.strictObject({type:z.literal('check'),attribute:z.enum(attributes),skillId:ref,checkId:ref,context:short.default('')}),z.strictObject({type:z.literal('train'),skillId:ref,attribute:z.enum(attributes).nullable().default(null),trainerId:ref,minutes:z.number().int().min(15).max(1440),milestoneReached:z.boolean().default(false)}).refine(v=>Boolean(v.skillId)!==Boolean(v.attribute),'training_target_required'),
+ z.strictObject({type:z.literal('check'),attribute:z.enum(attributes),skillId:ref,checkId:ref,context:short.default('')}),z.strictObject({type:z.literal('train'),skillId:ref,attribute:z.enum(attributes).nullable().default(null),trainerId:ref,source:short.default(''),mode:z.enum(['instruction','practice']).default('instruction'),minutes:z.number().int().min(15).max(1440),milestoneReached:z.boolean().default(false)}).refine(v=>Boolean(v.skillId)!==Boolean(v.attribute),'training_target_required'),
  z.strictObject({type:z.literal('combat'),targetId:id}),
  z.strictObject({type:z.literal('attack'),targetId:id,weaponId:ref,bodyPart:name.default('torso')}),
  z.strictObject({type:z.literal('defend'),defense:z.enum(['dodge','block','parry'])}),
@@ -242,15 +316,21 @@ export const actionSchema=z.discriminatedUnion('type',[
 ]);
 export type Action=z.infer<typeof actionSchema>;
 export type Settings=z.infer<typeof settingsSchema>;
-export type Fact={id:string;subjectId:string;predicate:string;value:unknown;eventId:string;at:string;retiredAt:string|null};
-export type Knowledge={observerId:string;factId:string;source:string;at:string};
-export type Belief={id:string;observerId:string;proposition:string;confidence:number;source:string;at:string;correctedBy:string|null};
-export type Memory={id:string;observerId:string;text:string;salience:number;decayPerDay:number;eventId:string;at:string;private:boolean};
-export type State={canon?:CanonSource|null;clock:string;settings:Settings;entities:Entity[];facts:Fact[];knowledge:Knowledge[];beliefs:Belief[];memories:Memory[]};
+export const recallConditionsSchema=z.strictObject({entityIds:z.array(id).max(100).default([]),tags,locationId:ref,from:z.iso.datetime().nullable().default(null),until:z.iso.datetime().nullable().default(null)});
+export const factSchema=z.strictObject({id,subjectId:id,predicate:z.string().max(160),objectId:id.nullable().default(null),value:z.json(),qualifiers:z.record(z.string(),z.json()).default({}),source:z.string().max(1000).default('simulation'),truthStatus:z.enum(['verified','asserted','disputed','false','superseded']).default('verified'),audience:z.array(z.string().max(160)).max(100).default([]),confidence:z.number().min(0).max(1).default(1),observedAt:z.iso.datetime().nullable().default(null),learnedAt:z.iso.datetime().nullable().default(null),validFrom:z.iso.datetime().nullable().default(null),validUntil:z.iso.datetime().nullable().default(null),eventId:id,eventIds:z.array(id).max(100).default([]),evidenceIds:z.array(id).max(100).default([]),tags,at:z.iso.datetime(),retiredAt:z.iso.datetime().nullable()});
+export const knowledgeSchema=z.strictObject({observerId:id,factId:id,source:z.string().max(1000),at:z.iso.datetime(),confidence:z.number().min(0).max(1).default(1),observedAt:z.iso.datetime().nullable().default(null),expiresAt:z.iso.datetime().nullable().default(null),evidenceIds:z.array(id).max(100).default([])});
+export const beliefSchema=z.strictObject({id,observerId:id,proposition:z.string().max(16000),subjectId:id.nullable().default(null),predicate:z.string().max(160).default('believes'),objectId:id.nullable().default(null),value:z.json().default(null),qualifiers:z.record(z.string(),z.json()).default({}),confidence:z.number().min(0).max(1),source:z.string().max(1000),truthStatus:z.enum(['believed','doubted','disproven','confirmed']).default('believed'),audience:z.array(z.string().max(160)).max(100).default([]),observedAt:z.iso.datetime().nullable().default(null),validFrom:z.iso.datetime().nullable().default(null),validUntil:z.iso.datetime().nullable().default(null),eventIds:z.array(id).max(100).default([]),evidenceIds:z.array(id).max(100).default([]),tags,at:z.iso.datetime(),correctedBy:id.nullable()});
+export const memorySchema=z.strictObject({id,observerId:id,text:z.string().max(16000),interpretation:z.string().max(16000).default(''),salience:z.number().min(0).max(1),decayPerDay:z.number().min(0).max(1),eventId:id,eventRefs:z.array(id).max(100).default([]),at:z.iso.datetime(),private:z.boolean(),privacy:z.enum(['private','shared']).default('private'),recallConditions:recallConditionsSchema.default({entityIds:[],tags:[],locationId:null,from:null,until:null}),lastRefreshedAt:z.iso.datetime().nullable().default(null),refreshCount:z.number().int().min(0).default(0),expiresAt:z.iso.datetime().nullable().default(null),tags});
+export type Fact={id:string;subjectId:string;predicate:string;objectId?:string|null;value:unknown;qualifiers?:Record<string,unknown>;source?:string;truthStatus?:'verified'|'asserted'|'disputed'|'false'|'superseded';audience?:string[];confidence?:number;observedAt?:string|null;learnedAt?:string|null;validFrom?:string|null;validUntil?:string|null;eventId:string;eventIds?:string[];evidenceIds?:string[];tags?:string[];at:string;retiredAt:string|null};
+export type Knowledge={observerId:string;factId:string;source:string;at:string;confidence?:number;observedAt?:string|null;expiresAt?:string|null;evidenceIds?:string[]};
+export type Belief={id:string;observerId:string;proposition:string;subjectId?:string|null;predicate?:string;objectId?:string|null;value?:unknown;qualifiers?:Record<string,unknown>;confidence:number;source:string;truthStatus?:'believed'|'doubted'|'disproven'|'confirmed';audience?:string[];observedAt?:string|null;validFrom?:string|null;validUntil?:string|null;eventIds?:string[];evidenceIds?:string[];tags?:string[];at:string;correctedBy:string|null};
+export type RecallConditions={entityIds:string[];tags:string[];locationId:string|null;from:string|null;until:string|null};
+export type Memory={id:string;observerId:string;text:string;interpretation?:string;salience:number;decayPerDay:number;eventId:string;eventRefs?:string[];at:string;private:boolean;privacy?:'private'|'shared';recallConditions?:RecallConditions;lastRefreshedAt?:string|null;refreshCount?:number;expiresAt?:string|null;tags?:string[]};
+export type State={canon?:CanonSource|null;clock:string;settings:Settings;entities:Entity[];facts:Fact[];knowledge:Knowledge[];beliefs:Belief[];memories:Memory[];eventIds?:string[]};
 export const getEntity=(s:State,id:string,kind?:Kind)=>{const e=s.entities.find(e=>e.id===id&&!e.archived);if(!e||kind&&e.kind!==kind)throw new Error('entity_unavailable');return e;};
 export function refs(e:Entity):string[]{
- const result:string[]=[];const walk=(v:unknown,key='')=>{if(!v)return;if(typeof v==='string'&&((key.endsWith('Id')&&!['controllerUserId','sourceEventId','eventId','parentId'].includes(key))||['parentId','to'].includes(key)&&e.kind==='location'))result.push(v);
- else if(Array.isArray(v)){if(['traits','factionIds','occupants','links','prerequisites','opposes','jurisdictionIds','memberIds','stock','suspectIds','evidenceIds','warrantLocationIds','lawIds','participants','mediaIds'].includes(key))result.push(...v as string[]);else v.forEach(x=>walk(x,key));}
+ const result:string[]=[];const walk=(v:unknown,key='')=>{if(!v)return;if(typeof v==='string'&&((key.endsWith('Id')&&!['controllerUserId','sourceEventId','eventId','effectId','parentId'].includes(key))||['parentId','to'].includes(key)&&e.kind==='location'))result.push(v);
+ else if(Array.isArray(v)){if(['traits','traitIds','skillIds','requiredTraitIds','excludedTraitIds','factionIds','peopleIds','placeIds','relationshipIds','occupants','links','prerequisites','opposes','jurisdictionIds','memberIds','stock','suspectIds','evidenceIds','warrantLocationIds','lawIds','participants','mediaIds'].includes(key))result.push(...v as string[]);else v.forEach(x=>walk(x,key));}
  else if(typeof v==='object')for(const[k,x]of Object.entries(v))if(!['sections','history','custody'].includes(k))walk(x,k);};walk(e.data);
  if(e.kind==='character'){const c=data(e,'character');result.push(...Object.keys(c.skills),...c.compatibility.requiredTraits,...Object.keys(c.compatibility.traitWeights));}
  return [...new Set(result)].filter(x=>x!==e.id);
@@ -263,13 +343,32 @@ export function validateState(s:State){
  const byId=new Map(s.entities.map(e=>[e.id,e]));
  const target=(value:unknown,kinds:Kind[])=>{if(value!==null&&value!==undefined){const e=byId.get(String(value));if(!e||!kinds.includes(e.kind))throw new Error('reference_kind_mismatch');}};
  const common:Record<string,Kind[]>={locationId:['location'],homeId:['location'],originLocationId:['location'],skillId:['skill'],trainerId:['character'],characterId:['character'],investigatorId:['character'],employeeId:['character'],tenantId:['character'],leaderId:['character'],employerId:['business'],businessId:['business'],medicineId:['item'],agencyId:['faction'],caseId:['case'],phoneId:['item'],keyId:['item'],containerId:['item','vehicle'],questId:['quest'],outputId:['item'],responderId:['character'],requesterId:['character'],patientId:['character'],executorId:['character'],beneficiaryId:['character'],relationshipId:['relationship'],destinationId:['location']};
- const arrays:Record<string,Kind[]>={traits:['trait'],requiredTraits:['trait'],factionIds:['faction'],occupants:['character'],jurisdictionIds:['location'],memberIds:['character'],stock:['item'],suspectIds:['character'],evidenceIds:['evidence'],warrantLocationIds:['location'],lawIds:['law'],participants:['character'],mediaIds:['media']};
+ const arrays:Record<string,Kind[]>={traits:['trait'],requiredTraits:['trait'],requiredTraitIds:['trait'],excludedTraitIds:['trait'],factionIds:['faction'],occupants:['character'],jurisdictionIds:['location'],memberIds:['character'],stock:['item'],suspectIds:['character'],evidenceIds:['evidence'],warrantLocationIds:['location'],lawIds:['law'],participants:['character'],mediaIds:['media']};
  for(const e of s.entities){
   for(const [key,kinds]of Object.entries(common))target(e.data[key],kinds);
   for(const [key,kinds]of Object.entries(arrays))for(const value of (e.data[key]??[]) as unknown[])target(value,kinds);
   if(['relationship','message'].includes(e.kind)){target(e.data.fromId,['character']);target(e.data.toId,['character']);}
   if(e.kind==='location'){target(e.data.parentId,['location']);for(const exit of data(e,'location').exits){target(exit.to,['location']);target(exit.keyId,['item']);if(exit.interruption){target(exit.interruption.locationId,['location']);target(exit.interruption.questId,['quest']);if(exit.interruption.afterMinutes>exit.minutes)throw new Error('interruption_after_arrival');}}}
-  if(e.kind==='character'){for(const skillId of Object.keys(data(e,'character').skills))target(skillId,['skill']);for(const entry of data(e,'character').schedule)target(entry.locationId,['location']);for(const training of data(e,'character').training){target(training.skillId,['skill']);target(training.trainerId,['character']);if(training.attribute&&training.skillId)throw new Error('training_target_required');}}
+  if(e.kind==='character'){
+   const character=data(e,'character'),aligned=(value:number,min:number,step:number)=>Math.abs((value-min)/step-Math.round((value-min)/step))<1e-9;
+   for(const value of Object.values(character.attributes)){if(value<s.settings.attributeScale.min||value>s.settings.attributeScale.max)throw new Error('attribute_out_of_scale');if(!aligned(value,s.settings.attributeScale.min,s.settings.attributeScale.step))throw new Error('attribute_step_mismatch');}
+   for(const [skillId,value] of Object.entries(character.skills)){target(skillId,['skill']);const skill=data(getEntity(s,skillId,'skill'),'skill');if(value<skill.scale.min||value>skill.scale.max)throw new Error('skill_out_of_scale');if(!aligned(value,skill.scale.min,skill.scale.step))throw new Error('skill_step_mismatch');}
+   for(const entry of character.schedule)target(entry.locationId,['location']);for(const training of character.training){target(training.skillId,['skill']);target(training.trainerId,['character']);if(training.attribute&&training.skillId)throw new Error('training_target_required');}
+   for(const trace of character.traitEffectTrace)target(trace.traitId,['trait']);
+   const selected=new Set(character.traits);if(selected.size!==character.traits.length)throw new Error('duplicate_traits');
+   let advantageCost=0,disadvantageCredit=0,advantages=0,disadvantages=0;
+   const activeEffects:Array<Data<'trait'>['effects'][number]>=[];
+   for(const traitId of selected){const trait=data(getEntity(s,traitId,'trait'),'trait');for(const prerequisite of trait.prerequisites)target(prerequisite,['trait']);for(const opposition of trait.opposes)target(opposition,['trait']);if(!trait.prerequisites.every(id=>selected.has(id))||trait.opposes.some(id=>selected.has(id)))throw new Error('trait_prerequisite_or_opposition');
+    if(trait.mode==='costed'){const balance=trait.balance==='neutral'?(trait.cost>0?'advantage':trait.cost<0?'disadvantage':'neutral'):trait.balance;if(balance==='advantage'){advantageCost+=trait.cost;advantages++;}if(balance==='disadvantage'){disadvantageCredit+=Math.abs(trait.cost);disadvantages++;}}
+    activeEffects.push(...trait.effects,...trait.combinations.filter(combination=>combination.traitIds.every(id=>selected.has(id))).flatMap(combination=>combination.effects));
+   }
+   const policy=s.settings.traitBalance,credit=policy.refundPolicy==='capped-current'?Math.min(disadvantageCredit,policy.disadvantageCreditCap):0;
+   if(selected.size>policy.maxTraits)throw new Error('trait_count_cap');if(advantages>policy.maxAdvantages)throw new Error('trait_advantage_cap');if(disadvantages>policy.maxDisadvantages)throw new Error('trait_disadvantage_cap');if(Math.max(0,advantageCost-credit)>s.settings.traitBudget)throw new Error('trait_budget_exceeded');
+   const overlaps=(left:string[],right:string[])=>!left.length||!right.length||left.some(value=>right.includes(value));
+   for(let index=0;index<activeEffects.length;index++)for(let other=index+1;other<activeEffects.length;other++){const left=activeEffects[index]!,right=activeEffects[other]!,a=left.scope,b=right.scope;if(left.type===right.type&&left.key===right.key&&(left.conflictBehavior==='reject'||right.conflictBehavior==='reject')&&overlaps(a.attributes,b.attributes)&&overlaps(a.skillIds,b.skillIds)&&overlaps(a.contexts,b.contexts)&&overlaps(a.planTypes,b.planTypes)&&overlaps(a.needs,b.needs)&&overlaps(a.choiceIds,b.choiceIds)&&overlaps(a.observerContexts,b.observerContexts))throw new Error('trait_effect_conflict');}
+  }
+  if(e.kind==='traitTemplate'){const template=data(e,'traitTemplate');if(template.requiredTraitIds.some(id=>template.excludedTraitIds.includes(id)))throw new Error('trait_template_required_excluded');}
+  if(e.kind==='trait'){const trait=data(e,'trait');for(const effect of [...trait.effects,...trait.combinations.flatMap(combination=>combination.effects)])for(const skillId of effect.scope.skillIds)target(skillId,['skill']);for(const combination of trait.combinations)for(const traitId of combination.traitIds)target(traitId,['trait']);}
   if(e.kind==='character'){const c=data(e,'character');if(c.journey){target(c.journey.originId,['location']);target(c.journey.destinationId,['location']);}if(c.reproductive&&c.reproductive.bleedingDays>c.reproductive.cycleDays)throw new Error('invalid_cycle');}
   if(e.kind==='faction')target(data(e,'faction').dispatchPolicy?.hospitalId,['location']);
   if(e.kind==='production'){const p=data(e,'production');if(new Set(p.inputs.map(i=>i.itemId)).size!==p.inputs.length||p.inputs.some(i=>i.itemId===p.outputId))throw new Error('invalid_production_inputs');for(const i of p.inputs)target(i.itemId,['item']);}
@@ -278,8 +377,8 @@ export function validateState(s:State){
   if(e.kind==='combat'){const c=data(e,'combat');for(const key of Object.keys(c.positions))if(!c.participants.includes(key))throw new Error('position_not_participant');for(const line of c.blockedLines)if(!c.participants.includes(line.fromId)||!c.participants.includes(line.toId))throw new Error('line_not_participant');}
  }
  for(const [rows,label]of [[s.facts,'fact'],[s.beliefs,'belief'],[s.memories,'memory']] as const){if(new Set(rows.map(r=>r.id)).size!==rows.length)throw new Error('duplicate_'+label+'_id');}
- for(const f of s.facts)if(!ids.has(f.subjectId))throw new Error('invalid_fact_reference');
- for(const k of s.knowledge)target(k.observerId,['character']);
- for(const b of s.beliefs){target(b.observerId,['character']);if(b.correctedBy&&!s.facts.some(f=>f.id===b.correctedBy))throw new Error('invalid_correction_reference');}
- for(const m of s.memories)target(m.observerId,['character']);
+ for(const f of s.facts){if(!ids.has(f.subjectId))throw new Error('invalid_fact_reference');if(f.objectId&&!ids.has(f.objectId))throw new Error('invalid_fact_object');for(const evidenceId of f.evidenceIds??[])target(evidenceId,['evidence']);}
+ for(const k of s.knowledge){target(k.observerId,['character']);for(const evidenceId of k.evidenceIds??[])target(evidenceId,['evidence']);}
+ for(const b of s.beliefs){target(b.observerId,['character']);if(b.subjectId&&!ids.has(b.subjectId))throw new Error('invalid_belief_subject');if(b.objectId&&!ids.has(b.objectId))throw new Error('invalid_belief_object');for(const evidenceId of b.evidenceIds??[])target(evidenceId,['evidence']);if(b.correctedBy&&!s.facts.some(f=>f.id===b.correctedBy))throw new Error('invalid_correction_reference');}
+ for(const m of s.memories){target(m.observerId,['character']);for(const entityId of m.recallConditions?.entityIds??[])if(!ids.has(entityId))throw new Error('invalid_memory_recall_reference');}
 }
