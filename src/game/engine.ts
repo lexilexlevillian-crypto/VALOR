@@ -290,7 +290,7 @@ export class Game {
   ensure(row,404,'character_profile_template_unavailable');const definition=characterProfileTemplateSchema.parse(JSON.parse(row.template_json));
   return this.mutate(actor,id,input.revision,key,input,'creator.character-profile-template',true,s=>{
    const character=getEntity(s,input.characterId,'character'),profile=data(character,'character');
-   profile.sections=applyCharacterProfileTemplate(profile.sections,definition);profile.characterSchemaVersion=3;character.data=profile as Entity['data'];
+   profile.sections=applyCharacterProfileTemplate(profile.sections,definition);profile.characterSchemaVersion=4;character.data=profile as Entity['data'];
    validateEntity(character);return {result:{characterId:character.id,templateId:input.templateId}};
   });
  }

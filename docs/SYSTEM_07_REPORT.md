@@ -12,6 +12,7 @@ Added:
 
 - migrations/014_system07_character_profile.sql
 - migrations/020_system07_character_templates.sql
+- migrations/025_system07_npc_job_sheet.sql
 - tests/system07-character.test.ts
 - docs/SYSTEM_07_REPORT.md
 
@@ -37,7 +38,7 @@ The validated character data contract now includes:
 
 Social presentation and attractiveness context are descriptive, authored prose. No universal attractiveness score or mechanic was introduced. Identity and culture fields do not automatically derive mechanics.
 
-Every character carries characterSchemaVersion, currently version 3. Existing fields retain their prior defaults through additive parsing and migration.
+Every character carries characterSchemaVersion, currently version 4. Existing fields retain their prior defaults through additive parsing and migration. NPCs additionally support birthplace, zero to three structured occupations, source-sheet descriptive ratings, personality and behavioral authoring fields, and creator notes.
 
 ## Custom section architecture
 
@@ -48,7 +49,7 @@ Character records contain stable-ID custom sections and fields:
 
 Sections support nested parent relationships. Server validation rejects duplicate IDs, missing parents, cycles, invalid field values, and malformed visibility. Practical bounds are 1,000 sections and 1,000 fields per section to keep requests and renders safe; this is an implementation safety bound rather than a positional data model.
 
-Presentation edits change labels, positions, subsection ownership, and hierarchy metadata without changing IDs or values. Repeatable fields use typed arrays; schema-v2 scalar values remain readable and are normalized by the v3 Creator editor.
+Presentation edits change labels, positions, subsection ownership, and hierarchy metadata without changing IDs or values. Repeatable fields use typed arrays; older scalar values remain readable and are normalized by the current Creator editor.
 
 World-owned profile templates snapshot these stable-ID section definitions with blank defaults, not a source character's personal values. Applying a template keeps the current value contract for every matching field ID, even when the template moves or relabels it. Fields omitted by the template remain persisted as archived fields/sections, so replacement is non-destructive.
 
@@ -60,6 +61,8 @@ Migration 014 adds character_profile_schema_versions keyed by timeline and chara
 - replaces the profile-version triggers so new and updated characters remain at version 3;
 - adds world-owned character_profile_templates with active-name uniqueness and lookup indexes;
 - preserves the existing entity JSON as the authoritative profile payload.
+
+Migration 025 advances character profile metadata to version 4 without discarding authored JSON. It installs version-aware insert/update triggers for the additive NPC job-sheet contract.
 
 The migration is forward-only and changes only the character schema-version marker inside existing JSON; authored values are not rewritten or dropped. It is tested through fresh migration, restart, libSQL, and native SQLite compatibility paths. A failed entity mutation rolls back the entity, revision, event, receipt, audit, outbox, and autosave transaction using the existing game mutation boundary.
 
@@ -105,6 +108,7 @@ Developer Studio uses the same editor for player and NPC records. Character edit
 - explicit Biography, Appearance, Current State, Mechanics, and Subjective Notes regions;
 - reusable custom sections for Identity, Appearance, Background, Stats, Skills, Traits, Health, Inventory, Relationships, Affiliations, Knowledge, Notes, or any other Creator-defined category;
 - built-in validated character data below the custom section editor;
+- a dedicated NPC job-sheet region for overview, stats, four background options, zero to three occupations, skills, personality/behavioral context, and appearance;
 - add, rename, reorder, duplicate, archive, and delete actions for sections and fields;
 - parent-section selection for nested presentation;
 - field order, subsection destination, type, fact/state/note class, visibility, help text, editability, repeatability, and value controls;
@@ -130,7 +134,7 @@ Existing record duplication assigns a new entity ID, and record archive remains 
 Focused:
 
 - node tests/run.ts tests/system07-character.test.ts
-  - 4 passed, 0 failed.
+  - 5 passed, 0 failed.
 
 The focused suite covers:
 

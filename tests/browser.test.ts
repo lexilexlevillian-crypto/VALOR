@@ -47,6 +47,12 @@ test('iPad shell, keyboard login, Creator form, long prose, reduced motion and o
   const confirmHit=await page.evaluate(()=>{const button=[...document.querySelectorAll('button')].find(node=>node.textContent==='Confirm audited save')!,dialog=document.querySelector('dialog.developer-confirm')!,rect=button.getBoundingClientRect(),dialogRect=dialog.getBoundingClientRect(),hit=document.elementFromPoint(rect.left+rect.width/2,rect.top+rect.height/2);return {button:{left:rect.left,top:rect.top,right:rect.right,bottom:rect.bottom},dialog:{left:dialogRect.left,top:dialogRect.top,right:dialogRect.right,bottom:dialogRect.bottom},hit:hit?.tagName+'.'+hit?.className};});assert.match(confirmHit.hit,/^BUTTON\./,'confirmation touch target: '+JSON.stringify(confirmHit));
   await page.getByRole('button',{name:'Confirm audited save',exact:true}).click({force:true});
   await page.getByRole('button',{name:'Browser-authored room'}).waitFor();
+  await page.getByLabel('Record type',{exact:true}).selectOption('character');
+  await page.getByRole('button',{name:'New record',exact:true}).click();
+  await page.getByText('NPC JOB-SHEET PROFILE',{exact:true}).waitFor();
+  await page.getByLabel('Number of occupations',{exact:true}).selectOption('3');
+  assert.equal(await page.locator('.npc-occupation-card').count(),3);
+  assert.equal(await page.getByLabel('Place of work',{exact:true}).count(),3);
   const accessibility=await new AxeBuilder({page}).analyze();
   assert.deepEqual(accessibility.violations.map(v=>({id:v.id,impact:v.impact,description:v.description})),[]);
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);

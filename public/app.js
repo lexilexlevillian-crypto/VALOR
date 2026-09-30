@@ -306,18 +306,50 @@ function schemaEditor(schema,value,onchange,key='',depth=0){
  return field(key.replace(/([A-Z])/g,' $1'),control);
 }
 function schemaSubset(schema,keys){const properties=Object.fromEntries(keys.filter(key=>schema.properties?.[key]).map(key=>[key,schema.properties[key]]));return {...schema,properties,required:(schema.required??[]).filter(key=>key in properties)};}
-function characterCoreEditor(schema,data,onchange){
+function characterCoreEditor(schema,data,onchange,excluded=[]){
  const definitions=[
   ['BIOGRAPHY','Authored identity and life facts. These optional fields never derive mechanics.',['characterSchemaVersion','playable','controllerUserId','legalName','aliases','dob','ageYears','sex','gender','pronouns','identity','nationality','cultureContext','ethnicityContext','originLocationId','originNeighborhood','classContext','background','familyBackground','employerOccupation','education','beliefsContext']],
   ['APPEARANCE','Structured details plus rich prose and contextual social interpretation—not a universal beauty score.',['appearance','appearanceDescription','heightCm','build','hair','eyes','complexion','features','scars','tattoos','disabilities','presentation','socialPresentation','attractivenessContext']],
   ['CURRENT STATE','Mutable place, health, resources, needs, mood, goals, schedule, and planning state.',['locationId','homeId','cash','bank','condition','blood','fatigue','hunger','thirst','hygiene','intoxication','restrainedBy','dependence','withdrawal','lastDoseAt','needsContext','mood','goals','fears','activity','heat','schedule','lastSimulated','plans','journey','reproductive']],
   ['MECHANICS','Explicit authored mechanics and cross-record affiliations. Identity and context do not feed these values automatically.',['attributes','skills','traits','factionIds','training','compatibility','preferences','boundaries']],
   ['SUBJECTIVE NOTES','Voice, AI direction, secrets, and notes remain authored context rather than biographical fact.',['voice','instructions','aiBehavior','secrets','notes']]
- ],used=new Set(definitions.flatMap(([, ,keys])=>keys)),remaining=Object.keys(schema.properties??{}).filter(key=>!used.has(key));if(remaining.length)definitions[3][2].push(...remaining);
+ ],used=new Set([...definitions.flatMap(([, ,keys])=>keys),...excluded]),remaining=Object.keys(schema.properties??{}).filter(key=>!used.has(key));if(remaining.length)definitions[3][2].push(...remaining);
  const wall=$('div',{class:'character-core'});
- for(const [name,help,keys] of definitions){const values=Object.fromEntries(keys.filter(key=>key in (schema.properties??{})).map(key=>[key,data[key]]));wall.append($('section',{class:'creator-region creator-region--'+name.toLowerCase()},$('div',{class:'section-kicker'},name),$('p',{class:'muted'},help),schemaEditor(schemaSubset(schema,keys),values,value=>{Object.assign(data,value);onchange(data);})));}
+ for(const [name,help,keys] of definitions){const visible=keys.filter(key=>!excluded.includes(key)),values=Object.fromEntries(visible.filter(key=>key in (schema.properties??{})).map(key=>[key,data[key]]));wall.append($('section',{class:'creator-region creator-region--'+name.toLowerCase()},$('div',{class:'section-kicker'},name),$('p',{class:'muted'},help),schemaEditor(schemaSubset(schema,visible),values,value=>{Object.assign(data,value);onchange(data);})));}
  return wall;
-}function characterSectionsEditor(data,onchange){
+}
+function npcJobSheetEditor(schema,data,onchange){
+ const root=$('section',{class:'creator-region npc-job-sheet'}),days=['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
+ data.background={option1:'',option2:'',option3:'',option4:'',...(data.background??{})};
+ data.occupations=Array.isArray(data.occupations)?data.occupations.slice(0,3):[];
+ const emit=()=>onchange(data);
+ const group=(title,help,keys)=>{const values=Object.fromEntries(keys.map(key=>[key,data[key]]));return $('div',{class:'npc-sheet-block'},$('h3',{},title),$('p',{class:'muted'},help),schemaEditor(schemaSubset(schema,keys),values,value=>{Object.assign(data,value);emit();}));};
+ const redrawOccupations=holder=>{
+  holder.replaceChildren();const count=$('select',{},...[0,1,2,3].map(value=>$('option',{value,selected:value===data.occupations.length},String(value))));
+  count.addEventListener('change',()=>{const wanted=Number(count.value);while(data.occupations.length<wanted)data.occupations.push({id:crypto.randomUUID(),businessId:null,placeOfWork:'',position:'',days:[],shift:'day',startMinute:null,endMinute:null,notes:''});data.occupations=data.occupations.slice(0,wanted);emit();redrawOccupations(holder);});
+  const cards=$('div',{class:'npc-occupation-grid'}),businesses=(S.creator?.entities??[]).filter(entity=>entity.kind==='business'&&!entity.archived);
+  for(const [index,occupation] of data.occupations.entries()){
+   occupation.days=occupation.days??[];
+   const textControl=(label,key,area=false)=>{const control=area?$('textarea',{value:occupation[key]??'',rows:3}):input(occupation[key]??'');control.addEventListener('input',()=>{occupation[key]=control.value;emit();});return field(label,control);};
+   const business=$('select',{},$('option',{value:''},'No linked business'),...businesses.map(entity=>$('option',{value:entity.id,selected:entity.id===occupation.businessId},entity.name)));business.addEventListener('change',()=>{occupation.businessId=business.value||null;emit();});
+   const shift=$('select',{},...['day','evening','night','rotating','on-call','custom'].map(value=>$('option',{value,selected:value===occupation.shift},value)));shift.addEventListener('change',()=>{occupation.shift=shift.value;emit();});
+   const dayGrid=$('div',{class:'npc-day-grid'});for(const day of days){const check=$('input',{type:'checkbox',checked:occupation.days.includes(day)});check.addEventListener('change',()=>{occupation.days=days.filter(candidate=>candidate===day?check.checked:occupation.days.includes(candidate));emit();});dayGrid.append($('label',{class:'check-chip'},check,day.slice(0,3)));}
+   const timeControl=(label,key)=>{const value=occupation[key],formatted=value===null||value===undefined?'':String(Math.floor(value/60)).padStart(2,'0')+':'+String(value%60).padStart(2,'0'),control=input(formatted,'time');control.addEventListener('input',()=>{const [hour,minute]=control.value.split(':').map(Number);occupation[key]=control.value?hour*60+minute:null;emit();});return field(label,control);};
+   cards.append($('article',{class:'npc-occupation-card'},$('h4',{},'Job '+(index+1)),$('div',{class:'field-grid'},field('Linked business',business),textControl('Place of work','placeOfWork'),textControl('Position','position'),field('Shift',shift),timeControl('Start time','startMinute'),timeControl('End time','endMinute')),field('Work days',dayGrid),textControl('Job notes','notes',true)));
+  }
+  holder.append(field('Number of occupations',count),cards);
+ };
+ root.append($('div',{class:'section-kicker'},'NPC JOB-SHEET PROFILE'),$('p',{class:'muted'},'Creator-authored dossier fields adapted from the supplied one-, two-, and three-job sheets. Ratings are descriptive only; no diagnosis, mechanics, or canon is inferred.'));
+ root.append(group('Overview','Identity, aliases, age, race/ethnicity context, nationality, neighborhood, birthplace, and freeform overview.',['notes','legalName','aliases','ageYears','ethnicityContext','nationality','originNeighborhood','birthplace']));
+ root.append(group('Stats','Core campaign attributes plus the supplemental 0–10 ratings from the source sheets.',['attributes','dossierRatings']));
+ root.append(group('Background','Four authored options; Option 1 may hold the primary narrative.',['background']));
+ const occupations=$('div',{class:'npc-sheet-block'},$('h3',{},'Occupations'),$('p',{class:'muted'},'Choose zero to three jobs, with optional linked business, position, days, shift, and exact times.'));root.append(occupations);redrawOccupations(occupations);
+ root.append(group('Skills','Authored skill ratings. The sheet layout supports a focused set of up to 16 entries.',['skills']));
+ root.append(group('Personality','Personality narrative, alignment, zodiac, Enneagram, MBTI, behavioral scales, and creator-only context.',['personalityProfile','psychologyNotes']));
+ root.append(group('Appearance','Height, build, eye and skin color, unique features, and description.',['heightCm','build','eyes','complexion','features','appearanceDescription']));
+ return root;
+}
+function characterSectionsEditor(data,onchange){
  const root=$('div',{class:'character-section-editor'});
  let sections=Array.isArray(data.sections)?structuredClone(data.sections):[];
  const visibilities=['creator','campaign','owner','knowledge'];
@@ -391,7 +423,8 @@ async function developer(){
   if(draft.kind==='character'&&profileSchema.properties)delete profileSchema.properties.sections;
   editor.className=draft.kind==='character'?'profile-sheet':'card';
   const profileHead=draft.kind==='character'?$('div',{class:'profile-header'},$('div',{},$('div',{class:'eyebrow'},'CHARACTER DOSSIER'),$('h2',{},draft.name||'New record'),$('p',{},'Author identity, appearance, and current state deliberately.')),$('div',{class:'framed-image'},$('span',{class:'placeholder'},'PORTRAIT / OPTIONAL MEDIA'))):$('span',{class:'badge'},draft.kind);
-  editor.replaceChildren(profileHead,draft.kind==='character'?$('div',{},$('section',{class:'creator-region creator-region--overview'},$('div',{class:'section-kicker'},'RECORD'),$('div',{class:'field-grid'},field('Name',name),field('Visibility',visibility))),characterCoreEditor(profileSchema,draft.data,v=>{draft.data={...draft.data,...v};}),$('div',{class:'creator-custom'},$('div',{class:'section-kicker'},'CUSTOM PROFILE SECTIONS'),characterSectionsEditor(draft.data,v=>{draft.data.sections=v;}))):$('div',{},$('h2',{},draft.name||'New record'),field('Name',name),field('Visibility',visibility),schemaEditor(schema,draft.data,v=>draft.data=v)));
+  const npcFields=['notes','legalName','aliases','ageYears','ethnicityContext','nationality','originNeighborhood','birthplace','attributes','dossierRatings','background','occupations','skills','personalityProfile','psychologyNotes','heightCm','build','eyes','complexion','features','appearanceDescription'];
+  editor.replaceChildren(profileHead,draft.kind==='character'?$('div',{},$('section',{class:'creator-region creator-region--overview'},$('div',{class:'section-kicker'},'RECORD'),$('div',{class:'field-grid'},field('Name',name),field('Visibility',visibility))),characterCoreEditor(profileSchema,draft.data,v=>{draft.data={...draft.data,...v};},draft.data.playable?[]:npcFields),!draft.data.playable?npcJobSheetEditor(profileSchema,draft.data,v=>{draft.data=v;}):null,$('div',{class:'creator-custom'},$('div',{class:'section-kicker'},'CUSTOM PROFILE SECTIONS'),characterSectionsEditor(draft.data,v=>{draft.data.sections=v;}))):$('div',{},$('h2',{},draft.name||'New record'),field('Name',name),field('Visibility',visibility),schemaEditor(schema,draft.data,v=>draft.data=v)));
   const save=async candidate=>{await api(endpoint(candidate.kind==='media'?'media':'entities'),{revision:S.creator.timeline.revision,entity:candidate});notify('Mutation committed and audited.');await developer();};
   const review=async archive=>{const candidate=structuredClone(draft);candidate.name=name.value;candidate.visibility=visibility.value;if(archive)candidate.archived=true;const validation=await api(endpoint('developer/validate'),{revision:S.creator.timeline.revision,entities:[candidate]});developerConfirm(archive?'Archive '+(candidate.name||candidate.kind)+'?':'Commit '+(candidate.name||candidate.kind)+'?',{classification:archive?'DANGEROUS MUTATION':'CONTROLLED MUTATION',record:{id:candidate.id,kind:candidate.kind,name:candidate.name,visibility:candidate.visibility,archived:candidate.archived},validation},archive?'Confirm archive':'Confirm audited save',()=>save(candidate),archive);};
   if(draft.kind==='character'&&S.creator.entities.some(entity=>entity.id===draft.id)){

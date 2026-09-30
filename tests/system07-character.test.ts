@@ -24,10 +24,11 @@ test('System 07 persists one validated character architecture for player and NPC
  try{
   const timeline=await game.initialize(f.creator,f.campaign.id),location=validateEntity({id:randomUUID(),kind:'location',name:'Shared neighborhood',visibility:'campaign',data:{category:'district'}});
   const player=validateEntity({id:randomUUID(),kind:'character',name:'Alex',visibility:'owner',data:characterData(location.id,f.player.id)});
-  const npc=validateEntity({id:randomUUID(),kind:'character',name:'Morgan',visibility:'campaign',data:characterData(location.id,null,{playable:false,secrets:'Hidden plot truth',instructions:'Never expose this',goals:['private-goal'],fears:['private-fear'],cultureContext:'Private authored context'})});
+  const npc=validateEntity({id:randomUUID(),kind:'character',name:'Morgan',visibility:'campaign',data:characterData(location.id,null,{playable:false,birthplace:'Lakeview',occupations:[{id:randomUUID(),businessId:null,placeOfWork:'Corner Market',position:'Night clerk',days:['Monday','Tuesday'],shift:'night',startMinute:1320,endMinute:360,notes:'Closes alone'}],dossierRatings:{toughness:6,charm:4,persuasion:5,intimidation:3,cunning:7,loyalty:8,trustworthiness:6,empathy:5,selfEsteem:4,courage:7,compassion:6,judginess:2,convincibility:3},personalityProfile:{summary:'Reserved and observant',mbti:'INTJ',openness:8},psychologyNotes:'Creator-authored behavioral context.',secrets:'Hidden plot truth',instructions:'Never expose this',goals:['private-goal'],fears:['private-fear'],cultureContext:'Private authored context'})});
   await game.bulkEdit(f.creator,timeline.id,{revision:1,entities:[location,player,npc]},key());
   const loaded=await game.load(timeline.id),saved=loaded.entities.find(e=>e.id===player.id)!;
-  assert.equal(saved.data.legalName,'Alex Morgan');assert.equal(saved.data.heightCm,175);assert.equal(saved.data.characterSchemaVersion,3);
+  assert.equal(saved.data.legalName,'Alex Morgan');assert.equal(saved.data.heightCm,175);assert.equal(saved.data.characterSchemaVersion,4);
+  const savedNpc=loaded.entities.find(e=>e.id===npc.id)!;assert.equal(savedNpc.data.birthplace,'Lakeview');assert.equal((savedNpc.data.occupations as Array<{position:string}>)[0]!.position,'Night clerk');assert.equal((savedNpc.data.dossierRatings as {loyalty:number}).loyalty,8);assert.equal((savedNpc.data.personalityProfile as {mbti:string}).mbti,'INTJ');
   assert.equal((await f.store.get<{n:number}>('SELECT count(*) n FROM character_profile_schema_versions WHERE timeline_id=?',timeline.id))!.n,2);
   const view=await game.view(f.player,timeline.id,player.id),seen=view.entities.find(e=>e.id===npc.id)!;
   assert.equal(seen.data.legalName,'Alex Morgan');assert.equal(seen.data.presentation,'quiet streetwear');
@@ -53,7 +54,7 @@ test('System 07 custom section and field IDs survive rename, reorder, parent cha
   const result=reloaded.data.sections as typeof sections;
   assert.equal(result.find(s=>s.id===identityId)!.name,'Renamed identity');assert.equal(result.find(s=>s.id===identityId)!.fields.find(field=>field.id===fieldId)!.name,'Renamed field');
   assert.equal(result.find(s=>s.id===identityId)!.fields.find(field=>field.id===fieldId)!.value,'Preserve me');
-  assert.equal((await f.store.get<{schema_version:number}>('SELECT schema_version FROM character_profile_schema_versions WHERE character_id=?',character.id))!.schema_version,3);
+  assert.equal((await f.store.get<{schema_version:number}>('SELECT schema_version FROM character_profile_schema_versions WHERE character_id=?',character.id))!.schema_version,4);
   const invalid=structuredClone(reloaded);const invalidSections=invalid.data.sections as Array<{id:string;parentId:string|null}>;invalidSections[0]!.parentId=invalidSections[1]!.id;invalidSections[1]!.parentId=invalidSections[0]!.id;
   assert.throws(()=>validateEntity(invalid),/section_cycle/);
  }finally{await f.close();}
@@ -92,4 +93,12 @@ test('System 07 repeatable fields enforce arrays and retain field policy metadat
  assert.equal(field.position,4);assert.equal(field.editable,false);assert.equal(field.classification,'biographical');assert.deepEqual(field.value,['Ace','Blue']);
  const invalid=structuredClone(base);(invalid.data.sections as Array<{fields:Array<Record<string,unknown>>}>)[0]!.fields[0]!.value=[42];
  assert.throws(()=>validateEntity(invalid),/custom_field_type/);
+});
+
+test('System 07 NPC job-sheet limits occupations and descriptive ratings',()=>{
+ const valid=validateEntity({id:randomUUID(),kind:'character',name:'Job sheet NPC',visibility:'creator',data:characterData(null,null)});
+ const tooMany=structuredClone(valid);tooMany.data.occupations=Array.from({length:4},()=>({id:randomUUID()}));
+ assert.throws(()=>validateEntity(tooMany));
+ const outOfRange=structuredClone(valid);(outOfRange.data.dossierRatings as Record<string,number>).loyalty=11;
+ assert.throws(()=>validateEntity(outOfRange));
 });
