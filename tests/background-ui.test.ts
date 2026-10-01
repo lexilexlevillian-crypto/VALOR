@@ -23,8 +23,13 @@ test('pastel wallpapers, integrated title menu, motion controls and device prefe
   assert.deepEqual(await page.locator('.game-menu-hero .title-menu button').allTextContents(),['New Life','Load Life','About Valor']);
   assert.equal(await page.locator('.game-menu > .title-menu').count(),0);
   await page.getByRole('button',{name:'Toggle navigation'}).click();assert.equal(await page.locator('.mobile-menu').getAttribute('aria-expanded'),'true');
+  assert.equal(await page.locator('.rail-utilities').evaluate(node=>node.nextElementSibling?.tagName),'FOOTER');
+  const dock=await page.locator('.rail').evaluate(node=>{const tools=node.querySelector('.rail-utilities')!.getBoundingClientRect(),footer=node.querySelector('footer')!.getBoundingClientRect();return {toolsBottom:tools.bottom,footerTop:footer.top,footerBottom:footer.bottom,height:innerHeight};});assert.ok(dock.toolsBottom<=dock.footerTop&&dock.footerBottom<=dock.height);
+  await page.screenshot({path:'artifacts/valor-bottom-navigation.png'});
   await page.keyboard.press('Escape');assert.equal(await page.locator('.mobile-menu').getAttribute('aria-expanded'),'false');assert.equal(await page.locator('.mobile-menu').evaluate(node=>node===document.activeElement),true);
   await style();
+  assert.deepEqual(await page.locator('.theme-family').allTextContents(),['Neons · dark backgrounds','Pastels · soft colors']);
+  assert.equal(await page.locator('.theme-choice').count(),15);
   await page.getByRole('button',{name:/^Soft Baby Pink/}).click();
   await page.waitForFunction(()=>document.documentElement.dataset.theme==='soft-baby-pink');
   assert.deepEqual(await page.evaluate(()=>['base','raised','selected','pattern'].map(key=>getComputedStyle(document.documentElement).getPropertyValue('--theme-'+key).trim())),['#ffebef','#ffd1dc','#ffb6c1','#ff99aa']);
@@ -49,9 +54,10 @@ test('pastel wallpapers, integrated title menu, motion controls and device prefe
   for(const themeId of themeIds){
    for(const pattern of ['hearts','stars','checkerboard','leopard']){
     const state=await page.evaluate(async({themeId,pattern})=>{const themePath='/theme.js',backgroundPath='/backgrounds.js';(await import(themePath)).applyTheme(themeId);(await import(backgroundPath)).applyBackground(pattern);const node=document.querySelector('.wallpaper-layer')!,css=getComputedStyle(node);return {theme:document.documentElement.dataset.theme,pattern:document.documentElement.dataset.background,mask:css.maskImage,scheme:getComputedStyle(document.documentElement).colorScheme,animation:css.animationName,pointer:getComputedStyle(document.querySelector('#valor-wallpaper')!).pointerEvents};},{themeId,pattern});
-    assert.equal(state.theme,themeId);assert.equal(state.pattern,pattern);assert.match(state.mask,/data:image\/svg\+xml/);assert.equal(state.scheme,'light');assert.equal(state.pointer,'none');assert.equal(state.animation,['hearts','stars'].includes(pattern)?'wallpaper-drift':'none');
+    assert.equal(state.theme,themeId);assert.equal(state.pattern,pattern);assert.match(state.mask,/data:image\/svg\+xml/);assert.equal(state.scheme,themeId.startsWith('soft-')?'light':'dark');assert.equal(state.pointer,'none');assert.equal(state.animation,['hearts','stars'].includes(pattern)?'wallpaper-drift':'none');
    }
    assert.deepEqual((await new AxeBuilder({page}).analyze()).violations.map(v=>({id:v.id,nodes:v.nodes.map(n=>n.target)})),[],themeId);
+   if(themeId==='neon-red-heat'){assert.deepEqual(await page.evaluate(()=>['base','glow','pattern'].map(key=>document.documentElement.style.getPropertyValue('--theme-'+key))),['#000000','#ff0000','#ff0000']);await page.screenshot({path:'artifacts/valor-neon-red-menu.png',fullPage:true});}
   }
   await page.evaluate(async()=>{const path='/theme.js',background='/backgrounds.js';(await import(path)).applyTheme('soft-baby-pink');(await import(background)).applyBackground('hearts');});
   await page.emulateMedia({reducedMotion:'reduce'});
