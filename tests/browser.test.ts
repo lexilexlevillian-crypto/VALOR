@@ -16,6 +16,7 @@ test('iPad shell, keyboard login, Creator form, long prose, reduced motion and o
  await page.route('**/interpret',async route=>{assert.equal(route.request().postDataJSON().provider,'gemini');await route.fulfill({json:{action:{type:'wait',minutes:1},requiresConfirmation:true}});});
  await page.route('**/narrate/stream',async route=>{await new Promise(resolve=>setTimeout(resolve,300));try{await route.fulfill({status:200,contentType:'application/x-ndjson',body:JSON.stringify({type:'paragraph',text:'This must stay buffered.'})+'\n'+JSON.stringify({type:'complete',status:'validated'})+'\n'});}catch{/* The browser intentionally canceled this request. */}});
  try{
+  const navAction=async(name:string)=>{const control=page.locator('.rail').getByRole('button',{name,exact:true});if(!await control.isVisible())await page.getByRole('button',{name:'Toggle navigation'}).click();await control.click();};
   const address=await f.app.listen({host:'127.0.0.1',port:0});
   // Origin is deployment configuration, not a header supplied by browser code.
   f.settings.origin=address;
@@ -25,18 +26,18 @@ test('iPad shell, keyboard login, Creator form, long prose, reduced motion and o
   await page.getByRole('button',{name:'Enter Valor'}).click();
   await page.getByRole('heading',{name:'VALOR',exact:true}).waitFor();
   assert.deepEqual(await page.getByRole('navigation',{name:'Main menu',exact:true}).getByRole('button').allTextContents(),['New Life','Load Life','About Valor']);
-  assert.equal(await page.locator('.game-menu-hero button').count(),0);
+  assert.equal(await page.locator('.game-menu-hero button').count(),3);
   assert.equal(await page.getByRole('button',{name:'Phone',exact:true}).count(),0);
   const aestheticTheme=await page.evaluate(()=>document.documentElement.dataset.theme);
-  await page.getByRole('button',{name:'Enable emergency high-visibility display'}).click();
+  await navAction('Enable emergency high-visibility display');
   assert.equal(await page.evaluate(()=>document.documentElement.dataset.accessibility),'emergency');
   assert.equal(await page.evaluate(()=>document.documentElement.dataset.theme),aestheticTheme,'accessibility override does not replace saved aesthetic');
-  await page.getByRole('button',{name:'Restore theme display'}).click();
+  await navAction('Restore theme display');
   await page.getByRole('button',{name:'New Life',exact:true}).click();
   await page.getByRole('button',{name:'Choose a start',exact:true}).click();
   await page.getByRole('heading',{name:'Begin a life.',exact:true}).waitFor();
   assert.equal(developerSnapshotRequests,0,'Player Mode does not preload the Developer snapshot');
-  await page.getByRole('button',{name:'Creation Studio',exact:true}).click();
+  await navAction('Creation Studio');
   await page.getByRole('heading',{name:'Enter Developer Mode?'}).waitFor();
   await page.getByRole('button',{name:'Confirm Developer Mode'}).click();
   await page.getByRole('heading',{name:'Creation Studio.'}).waitFor();
@@ -62,7 +63,7 @@ test('iPad shell, keyboard login, Creator form, long prose, reduced motion and o
   assert.equal(await page.locator('.npc-occupation-card').count(),3);
   assert.equal(await page.getByLabel('Place of work',{exact:true}).count(),3);
   const accessibility=await new AxeBuilder({page}).analyze();
-  assert.deepEqual(accessibility.violations.map(v=>({id:v.id,impact:v.impact,description:v.description})),[]);
+  assert.deepEqual(accessibility.violations.map(v=>({id:v.id,impact:v.impact,description:v.description,nodes:v.nodes.map(n=>({target:n.target,summary:n.failureSummary}))})),[]);
   await page.screenshot({path:'artifacts/creation-layout.png',fullPage:true});
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true,JSON.stringify(await page.evaluate(()=>[...document.querySelectorAll('main *')].filter(node=>node.getBoundingClientRect().right>innerWidth+1).slice(0,12).map(node=>({tag:node.tagName,cls:node.className,width:node.getBoundingClientRect().width,right:node.getBoundingClientRect().right})))));
   await page.screenshot({path:'artifacts/ipad-creator.png',fullPage:true});
@@ -83,6 +84,8 @@ test('iPad shell, keyboard login, Creator form, long prose, reduced motion and o
   const settingsHit=await page.evaluate(()=>{const button=[...document.querySelectorAll('.rail nav button')].find(node=>node.textContent==='Settings')!,rect=button.getBoundingClientRect(),hit=document.elementFromPoint(rect.left+rect.width/2,rect.top+rect.height/2);return {rect:{left:rect.left,top:rect.top,right:rect.right,bottom:rect.bottom},hit:hit?.textContent};});assert.equal(settingsHit.hit,'Settings','Settings navigation touch target: '+JSON.stringify(settingsHit));
   await page.getByRole('button',{name:'Settings',exact:true}).click({force:true});
   await page.getByRole('heading',{name:'Settings.'}).waitFor();
+  await navAction('Style');await page.locator('.style-dialog').getByRole('button',{name:'Stars',exact:true}).click();await page.locator('.style-dialog').getByLabel('Animate hearts & stars',{exact:true}).uncheck();await page.getByRole('button',{name:'Done',exact:true}).click();
+  await page.locator('.style-dialog').waitFor({state:'detached'});assert.equal(await page.locator('main').getByRole('button',{name:'Stars',exact:true}).getAttribute('aria-pressed'),'true','Settings reflects choices made in the Style dialog');assert.equal(await page.locator('main').getByLabel('Animate hearts & stars',{exact:true}).isChecked(),false);
   assert.equal(developerSnapshotRequests,requestsAfterExit,'Player Settings does not reload hidden Developer state');
   assert.equal(await page.getByRole('button',{name:'Open Developer Studio'}).count(),0);
   const game=new Game(f.store),timeline=(await f.store.get<{id:string}>('SELECT id FROM timelines LIMIT 1'))!;

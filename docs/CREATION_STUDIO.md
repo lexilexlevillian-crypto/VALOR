@@ -2,7 +2,7 @@
 
 The creation UI follows the OC-sheet hierarchy: essentials first, simulation and AI authoring underneath closed disclosure panels. The signed-in campaign menu uses a title-screen layout; the same visual themes extend through login, creation and play.
 
-The title screen keeps the VALOR wordmark and decoration, with just New Life, Load Life, and About Valor underneath. Campaign and timeline selection happen on separate screens. Gameplay sidebar entries require an actively selected character and are absent from the title screen, roster, New Life, and authoring screens. Creation Studio has separate People, Lore & stories, Places, Objects & media, Skills & systems, and World & diagnostics pages; advanced tools are not mixed into record creation.
+The title screen keeps the VALOR wordmark and decoration, with New Life, Load Life, and About Valor inside the same card. The top bar contains only navigation, campaign context, mode and connection status. Main menu, Creation Studio, Style and High Visibility are in the navigation sidebar, opened with the menu icon before play or on phones. Campaign and timeline selection happen on separate screens. Gameplay sidebar entries require an actively selected character and are absent from the title screen, roster, New Life, and authoring screens. Creation Studio has separate People, Lore & stories, Places, Objects & media, Skills & systems, and World & diagnostics pages; advanced tools are not mixed into record creation.
 
 Characters, NPCs, and freeform New Life creation share the reference-sheet layout: Overview notes beside identity fields; Stats bars beside descriptive ratings; Background choices/history beside zero to three job columns; Skills bubbles; Personality notes beside characterization and psychology; and Appearance fields beside prose. Phone layouts stack the pairs and job cards, while iPad and desktop use available space for columns. No attribute scale, permission, or database schema is changed by this layout.
 
@@ -16,12 +16,16 @@ Characters, NPCs, and freeform New Life creation share the reference-sheet layou
 
 ## Style
 
-The Style button opens the palette chooser without replacing an unsaved creation draft. Signed-in choices use the existing revisioned account preference API and respect campaign restrictions. Signed-out selection is device-local. Decorations and reduced motion are device preferences; operating-system reduced motion and emergency high visibility are also respected.
+The Style button in navigation opens the palette and background chooser without replacing an unsaved creation draft. Signed-in colors use the existing revisioned account preference API and respect campaign restrictions. Signed-out selection is device-local. Background pattern, animation, extra card decorations and reduced motion are device preferences; operating-system reduced motion and emergency high visibility are also respected. Background controls are also available in Settings.
 
-Fifteen palettes: green, pink, purple, blue, red, amber, cyan, chrome, orange and yellow neon; baby pink, baby blue, butter yellow, lavender and mint soft themes. Soft themes use light panels, gentle gradients and bow/heart accents. Neon themes use dark panels, luminous borders and star accents. No third-party images, fonts, tracking or generated mockup screenshots are loaded by the application.
+All fifteen palettes now use pastel surfaces with dark, readable text: green, rose pink, purple, blue, coral, peach, aqua, pearl, baby pink, baby blue, butter yellow, lavender, mint, apricot and lemon. Existing theme IDs remain unchanged for saved preferences and campaign policies. Baby pink follows the supplied palette: #ffebef, #ffd1dc, lightpink (#ffb6c1), and #ff99aa, with darker accessible text and controls.
+
+Every color supports hearts (default), stars, checkerboard and leopard print independently. Original SVG masks take their color from the palette. Hearts and stars drift gently by default; the Animate hearts & stars checkbox turns animation off and remembers that choice. Checkerboard and leopard never animate. Both the app's Reduce motion setting and operating-system reduced motion stop animation even when the animation checkbox is on. Emergency high visibility and forced-colors mode hide decorative wallpaper. No third-party images, fonts, tracking or generated mockup screenshots are loaded by the application.
 
 ## Verification
 
 `npm run check` and `npm test` include existing database, authorization, simulation and browser coverage. `tests/creation-ui.test.ts` verifies custom fractional scales, authored skill IDs, keyboard/tap help, pastel contrast, responsive layouts, theme persistence and the survival of private notes/background/job data across a reviewed save. Browser screenshots are local, ignored artifacts, not game assets.
 
-`studio.js` and `studio.css` are same-origin static assets included in the versioned offline shell. Authenticated API responses and game state remain uncached.
+`tests/background-ui.test.ts` checks all sixty palette/background combinations, exact pink tokens, menu placement, navigation focus, preference persistence, offline controls, motion overrides and accessibility at phone, tablet and desktop sizes.
+
+`studio.js`, `studio.css` and `backgrounds.js` are same-origin static assets included in the versioned offline shell. Authenticated API responses and game state remain uncached.
