@@ -49,3 +49,69 @@ body{background-attachment:fixed}
 @media(max-width:500px){.creation-studio{padding:8px}.studio-page .editor-layout>aside{grid-template-columns:1fr}.sheet-body>.field-grid{grid-template-columns:1fr 1fr}.sheet-body .field-grid>.field:has(textarea){grid-column:1/-1}.creation-studio .field-grid{grid-template-columns:1fr 1fr}.creation-studio .field-grid>.sheet-more{grid-column:1/-1}.creation-studio .sheet-body>.field-grid>.field-grid{grid-column:1/-1}.rating-control{grid-template-columns:78px minmax(60px,1fr) 50px}.sheet-body{padding:7px}.game-menu-hero{padding:30px 10px 22px}.game-wordmark{font-size:58px}.menu-flourish{font-size:10px}.game-menu .campaign-card .actions{grid-template-columns:1fr}.menu-shell main{padding:14px 12px 100px}.login{margin:20px 12px;padding:22px}.creation-actions{position:relative!important;flex-wrap:wrap}.creation-actions button{flex:1 1 120px}}
 @media(pointer:coarse){.creation-studio button,.creation-studio input,.creation-studio select{min-height:44px}.creation-studio input[type=checkbox]{min-height:24px}.rating-meter{height:44px}.creation-studio input[type=range]{min-height:0}.creation-studio .section-help{min-width:44px}.creation-studio .rating-remove{width:44px}}
 @media(forced-colors:active){.rating-meter input[type=range]{opacity:1;appearance:auto}.rating-marks{display:none}.game-menu-hero::before,.game-menu-hero::after{display:none}.game-wordmark{text-shadow:none}}
+/* OC-sheet layout: wide colored strips, paired notes/fields, and 1–3 job columns. */
+.title-menu{display:grid;gap:12px;width:min(420px,100%);margin:28px auto}
+.title-menu button{min-height:60px;font:600 clamp(20px,3vw,26px)/1.3 var(--utility);letter-spacing:.08em;background:var(--surface);border:1px solid var(--border)}
+.title-menu button:hover,.title-menu button:focus-visible{border-color:var(--glow);background:var(--selected)}
+.game-menu-hero h1.game-wordmark{font:900 clamp(60px,10vw,128px)/1.2 Georgia,serif;letter-spacing:.16em;margin:15px 0}
+.studio-areas{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin:24px 0}
+.studio-areas button{text-align:left;min-height:140px;font-size:22px;padding:22px;border-color:var(--border);background:var(--surface)}
+.studio-areas small{display:block;font:14px/1.6 system-ui;color:var(--muted);margin-top:12px}
+.studio-hub{max-width:1050px}.creation-studio{container-type:inline-size}
+.oc-sheet{display:grid;gap:6px;margin:8px 0}.oc-sheet .sheet-heading{justify-content:center;background:var(--glow);min-height:32px;border-radius:0;color:var(--base)}
+.oc-sheet .sheet-heading h3{color:var(--base);letter-spacing:.28em;font-size:12px}
+.oc-sheet .sheet-heading .section-help{color:var(--base)}.oc-sheet .sheet-heading>.help-wrap{position:absolute;right:5px}
+.oc-sheet .section-tooltip{left:auto;right:0}
+.oc-sheet .sheet-body{padding:6px}.oc-sheet .sheet-section{border-radius:0}
+.oc-overview,.oc-stats,.oc-personality,.oc-appearance,.oc-psychology,.oc-background{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:6px;align-items:stretch}
+.oc-identity,.oc-background-options{display:grid;gap:5px;align-content:start}
+.oc-identity>.field{display:grid;grid-template-columns:minmax(110px,1fr) minmax(0,1fr);align-items:center;border:1px solid var(--border);padding-left:6px}
+.oc-identity>.field input{border:0}.oc-sheet .field{min-width:0}.oc-sheet .field>label{color:var(--text)}
+.oc-overview>.field,.oc-personality>.field,.oc-appearance>.field,.oc-psychology>.field{display:flex;flex-direction:column}
+.oc-overview>.field>textarea,.oc-personality>.field>textarea,.oc-appearance>.field>textarea,.oc-psychology>.field>textarea{flex:1;max-height:none;min-height:180px}
+.oc-sheet .field-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:5px}
+.oc-social{display:grid;grid-template-columns:1fr 1fr;gap:5px;align-content:start}
+.oc-social .field{display:grid;grid-template-columns:minmax(0,1fr) 48px;border:1px solid var(--border);align-items:center;padding:0 4px}
+.oc-social input{width:100%;padding:3px}.oc-social label{font-size:10px}
+.oc-sheet .rating-control{grid-template-columns:minmax(65px,.8fr) minmax(45px,1fr) 44px;gap:4px}
+.oc-sheet .rating-marks{height:9px}.oc-sheet .rating-bubbles .rating-marks{height:auto}
+.oc-sheet .rating-control input[type=number]{min-height:28px}.oc-sheet .rating-scale{font-size:8px}
+.oc-sheet .rating-control input[type=number]{appearance:textfield;-moz-appearance:textfield}.oc-sheet .rating-control input[type=number]::-webkit-inner-spin-button,.oc-sheet .rating-control input[type=number]::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}
+.oc-descriptive{grid-template-columns:repeat(2,minmax(0,1fr));gap:3px 8px}
+.oc-sheet .rating-map>.sheet-guidance{font-size:10px}.oc-descriptive{margin-top:6px;border-top:1px solid var(--border)}
+.oc-life-row{display:grid;grid-template-columns:1fr;gap:6px;min-width:0}
+.oc-background{grid-template-columns:minmax(120px,.6fr) minmax(0,1fr)}
+.oc-background textarea{height:100%;max-height:none;min-height:170px}
+.oc-sheet .npc-occupation-grid{grid-template-columns:repeat(3,minmax(0,1fr));gap:5px}
+.oc-sheet .npc-occupation-grid[data-jobs="1"]{grid-template-columns:1fr}
+.oc-sheet .npc-occupation-grid[data-jobs="2"]{grid-template-columns:repeat(2,minmax(0,1fr))}
+.oc-sheet .npc-occupation-card{padding:5px}.oc-sheet .npc-occupation-card .field-grid{grid-template-columns:1fr}
+.oc-sheet .npc-day-grid{display:flex;flex-wrap:wrap}.oc-sheet .check-chip{display:flex;align-items:center}
+.oc-sheet .npc-occupation-card details{grid-column:1/-1}
+.oc-sheet [data-section=skills] .rating-list{grid-template-columns:repeat(2,minmax(0,1fr));gap:3px 12px}
+.oc-personality-choices{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:5px;margin-bottom:6px}
+.oc-psychology{grid-template-columns:1fr}.oc-personality-ratings{display:grid;gap:2px}
+.oc-appearance{grid-template-columns:minmax(0,.65fr) minmax(0,1fr)}
+.oc-sheet .sheet-more{margin:4px 0}
+[data-theme^=soft-] .oc-sheet .sheet-heading{background:var(--selected);color:var(--text);border-radius:var(--sheet-radius) var(--sheet-radius) 0 0}
+[data-theme^=soft-] .oc-sheet .sheet-heading h3,[data-theme^=soft-] .oc-sheet .sheet-heading .section-help{color:var(--text)}
+[data-accessibility=emergency] .oc-sheet .sheet-heading{background:var(--surface)}
+[data-accessibility=emergency] .oc-sheet .sheet-heading h3,[data-accessibility=emergency] .oc-sheet .sheet-heading .section-help{color:var(--text)}
+@container(min-width:900px){
+ .oc-life-row{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
+ .oc-personality-choices{grid-template-columns:repeat(4,minmax(0,1fr))}
+ .oc-psychology{grid-template-columns:minmax(0,.8fr) minmax(0,1fr)}
+ .oc-stats>.rating-list,.oc-stats>div>.rating-map>.rating-list{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+@container(min-width:1150px){.oc-sheet [data-section=skills] .rating-list{grid-template-columns:repeat(4,minmax(0,1fr))}}
+@container(max-width:540px){
+ .oc-descriptive{grid-template-columns:1fr}
+ .oc-overview,.oc-stats,.oc-personality,.oc-appearance{grid-template-columns:1fr}
+ .oc-sheet [data-section=skills] .rating-list{grid-template-columns:1fr}
+ .oc-sheet .npc-occupation-grid,.oc-sheet .npc-occupation-grid[data-jobs="2"]{grid-template-columns:1fr}
+ .oc-sheet .npc-occupation-card .field-grid{grid-template-columns:1fr 1fr}
+ .oc-social{grid-template-columns:1fr 1fr}
+ .oc-sheet .sheet-heading h3{letter-spacing:.16em}
+}
+@media(max-width:700px){.studio-areas{grid-template-columns:1fr 1fr}.studio-areas button{padding:14px;font-size:18px}.topbar{padding:8px 12px}.game-menu-hero h1.game-wordmark{font-size:58px}}
+@media(max-width:420px){.studio-areas{grid-template-columns:1fr}}
