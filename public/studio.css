@@ -168,13 +168,16 @@ body{background-attachment:fixed}
 :root{--serif:Georgia,'Times New Roman',serif;--utility:var(--serif);font-family:var(--serif)}
 body,button,input,select,textarea,#app *{font-family:var(--serif)}
 .title-menu button{text-transform:uppercase;font-family:var(--serif);font-weight:700;letter-spacing:.1em}
+#app .topbar>.eyebrow{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:10px;font-weight:400;line-height:1.4;letter-spacing:1px;color:var(--muted)}
+.friendly-world-settings{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}.friendly-world-settings>section{min-width:0;padding:12px;border:1px solid var(--border)}.friendly-world-settings h3{font-size:20px}.friendly-world-settings .field{margin-block:12px}.friendly-world-settings input[type=checkbox]{width:24px;height:24px}
+@media(max-width:700px){.friendly-world-settings{grid-template-columns:1fr}}
 .registry-column{min-width:0;align-self:start}.registry-column>aside{border:1px solid var(--border);background:var(--surface);padding:12px}.registry-column>button{width:100%;margin-top:12px}
 .oc-personality-ratings .rating-control{grid-template-columns:minmax(115px,1.35fr) minmax(45px,1fr) 44px}
 .oc-personality-ratings label{white-space:normal;overflow-wrap:normal;text-overflow:clip;overflow:visible}
 @container(min-width:900px){.oc-psychology{grid-template-columns:minmax(0,.55fr) minmax(0,1.2fr)}}
 .city-guide{background:var(--surface);padding:clamp(12px,3vw,32px);border:1px solid var(--border)}
 .city-guide-nav{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:24px}.city-guide-nav [aria-pressed=true]{background:var(--selected);border-color:var(--glow)}
-.city-map{max-width:650px;margin:0 auto 16px;background:var(--base);isolation:isolate;position:relative}.city-map::before{content:'';position:absolute;inset:0;background:var(--glow);mask-image:url('/city-map.png');mask-size:100% 100%;mask-repeat:no-repeat;pointer-events:none}.city-map img{display:block;width:100%;height:auto;mix-blend-mode:luminosity;position:relative}
+.city-map{max-width:650px;margin:0 auto 16px;background:transparent;isolation:isolate;position:relative}.city-map::before{content:'';position:absolute;inset:0;background:var(--glow);mask-image:url('/city-map.png');mask-size:100% 100%;mask-repeat:no-repeat;pointer-events:none}.city-map img{display:block;width:100%;height:auto;mix-blend-mode:luminosity;position:relative}
 .city-prose{max-width:80ch;margin:auto}.city-entry{margin:28px 0}.city-entry h4{font-size:20px;color:var(--text)}.city-guide p{font-size:16px;line-height:1.7}
 .selection-pool{min-width:0}.choice-pool{display:grid;grid-template-columns:repeat(auto-fit,minmax(125px,1fr));gap:6px;max-height:300px;overflow:auto;padding:4px;margin:10px 0}
 .pool-choice{text-align:left;font-size:14px;min-height:44px;overflow-wrap:anywhere}.pool-choice[aria-pressed=true]{background:var(--selected);border:2px solid var(--glow)}
@@ -185,3 +188,21 @@ body,button,input,select,textarea,#app *{font-family:var(--serif)}
 @media(max-width:500px){.registry-column>aside{grid-template-columns:1fr}.selected-choice{align-items:stretch;flex-direction:column}.oc-personality-ratings .rating-control{grid-template-columns:minmax(120px,1fr) minmax(45px,1fr) 44px}}
 @media(forced-colors:active){.city-map img{mix-blend-mode:normal}}
 @media(max-width:600px){.player-start .oc-attributes .rating-control{grid-template-columns:minmax(0,1fr) 44px}.player-start .oc-attributes .rating-control>label{grid-column:1/-1}.player-start .oc-attributes .rating-scale{grid-column:1}.player-start .oc-attributes{gap:8px}}
+.creation-studio .background-effects:empty {display:none}
+
+/* Keep psychology labels beside their meters and return space to the notes. */
+.oc-personality-ratings .rating-control {grid-template-columns:max-content minmax(45px,1fr) 44px;column-gap:3px}
+.oc-personality-ratings .rating-control > label {text-align:right;white-space:normal;max-width:130px}
+@container (min-width:900px) {.oc-psychology {grid-template-columns:minmax(0,1.1fr) minmax(210px,1fr)}}
+.background-picker {min-width:0}
+.background-picker > label {display:grid;gap:4px;font-weight:bold}
+.background-picker select {width:100%;min-width:0;max-width:100%}
+.background-effects {font-size:.8rem;overflow-wrap:anywhere}
+.background-effects p {margin:3px 0}
+.pool-choice small {display:block;font-size:.72em;font-weight:normal}
+.selected-choice small {display:block}
+.field select{min-width:0;max-width:100%;width:100%}
+.residence-picker,.automatic-traits{grid-column:1/-1;min-width:0}
+.residence-picker{padding:8px;border:1px solid var(--border)}
+.residence-picker h4{margin:0 0 8px}.automatic-traits p{margin:4px 0;font-size:.85rem}
+.oc-identity .field-grid,.player-start .field-grid{min-width:0}

@@ -12,8 +12,9 @@ import type {CheckRecord} from './actions.ts';
 import {advance,type Effect} from './simulation.ts';
 import {skillNames,traitBackgroundRequirements,traitGenerationTags,traitGroups,traitOppositions} from './catalog.ts';
 import {generateNpcTraitSelection,validateTraitSelection} from './traits.ts';
+import {prepareAppearance,assignResidence} from './profile-creation.ts';
 import {validateStartingBuild,applyPlayerChoices} from './creation.ts';
-import {stockTrait,startingBudget} from '../../public/creation-rules.js';
+import {stockTrait,stockSkill,startingBudget,applyStartingGrants} from '../../public/creation-rules.js';
 import type {InStatement,InValue} from '@libsql/client';
 import {buildContextManifest,contextBrief} from './context.ts';
 import {proposeIntent} from './intent.ts';
@@ -102,7 +103,7 @@ export class Game {
   return {revisionId:binding.canon_revision_id,worldId:binding.world_id,records:records.map(r=>canonSnapshotSchema.parse(JSON.parse(r.snapshot_json)))};
  }
  private async pinCanon(id:string,source:CanonSource|null){await this.store.run('INSERT INTO timeline_canon_sources VALUES (?,?)',id,JSON.stringify(source));}
- private async worldHistory(id:string){
+ async worldHistory(id:string){
   const inherited=await this.store.get<{history_json:string}>('SELECT history_json FROM timeline_world_history WHERE timeline_id=?',id);
   const rows=await this.store.all<{event_id:string;canon_revision_id:string|null;configuration_json:string}>('SELECT w.* FROM event_world_context w JOIN game_events e ON e.id=w.event_id WHERE e.timeline_id=? ORDER BY e.rowid',id);
   return [...(inherited?JSON.parse(inherited.history_json):[]),...rows.map(r=>({eventId:r.event_id,canonRevisionId:r.canon_revision_id,configuration:JSON.parse(r.configuration_json)}))];
@@ -185,7 +186,7 @@ export class Game {
   const characterId=randomUUID();
   const rawData={...definition.character.data,description:definition.character.description,playable:true,controllerUserId:actor.id};
   const character=validateEntity({id:characterId,kind:'character',name:definition.character.name,visibility:'owner',data:rawData});
-  validateStartingBuild(s,data(character,'character'));s.entities.push(character);
+  const startingCharacter=data(character,'character');prepareAppearance(s,startingCharacter);applyStartingGrants(startingCharacter,s.entities);validateStartingBuild(s,startingCharacter);character.data=startingCharacter;s.entities.push(character);assignResidence(s,character);
   const sources=[...new Set([...definition.grantEntityIds,...definition.plotHookIds])];
   for(const sourceId of sources){
    const source=getEntity(s,sourceId);
@@ -220,10 +221,10 @@ export class Game {
   if(!privileged(role))ensure(row.visibility==='campaign'&&row.status==='published',403,'start_package_unavailable');
   return {...row,definition:startDefinitionSchema.parse(JSON.parse(row.definition_json))};
  }
- async creationOptions(actor:Actor,id:string){await this.access(actor,id);const s=await this.load(id);return {settings:{attributeScale:s.settings.attributeScale},entities:s.entities.filter(e=>!e.archived&&e.visibility==='campaign'&&['trait','skill'].includes(e.kind)).map(e=>({id:e.id,kind:e.kind,name:e.name,data:{description:e.data.description,scale:e.data.scale,mode:e.data.mode,cost:e.data.cost,modifiers:e.data.modifiers,scopedCheckModifiers:e.data.scopedCheckModifiers,effects:e.data.effects,prerequisites:e.data.prerequisites,opposes:e.data.opposes}}))};}
+ async creationOptions(actor:Actor,id:string){await this.access(actor,id);const s=await this.load(id);return {settings:{attributeScale:s.settings.attributeScale,residencePlans:s.settings.residencePlans},entities:s.entities.filter(e=>!e.archived&&e.visibility==='campaign'&&['trait','skill'].includes(e.kind)).map(e=>({id:e.id,kind:e.kind,name:e.name,data:{description:e.data.description,scale:e.data.scale,mode:e.data.mode,cost:e.data.cost,modifiers:e.data.modifiers,scopedCheckModifiers:e.data.scopedCheckModifiers,effects:e.data.effects,skillGrants:e.data.skillGrants,prerequisites:e.data.prerequisites,opposes:e.data.opposes}}))};}
  async startPackages(actor:Actor,id:string){
   const {t,access}=await this.access(actor,id),developer=privileged(access.role)&&(await this.domain.userMode(actor)).mode==='developer';
-  const state=await this.load(id),rows=await this.store.all<{id:string;slug:string;name:string;description:string;kind:string;visibility:string;status:string;definition_json:string;schema_version:number;revision:number;created_at:string;updated_at:string}>("SELECT id,slug,name,description,kind,visibility,status,definition_json,schema_version,revision,created_at,updated_at FROM campaign_start_packages WHERE campaign_id=? AND archived_at IS NULL AND (status='published' AND visibility='campaign' OR ?=1) ORDER BY name,id",t.campaign_id,developer?1:0);  return rows.map(row=>{const definition=startDefinitionSchema.parse(JSON.parse(row.definition_json));const build={attributes:definition.character.data.attributes??{},skills:definition.character.data.skills??{},traits:definition.character.data.traits??[],background:{originChoice:(definition.character.data.background as Record<string,unknown>|undefined)?.originChoice??''}};const ids=[...(Array.isArray(build.traits)?build.traits:[]),...Object.keys(build.skills as object)];const customizable=ids.every(id=>state.entities.some(e=>e.id===id&&!e.archived&&e.visibility==='campaign'));return {customizable,...(customizable?{build}:{}),id:row.id,slug:row.slug,name:row.name,description:row.description,kind:row.kind,visibility:row.visibility,status:row.status,schemaVersion:row.schema_version,revision:row.revision,createdAt:row.created_at,updatedAt:row.updated_at,summary:this.startSummary(state,definition),...(developer?{definition}:{})};});
+  const state=await this.load(id),rows=await this.store.all<{id:string;slug:string;name:string;description:string;kind:string;visibility:string;status:string;definition_json:string;schema_version:number;revision:number;created_at:string;updated_at:string}>("SELECT id,slug,name,description,kind,visibility,status,definition_json,schema_version,revision,created_at,updated_at FROM campaign_start_packages WHERE campaign_id=? AND archived_at IS NULL AND (status='published' AND visibility='campaign' OR ?=1) ORDER BY name,id",t.campaign_id,developer?1:0);  return rows.map(row=>{const definition=startDefinitionSchema.parse(JSON.parse(row.definition_json));const build={profile:Object.fromEntries(['heightCm','build','eyes','complexion','nationality','ethnicityContext','birthplace','identity','originNeighborhood','residence'].filter(key=>definition.character.data[key]!==undefined).map(key=>[key,definition.character.data[key]])),attributes:definition.character.data.attributes??{},skills:definition.character.data.skills??{},traits:definition.character.data.traits??[],background:Object.fromEntries(['option1','option2','option3','option4','originChoice'].map(key=>[key,(definition.character.data.background as Record<string,unknown>|undefined)?.[key]??'']))};const ids=[...(Array.isArray(build.traits)?build.traits:[]),...Object.keys(build.skills as object)];const customizable=ids.every(id=>state.entities.some(e=>e.id===id&&!e.archived&&e.visibility==='campaign'));return {customizable,...(customizable?{build}:{}),id:row.id,slug:row.slug,name:row.name,description:row.description,kind:row.kind,visibility:row.visibility,status:row.status,schemaVersion:row.schema_version,revision:row.revision,createdAt:row.created_at,updatedAt:row.updated_at,summary:this.startSummary(state,definition),...(developer?{definition}:{})};});
  }
  async createStartPackage(actor:Actor,id:string,input:unknown,key:string){
   keySchema.parse(key);
@@ -244,12 +245,15 @@ export class Game {
   return this.createStartPackage(actor,id,{name:input.name,slug:input.slug,description:source.description,kind:'template',visibility:input.visibility??'creator',status:input.status??'draft',definition:source.definition},key);
  }
  async start(actor:Actor,id:string,input:{revision:number;packageId?:string;definition?:unknown;choices?:unknown},key:string){
-  const parsed=z.strictObject({revision:z.number().int().positive(),packageId:z.uuid().optional(),definition:z.unknown().optional(),choices:z.strictObject({occupations:z.array(z.strictObject({placeOfWork:z.string().max(1000),position:z.string().max(1000)})).max(3).optional(),attributes:z.record(z.string(),z.number()).optional(),skills:z.record(z.string(),z.number()).optional(),traits:z.array(z.uuid()).max(100).optional(),background:z.record(z.string(),z.string()).optional()}).optional()}).refine(v=>Boolean(v.packageId)!==Boolean(v.definition),'one_start_source_required').parse(input);
+  const parsed=z.strictObject({revision:z.number().int().positive(),packageId:z.uuid().optional(),definition:z.unknown().optional(),choices:z.strictObject({profile:z.strictObject({heightCm:z.number().nullable().optional(),build:z.string().max(160).optional(),eyes:z.string().max(160).optional(),complexion:z.string().max(160).optional(),nationality:z.string().max(160).optional(),ethnicityContext:z.string().max(16000).optional(),birthplace:z.string().max(160).optional(),identity:z.record(z.string().max(100),z.string().max(160)).optional(),originNeighborhood:z.string().max(160).optional(),residence:z.strictObject({neighborhood:z.string().max(160),name:z.string().max(160).default(''),building:z.literal(1).default(1),floor:z.literal(0).default(0),apartment:z.literal('').default('')}).nullable().optional()}).optional(),name:z.string().trim().min(1).max(160).optional(),occupations:z.array(z.strictObject({placeOfWork:z.string().max(1000),position:z.string().max(1000)})).max(3).optional(),attributes:z.record(z.string(),z.number()).optional(),skills:z.record(z.string(),z.number()).optional(),traits:z.array(z.uuid()).max(100).optional(),background:z.record(z.string(),z.string()).optional()}).optional()}).refine(v=>Boolean(v.packageId)!==Boolean(v.definition),'one_start_source_required').parse(input);
   return this.mutate(actor,id,parsed.revision,key,parsed,'start.character',false,async(s,eventId,seed,role)=>{
    const timeline=(await this.store.get<Timeline>('SELECT * FROM timelines WHERE id=?',id))!;
    const definition=parsed.packageId?(await this.packageFor(actor,timeline,parsed.packageId)).definition:startDefinitionSchema.parse(parsed.definition);
    if(!parsed.packageId)ensure(privileged(role),403,'freeform_start_creator_only');
    if(parsed.choices){ensure(Boolean(parsed.packageId),400,'package_required_for_choices');definition.character.data=z.record(z.string(),z.json()).parse(applyPlayerChoices(s,definition.character.data,parsed.choices));}
+   ensure(!await this.store.get('SELECT id FROM shared_world WHERE timeline_id=?',id),409,'world_authoring_only');
+   if(await this.store.get('SELECT campaign_id FROM player_lives WHERE campaign_id=?',timeline.campaign_id))ensure(!s.entities.some(e=>e.kind==='character'&&e.data.playable),409,'life_already_started');
+   if(parsed.choices?.name)definition.character.name=parsed.choices.name;
    const character=this.materializeStart(s,actor,definition);
    const effects:Effect[]=[{id:randomUUID(),text:'A new playable life is ready in the roster.',observers:[character.id],type:'start.created',subjectId:character.id}];
    return {result:{characterId:character.id,packageId:parsed.packageId??null},effects,characterId:character.id,turnText:'start.character'};
@@ -436,7 +440,9 @@ export class Game {
   const state=await this.load(id),staged=structuredClone(state);
   for(const entity of entities){const index=staged.entities.findIndex(row=>row.id===entity.id);if(index<0)staged.entities.push(entity);else staged.entities[index]=entity;}
   validateState(staged);
-  for(const entity of entities){const old=state.entities.find(row=>row.id===entity.id),candidate={...staged,entities:staged.entities.filter(row=>row.id!==entity.id)};if(old)candidate.entities.push(old);await this.applyEntity(id,candidate,entity);}
+  for(const entity of entities){const old=state.entities.find(row=>row.id===entity.id),candidate={...staged,entities:staged.entities.filter(row=>row.id!==entity.id)};if(old)candidate.entities.push(old);await this.applyEntity(id,candidate,entity);
+    staged.entities=candidate.entities; /* Keep generated traits and homes from each entry. */}
+  validateState(staged);
   const creates=entities.filter(entity=>!state.entities.some(row=>row.id===entity.id)).length,archives=entities.filter(entity=>entity.archived&&!state.entities.find(row=>row.id===entity.id)?.archived).length;
   return {valid:true,dryRun:true,persisted:false,revision:t.revision,count:entities.length,creates,updates:entities.length-creates,archives,kinds:Object.fromEntries([...new Set(entities.map(entity=>entity.kind))].map(kind=>[kind,entities.filter(entity=>entity.kind===kind).length])),warnings:archives?['Archived records disappear from normal views. Active references are rejected.']:[]};
  }
@@ -462,7 +468,7 @@ export class Game {
    const previous=s.entities.find(e=>e.id===entity.id);ensure(!previous||previous.kind===entity.kind,400,'entity_kind_immutable');
    if(entity.kind==='character'&&entity.data.controllerUserId)ensure((await this.store.get('SELECT user_id FROM memberships WHERE campaign_id=(SELECT campaign_id FROM timelines WHERE id=?) AND user_id=?',id,String(entity.data.controllerUserId))),400,'controller_not_member');
    if(entity.kind==='character'){
-    const c=data(entity,'character');const seen=new Set(c.traits);ensure(seen.size===c.traits.length,400,'duplicate_traits');
+    const c=data(entity,'character');prepareAppearance(s,c,previous?data(previous,'character'):undefined);entity.data=c;if(!previous){applyStartingGrants(c,s.entities);entity.data=c;}const seen=new Set(c.traits);ensure(seen.size===c.traits.length,400,'duplicate_traits');
     const aligned=(value:number,min:number,step:number)=>Math.abs((value-min)/step-Math.round((value-min)/step))<1e-9;
     for(const value of Object.values(c.attributes)){ensure(value>=s.settings.attributeScale.min&&value<=s.settings.attributeScale.max,400,'attribute_out_of_scale');ensure(aligned(value,s.settings.attributeScale.min,s.settings.attributeScale.step),400,'attribute_step_mismatch');}
     for(const [skillId,value] of Object.entries(c.skills)){const skill=data(getEntity(s,skillId,'skill'),'skill');ensure(value>=skill.scale.min&&value<=skill.scale.max,400,'skill_out_of_scale');ensure(aligned(value,skill.scale.min,skill.scale.step),400,'skill_step_mismatch');}
@@ -475,6 +481,7 @@ export class Game {
    }
    if(entity.archived)ensure(!s.entities.some(e=>!e.archived&&e.id!==entity.id&&refs(e).includes(entity.id)),409,'entity_has_active_references');
    if(previous)s.entities[s.entities.indexOf(previous)]=entity;else s.entities.push(entity);
+   if(entity.kind==='character')assignResidence(s,entity,previous?data(previous,'character'):undefined);
  }
  async bulkEdit(actor:Actor,id:string,input:{revision:number;entities:unknown[]},key:string){
   const entities=z.array(entitySchema).min(1).max(100).parse(input.entities).map(validateEntity);
@@ -489,6 +496,7 @@ export class Game {
     const candidate={...staged,entities:staged.entities.filter(e=>e.id!==entity.id)};
     if(old)candidate.entities.push(old);
     await this.applyEntity(id,candidate,entity);
+    staged.entities=candidate.entities; /* Keep generated traits and homes from each entry. */
    }
    s.entities=staged.entities;return {result:{entityIds:entities.map(e=>e.id)}};
   });
@@ -632,7 +640,7 @@ export class Game {
    const addSkill=(name:string)=>{
     const kind='skill' as const,category='skill';
     if(s.entities.some(e=>e.kind===kind&&e.name===name))return;
-    s.entities.push(validateEntity({id:randomUUID(),kind,name,visibility:'campaign',data:{category,mode:'descriptive',description:'Creator-editable '+category+' descriptor. Mechanical effects and prerequisites must be authored.'}}));count++;
+    s.entities.push(validateEntity({id:randomUUID(),kind,name,visibility:'campaign',data:{category,mode:'descriptive',description:stockSkill(name)?.description??'Creator-editable '+category+' descriptor. Mechanical effects and prerequisites must be authored.'}}));count++;
    };
    for(const name of skillNames)addSkill(name);
    const traitIds=new Map<string,string>();
@@ -653,7 +661,7 @@ export class Game {
     if(!stock||old.mode!=='descriptive'||Object.keys(old.modifiers).length||old.effects.length||old.scopedCheckModifiers.length||old.combinations.length||!['A Creator-editable characterization descriptor.','An authored social-presentation descriptor.'].some(prefix=>old.description.startsWith(prefix)))continue;
     const skill=stock.skill?s.entities.find(e=>e.kind==='skill'&&e.name===stock.skill&&!e.archived):null;
     if(stock.skill&&!skill)continue;
-    const replacement=validateEntity({...entity,revision:entity.revision+1,data:{...old,mode:'costed',balance:stock.cost>0?'advantage':'disadvantage',cost:stock.cost,description:stock.description,modifiers:stock.modifiers,scopedCheckModifiers:skill?[{name:entity.name,value:stock.bonus,skillId:skill.id,contexts:[]}]:[] }});
+    const replacement=validateEntity({...entity,revision:entity.revision+1,data:{...old,mode:'costed',balance:stock.cost>0?'advantage':'disadvantage',cost:stock.cost,description:stock.description,modifiers:stock.modifiers,scopedCheckModifiers:skill?[{name:entity.name,value:stock.bonus,skillId:skill.id,contexts:[]}]:[],skillGrants:Object.entries(stock.grants).flatMap(([name,fraction])=>{const skill=s.entities.find(e=>e.kind==='skill'&&e.name===name&&!e.archived);return skill?[{skillId:skill.id,fraction}]:[];}) }});
     s.entities[s.entities.indexOf(entity)]=replacement;upgraded++;
    }
    // Existing lives retain their legal selections; new lives also have the independent starting budget.

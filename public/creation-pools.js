@@ -1,59 +1,113 @@
-import {ORIGINS,CREATION_BUDGETS,startingBudget,effectText} from './creation-rules.js';
+import {ORIGINS,CREATION_BUDGETS,startingBudget,effectText,skillGrants,applyStartingGrants,traitSkillGrants,stockTrait,stockSkill,skillStatus} from './creation-rules.js';
+import {APPEARANCE_TRAITS} from './profile-rules.js';
 import {ratingControl} from './studio.js';
 const el=(tag,text='',cls='')=>{const node=document.createElement(tag);node.textContent=text;if(cls)node.className=cls;return node;};
 const button=(text,action)=>{const node=el('button',text);node.type='button';node.addEventListener('click',action);return node;};
+const views=new WeakMap();
+const register=(character,render)=>{const list=views.get(character)??new Set();list.add(render);views.set(character,list);};
+export function changeSelection(character,entities,mutate,onchange){
+ const before=skillGrants(character,entities);mutate();const after=skillGrants(character,entities);character.skills??={};
+ for(const id of new Set([...Object.keys(before),...Object.keys(after)])){
+  const skill=entities.find(e=>e.id===id),scale=skill?.data.scale??{min:0,max:100,step:1};
+  const paid=Math.max(0,(character.skills[id]??scale.min)-(before[id]?.value??scale.min));
+  const next=Math.min(scale.max,(after[id]?.value??scale.min)+paid);
+  if(!after[id]&&paid===0)delete character.skills[id];else character.skills[id]=Math.round(next*1e8)/1e8;
+ }
+ onchange(character);for(const render of views.get(character)??[])render();
+}
+function grantLines(grants,entities){
+ return grants.map(grant=>{const skill=entities.find(e=>e.id===grant.skillId),scale=skill?.data.scale??{min:0,max:100,step:1};const rating=scale.min+Math.floor((scale.max-scale.min)*grant.fraction/scale.step+1e-8)*scale.step;return (skill?.name??'Unavailable skill')+': starts at '+rating+' ('+Math.round(grant.fraction*100)+'% of its bar), free';});
+}
+export function backgroundPicker(character,entities,onchange){
+ character.background??={};if(!character.background.option1&&character.background.originChoice)character.background.option1=character.background.originChoice;
+ delete character.background.originChoice;applyStartingGrants(character,entities);
+ const root=el('div','','background-picker oc-background-options'),rows=[];
+ root.append(el('p','Choose up to four different parts of your history. All bonuses are free. Repeated skill grants use the highest rating, not added ratings. Empty slots are fine.','sheet-guidance'));
+ for(let n=1;n<=4;n++){
+  const key='option'+n,label=el('label',n===1?'Primary background':'Background '+n+' (optional)'),select=el('select'),info=el('div','','background-effects');
+  select.setAttribute('aria-label',label.textContent);info.setAttribute('aria-live','polite');
+  const blank=el('option',n===1?'Choose a background':'None');blank.value='';select.append(blank);
+  for(const row of [...ORIGINS].sort((a,b)=>a.name.localeCompare(b.name))){const option=el('option',row.name);option.value=row.id;select.append(option);}
+  const legacy=character.background[key];if(legacy&&!ORIGINS.some(row=>row.id===legacy)){const option=el('option',legacy+' (saved history)');option.value=legacy;select.append(option);}
+  select.addEventListener('change',()=>changeSelection(character,entities,()=>{character.background[key]=select.value;delete character.background.originChoice;},onchange));
+  label.append(select);root.append(label,info);rows.push({key,select,info});
+ }
+ const render=()=>{for(const {key,select,info}of rows){
+  select.value=character.background[key]??'';for(const option of select.options)option.disabled=Boolean(option.value&&option.value!==select.value&&[1,2,3,4].some(n=>character.background['option'+n]===option.value));
+  const row=ORIGINS.find(row=>row.id===select.value);info.replaceChildren();
+  if(row){info.append(el('p',row.description),el('p',effectText(row.modifiers)));
+   for(const [name,fraction]of Object.entries(row.skills)){const skill=entities.find(e=>e.kind==='skill'&&e.name===name&&!e.archived);info.append(el('p',skill?grantLines([{skillId:skill.id,fraction}],entities)[0]:name+': training unavailable until this skill is published.'));}
+  }else if(select.value)info.append(el('p','Saved written history. No automatic stat bonus; choose a listed background to add one.'));
+ }};
+ register(character,render);render();return root;
+}
 export function budgetPanel(character,entities,scale){
+ applyStartingGrants(character,entities);
  const root=el('section','','starting-budget');root.setAttribute('aria-label','Starting point budgets');
  const refresh=()=>{
   root.hidden=!character.playable;if(root.hidden)return;
   const budget=startingBudget(character,entities,scale);
   root.replaceChildren(el('h2','Your starting points'),el('p','Spend up to 35 attribute points, 12 skill points and 6 trait points. Negative traits refund up to 6 points. You may leave points unused. NPCs have no point budgets.'));
   for(const key of ['attributes','skills','traits']){const remaining=budget.remaining[key],line=el('p',key[0].toUpperCase()+key.slice(1)+': '+remaining+' points left','budget-line');line.dataset.budget=key;line.classList.toggle('over-budget',remaining<0);root.append(line);}
-  root.append(el('p','Attribute cost: 10 points for a full bar. Skill cost: 5 points for a full bar. Costs scale proportionally, including fractional values. Descriptive ratings do not spend points.','sheet-guidance'));
+  root.append(el('p','Attribute cost: 10 points for a full bar. Skill cost: 5 points for a full bar, but background and trait training is FREE. Pay only for improvements above the free rating. Descriptive ratings do not spend points.','sheet-guidance'));
  };
  refresh();return {root,refresh};
 }
 export function selectionPool(kind,character,entities,onchange){
+ applyStartingGrants(character,entities);
  const root=el('section','','selection-pool'),search=el('input'),grid=el('div','','choice-pool'),detail=el('div','','choice-detail'),selected=el('div','','selected-choices');
- search.type='search';search.placeholder='Find '+kind;search.setAttribute('aria-label','Search '+kind);
- detail.setAttribute('aria-live','polite');
- const choices=(kind==='backgrounds'?ORIGINS.map(row=>({...row,data:row})):entities.filter(row=>row.kind===(kind==='traits'?'trait':'skill')&&!row.archived)).sort((a,b)=>a.name.localeCompare(b.name));
- const isSelected=row=>kind==='backgrounds'?character.background?.originChoice===row.id:kind==='traits'?(character.traits??[]).includes(row.id):Object.hasOwn(character.skills??{},row.id);
- const changed=()=>{onchange(character);draw();};
+ search.type='search';search.placeholder='Find '+kind;search.setAttribute('aria-label','Search '+kind);detail.setAttribute('aria-live','polite');
+ const choices=entities.filter(row=>row.kind===(kind==='traits'?'trait':'skill')&&!row.archived&&(kind!=='traits'||!APPEARANCE_TRAITS.includes(row.name))).sort((a,b)=>a.name.localeCompare(b.name));
+ const isSelected=row=>kind==='traits'?(character.traits??[]).includes(row.id):Object.hasOwn(character.skills??{},row.id);
+ const costLabel=row=>{const cost=row.data.mode==='costed'?Number(row.data.cost)||0:0;return cost>0?'Costs '+cost+' trait points':cost<0?'Refunds '+Math.abs(cost)+' trait points':'No point cost';};
+ let focused=null;
  const toggle=row=>{
-  if(kind==='backgrounds'){character.background??={};character.background.originChoice=isSelected(row)?'':row.id;}
-  else if(kind==='traits'){character.traits??=[];character.traits=isSelected(row)?character.traits.filter(id=>id!==row.id):[...character.traits,row.id];}
-  else {character.skills??={};if(isSelected(row))delete character.skills[row.id];else character.skills[row.id]=row.data.scale?.min??0;}
-  changed();show(row);
+  if(kind==='skills'&&skillGrants(character,entities)[row.id])return;
+  changeSelection(character,entities,()=>{
+   if(kind==='traits'){character.traits??=[];character.traits=isSelected(row)?character.traits.filter(id=>id!==row.id):[...character.traits,row.id];}
+   else {character.skills??={};if(isSelected(row))delete character.skills[row.id];else character.skills[row.id]=row.data.scale?.min??0;}
+  },onchange);show(row);
  };
  const show=row=>{
-  const definition=row.data;
-  detail.replaceChildren(el('h4',row.name),el('p',kind==='skills'&&definition.description?.startsWith('Creator-editable skill descriptor.')?'Practice and knowledge used for '+row.name.toLowerCase()+'.':definition.description||'An authored '+kind.slice(0,-1)+'.'));
-  if(kind==='backgrounds')detail.append(el('p',effectText(definition.modifiers)),el('p','Choose one background. Its +2 total check bonus is free and does not change your base ratings.'));
+  focused=row;const d=row.data,stock=kind==='skills'?stockSkill(row.name):stockTrait(row.name);
+  const legacy=/^(Creator-editable skill descriptor\.|Optional game interpretation:|Training grants \+2 only on checks using )/.test(d.description??'');
+  detail.replaceChildren(el('h4',row.name),el('p',legacy&&stock?stock.description:d.description||'A creator-authored '+kind.slice(0,-1)+'.'));
   if(kind==='traits'){
-   const cost=definition.mode==='costed'?Number(definition.cost)||0:0;
-   detail.append(el('strong',cost>0?'Costs '+cost+' trait points':cost<0?'Refunds '+Math.abs(cost)+' trait points':'No point cost'),el('p',effectText(definition.modifiers)||''));
-   for(const modifier of definition.scopedCheckModifiers??[]){const skill=entities.find(e=>e.id===modifier.skillId);detail.append(el('p',(modifier.value>0?'+':'')+modifier.value+' '+(skill?.name||modifier.attribute||'checks')+(modifier.contexts?.length?' · '+modifier.contexts.join(', '):'')));}
-   for(const effect of definition.effects??[])detail.append(el('p',effect.description||effect.name));
-   for(const [key,label]of [['opposes','Cannot combine with'],['prerequisites','Requires']])if(definition[key]?.length)detail.append(el('p',label+': '+definition[key].map(id=>entities.find(e=>e.id===id)?.name??'a campaign-defined trait').join(', ')));
-   if(definition.permanent||definition.loss?.mode==='never')detail.append(el('p','Permanent after creation. Review carefully before starting.'));
+   detail.append(el('strong',costLabel(row)),el('p',effectText(d.modifiers)||'No general attribute bonus.'));
+   for(const modifier of d.scopedCheckModifiers??[]){const skill=entities.find(e=>e.id===modifier.skillId);detail.append(el('p',(modifier.value>0?'+':'')+modifier.value+' '+(skill?.name||modifier.attribute||'checks')+(modifier.contexts?.length?' · only during '+modifier.contexts.join(', '):'')));}
+   for(const effect of d.effects??[])detail.append(el('p',effect.name+': '+(effect.description||effect.type+' · '+effect.operation)+' ('+(effect.value>0?'+':'')+effect.value+'). Scope: '+[...(effect.scope?.attributes??[]),...(effect.scope?.skillIds??[]).map(id=>entities.find(e=>e.id===id)?.name??id),...(effect.scope?.contexts??[]),...(effect.scope?.needs??[])].join(', ')));
+   for(const line of grantLines(traitSkillGrants(row,entities),entities))detail.append(el('p',line));
+   if(!(d.effects??[]).length)detail.append(el('p','No additional status effect beyond the bonuses or penalties listed above.'));
+   for(const [key,label]of [['opposes','Cannot combine with'],['prerequisites','Requires']])if(d[key]?.length)detail.append(el('p',label+': '+d[key].map(id=>entities.find(e=>e.id===id)?.name??'a campaign-defined trait').join(', ')));
+   if(d.permanent||d.loss?.mode==='never')detail.append(el('p','Permanent after creation. Review carefully before starting.'));
+   detail.append(el('p','Costs and refunds apply only to player creation. Total refunds are capped at 6 points; NPCs have no point budget.'));
+  }else{
+   const scale=d.scale??{min:0,max:100,step:1},grant=skillGrants(character,entities)[row.id];
+   detail.append(el('p','Your rating is added to checks using this skill. A full bar costs 5 starting points; free training is not charged. Range '+scale.min+'–'+scale.max+'.'));
+   if(skillStatus(row,scale.max).trained)detail.append(el('p','Status: Trained at '+(scale.min+(scale.max-scale.min)/2)+' or higher. +2 to checks using this skill.'+(row.name==='Athletics'?' Also slows ordinary fatigue buildup by 15%.':'')));
+   if(grant)detail.append(el('p','Free rating '+grant.value+' from '+grant.sources.join(', ')+'. Remove its background or trait to remove this grant.'));
   }
-  if(kind==='skills'){const scale=definition.scale??{min:0,max:100,step:1};detail.append(el('p','Adds its rating to checks that use this skill. Range '+scale.min+'–'+scale.max+'. A full bar costs 5 starting skill points.'));}
-  detail.append(button(isSelected(row)?'Remove '+row.name:'Choose '+row.name,()=>toggle(row)));
+  const granted=kind==='skills'&&skillGrants(character,entities)[row.id];if(!granted)detail.append(button(isSelected(row)?'Remove '+row.name:'Choose '+row.name,()=>toggle(row)));
  };
  const draw=()=>{
-  grid.replaceChildren();for(const row of choices){if(!row.name.toLowerCase().includes(search.value.toLowerCase()))continue;const choice=button(row.name,()=>show(row));choice.className='pool-choice';choice.dataset.choiceId=row.id;choice.setAttribute('aria-pressed',String(isSelected(row)));grid.append(choice);}
-  selected.replaceChildren();
+  grid.replaceChildren();for(const row of choices){if(!row.name.toLowerCase().includes(search.value.toLowerCase()))continue;const choice=button(row.name,()=>show(row));choice.className='pool-choice';choice.dataset.choiceId=row.id;choice.setAttribute('aria-label',row.name);choice.setAttribute('aria-pressed',String(isSelected(row)));if(kind==='traits')choice.append(el('small',costLabel(row)));grid.append(choice);}
+  selected.replaceChildren();const grants=skillGrants(character,entities);
   for(const row of choices.filter(isSelected)){
-   const item=el('div','','selected-choice');
-   if(kind==='skills')item.append(ratingControl(row.name,character.skills[row.id],value=>{character.skills[row.id]=value;onchange(character);},{...(row.data.scale??{min:0,max:100,step:1}),bubbles:true}));
-   else item.append(el('strong',row.name));
-   item.append(button('Remove '+row.name,()=>toggle(row)));selected.append(item);
+   const item=el('div','','selected-choice'),grant=grants[row.id];
+   if(kind==='skills'){
+    const scale=row.data.scale??{min:0,max:100,step:1};
+    item.append(ratingControl(row.name,character.skills[row.id],value=>{character.skills[row.id]=Math.max(grant?.value??scale.min,value);onchange(character);if(grant&&value<grant.value)draw();if(focused)show(focused);},{...scale,bubbles:true,hardMin:grant?.value??-1000000}));
+    if(grant)item.append(el('small','Free to '+grant.value+' · '+grant.sources.join(', ')));
+   }else item.append(el('strong',row.name),el('small',costLabel(row)));
+   if(kind!=='skills'||!grant)item.append(button('Remove '+row.name,()=>toggle(row)));
+   item.append(button('Details: '+row.name,()=>show(row)));selected.append(item);
   }
   if(!choices.length)grid.append(el('p','No campaign '+kind+' are published yet. A Creator can install or publish the catalog in Creation Studio.'));
+  if(focused)show(focused);
  };
- search.addEventListener('input',draw);root.append(el('p',kind==='backgrounds'?'Pick one background to see its story and check bonuses. Your written background below is kept.':'Click any option to read what it does, then choose it. Selected options appear below.'),search,grid,detail,selected);draw();return root;
+ register(character,draw);search.addEventListener('input',draw);root.append(el('p','Click an option to read its description, in-game effects and cost, then choose it. Free skills appear automatically.'),search,grid,detail,selected);draw();return root;
 }
+
 import {WORKPLACES} from './city-content.js';
 
 export function occupationPicker(onchange){

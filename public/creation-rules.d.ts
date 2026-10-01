@@ -1,7 +1,13 @@
-export type CreationEntity={id:string;kind:string;name?:string;data:any};
+export type CreationEntity={id:string;kind:string;name?:string;visibility?:string;archived?:boolean;data:any};
+export function selectedBackgrounds(character:any):typeof ORIGINS;
+export function skillGrants(character:any,entities:CreationEntity[]):Record<string,{value:number;sources:string[]}>;
+export function applyStartingGrants<T>(character:T,entities:CreationEntity[]):T;
+export function stockSkill(name:string):{description:string}|null;
+export function skillStatus(skill:CreationEntity,value:number):{checkBonus:number;fatigueRate:number;trained:boolean};
+export function traitSkillGrants(trait:CreationEntity,entities:CreationEntity[]):Array<{skillId:string;fraction:number}>;
 export const CREATION_BUDGETS:{attributes:number;skills:number;traits:number;refundCap:number};
-export const ORIGINS:Array<{id:string;name:string;description:string;modifiers:Record<string,number>}>;
+export const ORIGINS:Array<{id:string;name:string;description:string;modifiers:Record<string,number>;skills:Record<string,number>}>;
 export function originFor(id:unknown):typeof ORIGINS[number]|undefined;
 export function effectText(modifiers:Record<string,number>):string;
 export function startingBudget(character:any,entities:CreationEntity[],attributeScale?:{min:number;max:number;step:number}):{attributes:number;skills:number;traits:number;refund:number;rawRefund:number;remaining:{attributes:number;skills:number;traits:number}};
-export function stockTrait(name:string):{cost:number;modifiers:Record<string,number>;skill?:string;bonus?:number;description:string}|null;
+export function stockTrait(name:string):{cost:number;modifiers:Record<string,number>;skill?:string;bonus?:number;description:string;grants:Record<string,number>}|null;

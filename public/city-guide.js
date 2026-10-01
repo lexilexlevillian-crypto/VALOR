@@ -10,12 +10,13 @@ export function cityGuide(){
   if(index===0){
    const figure=el('figure','','city-map'),image=el('img');image.src='/city-map.png';image.alt='Valor city map: Holiday in the north, Greater Running in the west, Centennial on the eastern island, and Union in the south.';image.width=960;image.height=1280;figure.append(image);
    const zoom=el('a','Open full-size map');zoom.href='/city-map.png';zoom.target='_blank';zoom.rel='noopener';body.append(figure,zoom,el('p','Choose a region above to read its districts and neighborhoods. The map follows your selected palette.','sheet-guidance'));
-   for(let i=13;i<21;i+=2){body.append(el('h3',CITY_PARAGRAPHS[i]),el('p',CITY_PARAGRAPHS[i+1]));}
+
   }
+  if(index>=1&&index<=4)body.append(el('p',CITY_PARAGRAPHS[12+index*2],'region-introduction'));
   let search=null;if(index===5){search=el('input');search.type='search';search.placeholder='Find a place or neighborhood';search.setAttribute('aria-label','Search city places');body.append(search);}
   const prose=el('div','','city-prose');body.append(prose);
   let section=null,previous='';
-  for(const p of CITY_PARAGRAPHS.slice(start,end)){
+  for(const p of CITY_PARAGRAPHS.slice(start+(index>=1&&index<=4?1:0),end)){
    const address=index===5&&previous.startsWith('☆')&&p.length<80&&!p.startsWith('☆');const heading=p.startsWith('☆')||!address&&p.length<80&&p===p.toUpperCase();previous=p;
    if(heading){section=el('section','','city-entry');prose.append(section);section.append(el(p.startsWith('☆')&&!/THE |HOT SPOTS/.test(p)?'h4':'h3',p.replace(/^☆\s*┇\s*/,'').replace(/:$/,'')));}
    else {if(!section){section=el('section','','city-entry');prose.append(section);}section.append(el('p',p));}

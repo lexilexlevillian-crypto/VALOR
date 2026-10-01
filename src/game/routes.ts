@@ -1,6 +1,8 @@
 import {z} from 'zod';
 import type {FastifyInstance,FastifyRequest} from 'fastify';
 import {Game} from './engine.ts';
+import {geography} from './geography.ts';
+import {SharedWorld} from './shared-world.ts';
 import {dataSchemas,kinds,actionSchema,settingsSchema} from './model.ts';
 import {id,name,Fault} from '../contracts.ts';
 import type {Actor} from '../contracts.ts';
@@ -11,6 +13,11 @@ import {geminiFromEnvironment} from './gemini.ts';
 import {IntentGateway} from './ai-intent.ts';
 import {simulationTiers} from './simulation.ts';
 export function gameRoutes(app:FastifyInstance,game:Game,actor:(r:object)=>Actor,key:(headers:Record<string,unknown>)=>string){
+ const world=new SharedWorld(game);
+ app.get('/game/geography',async r=>{await game.domain.active(actor(r));return wrap(()=>geography(r.query));});
+ app.get('/game/world',async r=>world.describe(actor(r)));
+ app.post('/game/world/setup',async r=>{const b=z.strictObject({timelineId:id.optional()}).parse(r.body);return world.setup(actor(r),b.timelineId);});
+ app.post('/game/world/life',async r=>{z.strictObject({}).parse(r.body);return world.enter(actor(r),key(r.headers));});
  const providers:NarrativeProvider[]=[new GroundedProvider(),...(process.env.AI_GATEWAY_URL&&process.env.AI_GATEWAY_SECRET?[new JsonGatewayProvider(process.env.AI_GATEWAY_URL,process.env.AI_GATEWAY_SECRET)]:[])];
  const gemini=geminiFromEnvironment();if(gemini)providers.push(gemini);
  const ai=new NarrativeGateway(game,providers);

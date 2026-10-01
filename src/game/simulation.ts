@@ -1,3 +1,4 @@
+import {skillStatus} from '../../public/creation-rules.js';
 import {createHash,randomUUID} from 'node:crypto';
 import {data,getEntity,validateEntity} from './model.ts';
 import type {Data,Entity,State} from './model.ts';
@@ -136,7 +137,7 @@ function advanceStep(s:State,minutes:number,eventId:string,effects:Effect[],play
    if(d.dependence>0&&d.lastDoseAt)d.withdrawal=Math.min(100,d.withdrawal+rules.withdrawalPerDay*minutes/1440*d.dependence/100);
   }
   if(s.settings.needs&&needsMultiplier>0){
-   const rate=(need:'hunger'|'thirst'|'fatigue'|'hygiene')=>{const resolution=resolveTraitEffects(s,character.id,'need-rate',{need,context:'time-passage'});traitTrace(d,resolution.applied,need,'need rate applied',s.clock);return Math.max(0,1+resolution.applied.reduce((sum,effect)=>sum+effect.value,0));};
+   const rate=(need:'hunger'|'thirst'|'fatigue'|'hygiene')=>{const resolution=resolveTraitEffects(s,character.id,'need-rate',{need,context:'time-passage'});traitTrace(d,resolution.applied,need,'need rate applied',s.clock);const skillRate=need==='fatigue'?Math.min(0,...s.entities.filter(e=>e.kind==='skill'&&!e.archived&&Object.hasOwn(d.skills,e.id)).map(e=>skillStatus(e,d.skills[e.id]!).fatigueRate)):0;return Math.max(0,1+skillRate+resolution.applied.reduce((sum,effect)=>sum+effect.value,0));};
    d.hunger=Math.min(100,d.hunger+minutes/60*needsMultiplier*rate('hunger'));d.thirst=Math.min(100,d.thirst+minutes/30*needsMultiplier*rate('thirst'));d.fatigue=Math.min(100,d.fatigue+minutes/120*needsMultiplier*rate('fatigue'));d.hygiene=Math.max(0,d.hygiene-minutes/240*needsMultiplier*rate('hygiene'));
   }
   const wounds=s.entities.filter(e=>e.kind==='injury'&&!e.archived&&e.data.characterId===character.id);

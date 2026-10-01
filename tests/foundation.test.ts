@@ -28,7 +28,7 @@ test('fresh migrations, checksum enforcement, forward migration and real process
     assert.equal(read.sections[0]!.id,section.sectionId);
     assert.equal(read.sections[0]!.fields[0]!.id,field.fieldId);
     assert.equal(read.sections[0]!.fields[0]!.value,'Authored durable value');
-    assert.equal((await store.get<{n:number}>('SELECT count(*) AS n FROM schema_migrations'))!.n,27);
+    assert.equal((await store.get<{n:number}>('SELECT count(*) AS n FROM schema_migrations'))!.n,28);
     store.close();
     const child=spawnSync(process.execPath,['--input-type=module','-e',
       "import {Store} from './src/db.ts'; const s=new Store(process.env.TEST_DATABASE); await s.migrate(); console.log((await s.get('SELECT value_json FROM field_values')).value_json); s.close();"],

@@ -1,15 +1,8 @@
 // Shared, deterministic starting rules. Ratings remain on each campaign's scale.
+import {automaticTraitNames} from './profile-rules.js';
+import {BACKGROUNDS,stockSkill} from './creation-backgrounds.js';
 export const CREATION_BUDGETS={attributes:35,skills:12,traits:6,refundCap:6};
-export const ORIGINS=[
- {id:'local',name:'Local regular',description:'You learned the city by living in it.',modifiers:{Perception:1,Presence:1}},
- {id:'laborer',name:'Manual laborer',description:'Long shifts taught you how to pace physical work.',modifiers:{Strength:1,Endurance:1}},
- {id:'student',name:'Dedicated student',description:'Study and practice built your patience and knowledge.',modifiers:{Intellect:1,Will:1}},
- {id:'performer',name:'Performer',description:'Practice on a stage sharpened your timing and confidence.',modifiers:{Agility:1,Presence:1}},
- {id:'caregiver',name:'Caregiver',description:'Caring for others taught you to notice needs and stay steady.',modifiers:{Perception:1,Will:1}},
- {id:'athlete',name:'Amateur athlete',description:'Regular training built coordination and stamina.',modifiers:{Agility:1,Endurance:1}},
- {id:'apprentice',name:'Workshop apprentice',description:'Hands-on learning combined practical strength with problem solving.',modifiers:{Strength:1,Intellect:1}},
- {id:'organizer',name:'Community organizer',description:'Listening, organizing and following through developed your resolve.',modifiers:{Presence:1,Will:1}}
-];
+export const ORIGINS=BACKGROUNDS;
 export const originFor=id=>ORIGINS.find(row=>row.id===id);
 export const effectText=modifiers=>Object.entries(modifiers??{}).map(([name,value])=>(value>0?'+':'')+value+' '+name+' checks').join(' · ');
 const round=value=>Math.round(value*1000)/1000;
@@ -17,9 +10,10 @@ export function startingBudget(character,entities,attributeScale){
  const scale=attributeScale??{min:0,max:100,step:1};
  const normalized=(value,s,max)=>s.max===s.min?0:Math.max(0,(Number(value)-s.min)/(s.max-s.min))*max;
  const attributes=round(Object.values(character.attributes??{}).reduce((total,value)=>total+normalized(value,scale,10),0));
- let skills=0,spent=0,refund=0;
- for(const [id,value]of Object.entries(character.skills??{})){const skill=entities.find(e=>e.kind==='skill'&&e.id===id);if(skill)skills+=normalized(value,skill.data.scale??{min:0,max:100,step:1},5);}
+ let skills=0,spent=0,refund=0;const grants=skillGrants(character,entities);
+ for(const [id,value]of Object.entries(character.skills??{})){const skill=entities.find(e=>e.kind==='skill'&&e.id===id);if(skill){const s=skill.data.scale??{min:0,max:100,step:1};skills+=normalized(s.min+Math.max(0,Number(value)-(grants[id]?.value??s.min)),s,5);}}
  for(const id of character.traits??[]){const trait=entities.find(e=>e.kind==='trait'&&e.id===id);if(trait?.data.mode==='costed'){const cost=Number(trait.data.cost)||0;if(cost>=0)spent+=cost;else refund-=cost;}}
+ for(const name of automaticTraitNames(character)){if((character.traits??[]).some(id=>entities.some(e=>e.id===id&&e.name===name)))continue;const cost=stockTrait(name)?.cost??0;if(cost>=0)spent+=cost;else refund-=cost;}
  const credit=Math.min(refund,CREATION_BUDGETS.refundCap),traits=round(spent-credit);
  return {attributes,skills:round(skills),traits,refund:credit,rawRefund:refund,remaining:{attributes:round(CREATION_BUDGETS.attributes-attributes),skills:round(CREATION_BUDGETS.skills-skills),traits:round(CREATION_BUDGETS.traits-traits)}};
 }
@@ -28,7 +22,7 @@ const rows={
  'Short':['Agility',1,'Strength',-1], 'Tall':['Strength',1,'Agility',-1],
  'Slim':['Agility',1,'Endurance',-1], 'Stocky':['Endurance',1,'Agility',-1],
  'Overweight':['Endurance',-1], 'Weak':['Strength',-2], 'Strong':['Strength',2],
- 'Athletic':['Endurance',2], 'Graceful':['Agility',2], 'Clumsy':['Agility',-2],
+ 'Muscular':['Strength',2], 'Athletic':['Endurance',2], 'Graceful':['Agility',2], 'Clumsy':['Agility',-2],
  'Scarred':['Will',1], 'Intimidating appearance':['Presence',1], 'Distinctive appearance':['Presence',1],
  'Authored chronic limitation':['Endurance',-1],
  'Cunning':['Intellect',1], 'Observant':['Perception',2], 'Impulsive':['Will',-1],
@@ -45,10 +39,87 @@ const rows={
  'Ex-convict':['Will',1,'Presence',-1], 'Informant':['Perception',1], 'Snitch reputation':['Presence',-1]
 };
 const experience={'Street fighter':'Hand-to-hand','Boxer':'Hand-to-hand','Grappler':'Hand-to-hand','Firearms training':'Firearms: handguns','Police training':'Police procedure','Military training':'Firearms: rifles','Criminal experience':'Criminal knowledge','Driver':'Driving','Mechanic':'Mechanics','Medic':'First aid'};
-export function stockTrait(name){
+function legacyStockTrait(name){
  if(experience[name])return {cost:2,modifiers:{},skill:experience[name],bonus:2,description:'Training grants +2 only on checks using '+experience[name]+'. It does not grant unrelated expertise.'};
  const row=rows[name];if(!row)return null;
  const modifiers={[row[0]]:row[1],...(row[2]?{[row[2]]:row[3]}:{})};
  const positive=Object.values(modifiers).filter(v=>v>0).reduce((a,b)=>a+b,0),negative=-Object.values(modifiers).filter(v=>v<0).reduce((a,b)=>a+b,0);
  return {cost:positive?Math.max(1,positive*2-negative): -negative*2,modifiers,description:'Optional game interpretation: '+effectText(modifiers)+'. This is an authored rule, not a judgment about real people.'};
 }
+
+export function selectedBackgrounds(character){
+ const background=character.background??{},ids=[background.option1??background.originChoice,background.option2,background.option3,background.option4];
+ // Earlier sheets used empty option1 alongside originChoice.
+ if(!ids[0]&&background.originChoice)ids[0]=background.originChoice;
+ return [...new Set(ids)].map(originFor).filter(Boolean);
+}
+export function skillGrants(character,entities){
+ entities=character.playable?entities.filter(e=>!e.visibility||e.visibility==='campaign'):entities;
+ const grants={};
+ const add=(skill,fraction,source)=>{
+  if(!skill||skill.archived)return;
+  const scale=skill.data.scale??{min:0,max:100,step:1};
+  const value=Math.min(scale.max,scale.min+Math.floor((scale.max-scale.min)*fraction/scale.step+1e-8)*scale.step);
+  const existing=grants[skill.id];
+  if(!existing||value>existing.value)grants[skill.id]={value,sources:[source]};
+  else if(value===existing.value)existing.sources.push(source);
+ };
+ for(const background of selectedBackgrounds(character))for(const [name,fraction]of Object.entries(background.skills??{}))add(entities.find(e=>e.kind==='skill'&&e.name===name&&!e.archived),fraction,background.name);
+ for(const id of character.traits??[]){
+  const trait=entities.find(e=>e.kind==='trait'&&e.id===id&&!e.archived);
+  for(const grant of trait?traitSkillGrants(trait,entities):[])add(entities.find(e=>e.kind==='skill'&&e.id===grant.skillId),grant.fraction,trait.name);
+ }
+ for(const name of automaticTraitNames(character)){if((character.traits??[]).some(id=>entities.some(e=>e.id===id&&e.name===name)))continue;for(const [skillName,fraction] of Object.entries(stockTrait(name)?.grants??{}))add(entities.find(e=>e.kind==='skill'&&e.name===skillName&&!e.archived),fraction,name);}
+ return grants;
+}
+export function applyStartingGrants(character,entities){
+ character.skills??={};
+ for(const [id,grant]of Object.entries(skillGrants(character,entities)))character.skills[id]=Math.max(character.skills[id]??grant.value,grant.value);
+ return character;
+}
+const traitDescriptions={
+ Short:'A shorter frame favors nimble movement over leverage.',Tall:'A taller frame favors reach and leverage over nimble movement.',
+ Slim:'A light build favors movement over sustained exertion.',Stocky:'A sturdy build favors stamina over nimble movement.',
+ Overweight:'An authored build choice with a stamina tradeoff.',Weak:'Physical tasks take more effort.',Strong:'Physical force is a strength.',
+ Muscular:'A muscular build supports physical force.',Athletic:'Regular conditioning improves stamina and provides starting athletic training.',Graceful:'Controlled movement and coordination come naturally.',Clumsy:'Precision movement is difficult.',
+ Scarred:'Past hardship has reinforced resolve.', 'Intimidating appearance':'An imposing presentation can influence a first impression.',
+ 'Distinctive appearance':'A recognizable presentation helps you stand out.', 'Authored chronic limitation':'An individually authored limitation affects sustained exertion; use notes to describe it respectfully.',
+ Cunning:'Quick thinking helps solve difficult problems.',Observant:'You pay attention to small details.',Impulsive:'You tend to act before pausing.',
+ Patient:'You can wait and stay focused.',Calculating:'You think through consequences.',Manipulative:'You are practiced at influencing people.',
+ Charming:'You are comfortable winning people over.',Anxious:'Pressure can make it harder to stay steady.',
+ Suspicious:'You notice risks but find trust harder.',Trusting:'You build rapport but may overlook warning signs.',Loyal:'Commitment helps you stay the course.',
+ Jealous:'Comparison can distract you.',Protective:'Protecting others strengthens your resolve.',Compassionate:'Concern for others supports rapport.',
+ Callous:'Detachment can make rapport harder.',Brave:'You can stay steady in frightening situations.',Reckless:'You may overlook hazards.',
+ Disciplined:'Habit and self-control keep you focused.',Vindictive:'Grudges can undermine composure.',Honest:'Straightforward communication can build rapport.',
+ Deceptive:'You are practiced at presenting a misleading account.',Romantic:'You readily express affection.', 'Commitment-averse':'Long-term obligations can test resolve.',
+ Connected:'An established network helps social confidence.',Respected:'A favorable reputation supports social confidence.',Feared:'A threatening reputation lends weight to your presence.',
+ Notorious:'An unfavorable reputation can obstruct rapport.',Affluent:'A comfortable social background supports confidence; it does not create money.',
+ Poor:'An authored social disadvantage; it does not set your cash balance.', 'Working class':'An authored work history supports stamina.',
+ Affiliated:'Group connections support confidence; faction membership must still be authored.',
+ 'Criminal record':'A recorded past can obstruct rapport; this does not create a warrant.',
+ 'Ex-convict':'Past incarceration has shaped resolve and social obstacles; it does not create a current offense.',
+ Informant:'Attention to detail supports information gathering.', 'Snitch reputation':'A reputation for sharing information can undermine trust.'
+};
+export function stockTrait(name){
+ const rule=legacyStockTrait(name);if(!rule)return null;
+ return {...rule,description:(traitDescriptions[name]??('Practical training in '+rule.skill+'.'))+' In game: '+(effectText(rule.modifiers)||('+2 on checks using '+rule.skill))+'. These are authored game effects, not judgments about real people.',
+ grants:rule.skill?{[rule.skill]:.5}:name==='Athletic'?{Athletics:.5}:{}};
+}
+// Existing untouched stock records gain these rules without rewriting user-authored records.
+export function traitSkillGrants(trait,entities){
+ if(trait.data.skillGrants?.length)return trait.data.skillGrants;
+ const d=trait.data,stock=stockTrait(trait.name);
+ if(!stock||d.mode!=='costed'||d.cost!==stock.cost||Object.keys(d.modifiers??{}).length!==Object.keys(stock.modifiers).length||Object.entries(stock.modifiers).some(([key,value])=>d.modifiers[key]!==value)||d.effects?.length||d.combinations?.length)return [];
+ const old=legacyStockTrait(trait.name);
+ if(d.description!==old.description&&d.description!==stock.description)return [];
+ if(stock.skill){const scoped=d.scopedCheckModifiers??[];if(scoped.length!==1||scoped[0].value!==2||scoped[0].attribute||scoped[0].contexts?.length||entities.find(e=>e.id===scoped[0].skillId)?.name!==stock.skill)return [];}
+ else if(d.scopedCheckModifiers?.length)return [];
+ return Object.entries(stock.grants).flatMap(([name,fraction])=>{const skill=entities.find(e=>e.kind==='skill'&&e.name===name&&!e.archived);return skill?[{skillId:skill.id,fraction}]:[];});
+}
+export function skillStatus(skill,value){
+ const stock=stockSkill(skill.name),scale=skill.data.scale??{min:0,max:100,step:1};
+ const standard=stock&&(skill.data.description===stock.description||skill.data.description==='Creator-editable skill descriptor. Mechanical effects and prerequisites must be authored.');
+ const trained=Boolean(standard&&scale.max>scale.min&&value>=scale.min+(scale.max-scale.min)/2);
+ return {trained,checkBonus:trained?2:0,fatigueRate:trained&&skill.name==='Athletics'?-.15:0};
+}
+export {stockSkill};

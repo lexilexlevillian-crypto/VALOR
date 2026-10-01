@@ -1,0 +1,13 @@
+export const HEIGHTS:Array<{inches:number;cm:number;label:string}>;
+export const BUILDS:Array<{name:string;trait:string|null}>;
+export const EYE_COLORS:string[];
+export const SKIN_COLORS:string[];
+export const ETHNICITIES:string[];
+export const APPEARANCE_TRAITS:string[];
+export const NEIGHBORHOODS:string[];
+export type ResidencePlan={neighborhood:string;name:string;floors:number;unitsPerFloor:number};
+export function automaticTraitNames(character:any):string[];
+export function syncAppearanceTraits(character:any,entities:any[]):void;
+export function residencePlan(neighborhood:string,overrides?:Record<string,Partial<ResidencePlan>>):ResidencePlan|null;
+export function playerFloors(plan:ResidencePlan):number[];
+export function apartmentNumber(floor:number,unit:number):string;

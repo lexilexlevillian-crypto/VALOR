@@ -6,7 +6,7 @@ About Valor contains the supplied city document in regional pages, a searchable 
 
 The occupation list supplies 33 workplaces with matching player roles and additional supervisory NPC roles. Existing custom workplace/position values are preserved. Profile occupations alone do not create wages or employment contracts; those remain campaign job records.
 
-New playable characters and launched lives receive 35 attribute points (10 per full campaign-scale bar), 12 skill points (5 per full skill-scale bar), and 6 trait points with at most 6 disadvantage refunds. Unused points are allowed. Eight selectable backgrounds each add two total points to specified checks, not stored ratings. Existing lives and later training are not rebalanced. NPCs have no point-spending or trait-count caps; valid scales, references, prerequisites, oppositions and effect conflicts still apply.
+New playable characters and launched lives receive 35 attribute points (10 per full campaign-scale bar), 12 skill points (5 per full skill-scale bar), and 6 trait points with at most 6 disadvantage refunds. Unused points are allowed. Background dropdowns add their stated modifiers to specified checks, not stored ratings. Existing lives and later training are not rebalanced. NPCs have no point-spending or trait-count caps; valid scales, references, prerequisites, oppositions and effect conflicts still apply.
 
 Trait, skill and background pools show descriptions and effects before selection. Ordinary players can customize public start-package builds and profile occupations. Starts with private trait or skill choices are protected. Validation and persistence use the existing atomic, permission-checked start workflow.
 
@@ -14,7 +14,7 @@ Reviewed catalog installation upgrades untouched stock trait descriptors to mech
 
 The creation UI follows the OC-sheet hierarchy: essentials first, simulation and AI authoring underneath closed disclosure panels. The signed-in campaign menu uses a title-screen layout; the same visual themes extend through login, creation and play.
 
-The title screen keeps the VALOR wordmark and decoration, with New Life, Load Life, and About Valor inside the same card. The top bar contains only navigation, campaign context, mode and connection status. Main menu, Creation Studio, Style and High Visibility are in the navigation sidebar, opened with the menu icon before play or on phones. Campaign and timeline selection happen on separate screens. Gameplay sidebar entries require an actively selected character and are absent from the title screen, roster, New Life, and authoring screens. Creation Studio has separate People, Lore & stories, Places, Objects & media, Skills & systems, and World & diagnostics pages; advanced tools are not mixed into record creation.
+The title screen keeps the VALOR wordmark and decoration, with New Life, Load Life, and About Valor inside the same card. The top bar contains only navigation, campaign context, mode. Main menu, Creation Studio, Style and High Visibility are in the navigation sidebar, opened with the menu icon before play or on phones. Campaign and timeline selection happen on separate screens. Gameplay sidebar entries require an actively selected character and are absent from the title screen, roster, New Life, and authoring screens. Creation Studio has separate People, Lore & stories, Places, Objects & media, Skills & systems, and World & diagnostics pages; advanced tools are not mixed into record creation.
 
 Characters, NPCs, and freeform New Life creation share the reference-sheet layout: Overview notes beside identity fields; twelve stat bars in two columns of six; Background choices/history beside zero to three job columns; Skills bubbles; Personality notes beside characterization and psychology; and Appearance fields beside prose. The twelve-bar grid stays balanced on phones, with compact stacked labels. Other pairs and job cards stack when needed. The seven gameplay attributes retain the campaign scale and the five descriptive ratings retain their 0–10 scale; grouping them visually does not change their mechanics.
 
@@ -44,3 +44,28 @@ Every color supports hearts (default), stars, checkerboard and leopard print ind
 `tests/background-ui.test.ts` checks all sixty palette/background combinations, exact pink tokens, menu placement, navigation focus, preference persistence, offline controls, motion overrides and accessibility at phone, tablet and desktop sizes.
 
 `studio.js`, `studio.css` and `backgrounds.js` are same-origin static assets included in the versioned offline shell. Authenticated API responses and game state remain uncached.
+# Shared Valor world and private lives
+
+In Developer Mode, open **Creation Studio** once and choose **Set up a fresh Valor world** or expand **Use work I already created** to select a clean authoring timeline. Existing content is not deleted or moved. A timeline containing a player character cannot become the master source.
+
+After setup, Creation Studio always opens this source. Saved NPCs, places, lore, settings and published starts become the starting content for every **new** life. New Life creates a private copy automatically; players never need to create a campaign or receive Creator membership. Each life has its own events, characters, clock and saves. Existing lives stay on their starting version: later author edits do not overwrite player history. Legacy campaigns remain available through Load Life.
+
+World settings is in the sidebar for developers. Common controls explain their effects; advanced simulation settings are collapsed. Review and save before changes apply. Fresh worlds use Washington's `America/Los_Angeles` timezone (including daylight saving time). Existing source settings are preserved until edited; the Pacific-time button changes the display/schedule timezone without moving the saved instant.
+
+The fresh-world option creates an authoring workspace, editable skill/trait catalog and a basic customizable start. It does not invent NPCs or employment contracts. Choosing a residence creates the corresponding residential locations and walking links using the approved editable floor-plan defaults. Existing authored work can be selected instead. Public starts are copied server-side; private notes remain protected by the existing observer permissions. Player lives receive player membership only, even if the account can author another world.
+
+Map water is transparent; only the opaque map artwork receives theme color. Region introductions precede district descriptions. Intimacy remains off or non-graphic fade-to-black with existing age/consent checks.
+
+## Background training and skill statuses
+
+Primary background and Backgrounds 2–4 are dropdowns in the existing sheet, not a separate selection pool. There are 34 choices, including Veteran, Army, Marine, Navy, Air Force, Coast Guard, Police officer, college and trade-school education. Existing written slots remain available as saved history without invented bonuses. Earlier originChoice values move into the primary slot when edited.
+
+Each unique background adds its stated check modifiers without changing base attributes. Backgrounds are free. Military/police choices grant relevant training, commonly half a skill bar. They do not issue equipment, cash, employment or legal powers. Multiple grants for the same skill use the highest floor, never a sum. Fractions follow each skill's authored scale and round down to a valid step.
+
+Player skill points pay only for ratings above the granted floor (five points per full bar). Removing a choice removes its free portion while keeping paid improvements; it cannot bank free points. Server startup independently resolves and saves grants, including authored starts that skip customization. NPCs retain unlimited budgets. Grants are starting training, not a cap on later progression.
+
+Training traits such as Medic and Mechanic grant half a bar in their linked skill. Athletic grants Athletics. Trait cards explain their actual modifiers, scoped effects, free training, cost/refund, conflicts and permanence. Refunds remain capped at six for players. Custom creators can author skillGrants using a skill ID and a fraction from zero to one. Untouched older stock traits support the new grants; custom mechanics are preserved.
+
+Stock skills have readable descriptions. At half a bar, **Trained** adds +2 to checks using that skill, recorded in the check breakdown. Trained Athletics also reduces ordinary time-based fatigue buildup by 15% when needs are enabled. This is not injury resistance and does not reduce combat exertion. Custom skill definitions are not automatically assigned these stock statuses.
+
+Regression tests cover overlaps, fractional scales, paid upgrades, removal, public-only grants, persisted launches, actual check/fatigue effects, legacy histories and responsive accessible controls.

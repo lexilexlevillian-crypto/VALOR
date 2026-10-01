@@ -18,6 +18,7 @@
     "user:create": "node --env-file-if-exists=.env src/cli.ts user:create"
   },
   "dependencies": {
+    "@countrystatecity/countries": "1.0.9",
     "@libsql/client": "0.18.0",
     "fastify": "5.12.5",
     "zod": "4.6.5"

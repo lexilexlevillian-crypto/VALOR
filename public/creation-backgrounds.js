@@ -1,0 +1,67 @@
+// Authored starting histories. These grant training, never equipment, authority or employment.
+export const BACKGROUNDS=[
+ ['local','Local regular','You know the streets and people of Valor.',{Perception:1,Presence:1},{Streetwise:.25}],
+ ['laborer','Manual laborer','Long shifts built practical strength and stamina.',{Strength:1,Endurance:1},{Athletics:.25}],
+ ['student','Dedicated student','You developed steady study habits.',{Intellect:1,Will:1},{Academics:.25}],
+ ['performer','Performer','Stage practice taught timing and confidence.',{Agility:1,Presence:1},{Persuasion:.25}],
+ ['caregiver','Caregiver','You learned to notice needs and care for others.',{Perception:1,Will:1},{'First aid':.25}],
+ ['athlete','Amateur athlete','Regular training built coordination and stamina.',{Agility:1,Endurance:1},{Athletics:.5}],
+ ['apprentice','Workshop apprentice','Hands-on training taught practical problem solving.',{Strength:1,Intellect:1},{Mechanics:.25}],
+ ['organizer','Community organizer','You bring people together and follow through.',{Presence:1,Will:1},{Persuasion:.25}],
+ ['veteran','Veteran','Prior military service provided physical and weapons training. Choose a branch too if it fits your history.',{Endurance:1,Will:1},{Athletics:.5,'Firearms: rifles':.5}],
+ ['army','Army','Army training developed field readiness and discipline.',{Strength:1,Will:1},{Athletics:.5,'Firearms: rifles':.5}],
+ ['marine','Marine','Marine training emphasized fitness and rifle proficiency.',{Endurance:1,Will:1},{Athletics:.5,'Firearms: rifles':.5}],
+ ['navy','Navy','Naval service developed technical skills and teamwork.',{Intellect:1,Will:1},{Athletics:.5,'Firearms: handguns':.25,Mechanics:.25}],
+ ['air-force','Air Force','Service developed technical knowledge and attention to detail.',{Intellect:1,Perception:1},{Athletics:.5,'Firearms: rifles':.25,'2012 electronics / computers':.25}],
+ ['coast-guard','Coast Guard','Maritime service taught alertness and emergency response.',{Perception:1,Endurance:1},{Athletics:.5,'Firearms: handguns':.5,'First aid':.25}],
+ ['police','Police officer','Police training provided fitness, handgun handling and procedure. This history does not issue a badge or legal powers.',{Perception:1,Will:1},{Athletics:.5,'Firearms: handguns':.5,'Police procedure':.5}],
+ ['firefighter','Firefighter','Emergency work built stamina and calm under pressure.',{Strength:1,Endurance:1},{Athletics:.5,'First aid':.5}],
+ ['paramedic','Paramedic','Medical emergency work taught rapid assessment and first aid.',{Perception:1,Intellect:1},{'First aid':.5,Driving:.25}],
+ ['college','College educated','A college education developed research and communication skills.',{Intellect:2},{Academics:.5,Literacy:.5}],
+ ['graduate','Graduate researcher','Advanced study developed focused research habits.',{Intellect:1,Will:1},{Academics:.5,Investigation:.25}],
+ ['trade-school','Trade school graduate','Vocational study provided practical technical training.',{Intellect:1,Perception:1},{'Trade / occupation':.5,Mechanics:.25}],
+ ['mechanic','Mechanic','You learned to diagnose faults and repair machines.',{Intellect:1,Perception:1},{Mechanics:.5}],
+ ['nurse','Nurse','Clinical experience taught care, observation and clear communication.',{Perception:1,Will:1},{'First aid':.5,'Empathy / insight':.25}],
+ ['teacher','Teacher','Teaching developed patience and explanation skills.',{Intellect:1,Presence:1},{Academics:.5,Persuasion:.25}],
+ ['chef','Cook / chef','Kitchen work taught preparation, timing and safe food handling.',{Perception:1,Endurance:1},{Cooking:.5}],
+ ['driver','Professional driver','Time behind the wheel developed vehicle control and awareness.',{Agility:1,Perception:1},{Driving:.5}],
+ ['office','Office worker','Daily administration built organization and computer literacy.',{Intellect:1,Will:1},{'2012 electronics / computers':.5}],
+ ['retail','Retail worker','Customer service taught communication and patience.',{Presence:1,Will:1},{Persuasion:.5}],
+ ['journalist','Journalist','Reporting taught investigation and clear writing.',{Intellect:1,Perception:1},{Investigation:.5,Literacy:.25}],
+ ['outdoors','Outdoor enthusiast','Time outdoors developed endurance and observation.',{Endurance:1,Perception:1},{Athletics:.5,Search:.25}],
+ ['street-raised','Street-raised','You learned to read situations and find your way through the city.',{Perception:1,Will:1},{Streetwise:.5}],
+ ['security','Security guard','Security work taught awareness and de-escalation.',{Perception:1,Presence:1},{Search:.5,'Hand-to-hand':.25}],
+ ['law-student','Legal education','Legal study taught research and understanding of procedure.',{Intellect:1,Presence:1},{Law:.5}],
+ ['technician','Computer technician','Hands-on work taught troubleshooting with 2012-era technology.',{Intellect:2},{'2012 electronics / computers':.5}],
+ ['boxer','Boxer','Gym training developed footwork and close-range technique.',{Strength:1,Agility:1},{'Hand-to-hand':.5,Athletics:.25}]
+].map(([id,name,description,modifiers,skills])=>({id,name,description,modifiers,skills}));
+
+export const SKILL_DESCRIPTIONS={
+ Explosives:'Abstract game knowledge for recognizing explosive hazards and resolving authored bomb-related checks. No real-world construction or handling instructions.',
+ 'Drug production':'Abstract game knowledge for authored illicit-production checks and recognizing related risks. No real-world recipes, ingredients or procedures.',
+ Chemistry:'General scientific knowledge for fictional analysis checks.',Forensics:'Interpreting authored physical evidence.',Survival:'Coping with outdoor conditions and recognizing hazards.',Swimming:'Moving safely through water in authored challenges.',Navigation:'Reading maps and finding routes.',Crafting:'Making and repairing ordinary everyday objects.',Carpentry:'Working with wood and ordinary building repairs.', 'Electrical work':'Recognizing electrical faults in authored repair challenges.',Negotiation:'Reaching agreements and bargaining.', 'Animal handling':'Reading animal behavior and providing ordinary care.',Fishing:'Angling and understanding fishing conditions.',Gardening:'Growing and caring for ordinary plants.',Photography:'Composing photographs and documenting scenes.',Music:'Performing and understanding music.',Sewing:'Making and repairing clothing.',
+ 'Hand-to-hand':'Unarmed strikes, defense and grappling.',
+ 'Firearms: handguns':'Safe handling and aimed use of handguns.',
+ 'Firearms: rifles':'Handling and aimed use of rifles.',
+ 'Firearms: shotguns':'Handling and aimed use of shotguns.',
+ Melee:'Using close-combat weapons.', 'Improvised weapons':'Using everyday objects in close combat.',
+ Driving:'Controlling a vehicle and handling difficult road conditions.', Athletics:'Running, climbing and sustained physical activity.',
+ Stealth:'Moving quietly and avoiding notice.',Lockpicking:'Working mechanical locks when you have suitable tools.',
+ Pickpocketing:'Taking small carried objects without being noticed.',Burglary:'Recognizing entry routes and obstacles.',
+ Streetwise:'Understanding local street customs, contacts and risks.',Deception:'Maintaining a convincing false account.',
+ Persuasion:'Making a clear, convincing case.',Intimidation:'Applying pressure through threats or forceful presence.',
+ 'Empathy / insight':'Reading behavior and noticing emotional cues, not reading minds.',
+ Investigation:'Connecting clues and questioning evidence.',Search:'Finding objects, tracks and overlooked details.',
+ 'First aid':'Assessing injuries and providing immediate assistance with available supplies.',
+ Mechanics:'Diagnosing and repairing mechanical equipment.',
+ '2012 electronics / computers':'Using and troubleshooting technology available in the 2012 setting.',
+ Cooking:'Preparing food and organizing kitchen work.', 'Trade / occupation':'Practical expertise in your authored trade.',
+ Academics:'Research, study and applying learned knowledge.',Literacy:'Reading and writing clearly.',
+ Languages:'Communicating in languages established in your character history; this does not grant every language.',
+ 'Police procedure':'Understanding investigation and policing procedures; this does not grant legal authority.',
+ Law:'Understanding legal rules and researching legal questions.', 'Criminal knowledge':'Recognizing criminal methods and practices.'
+};
+export function stockSkill(name){
+ const description=SKILL_DESCRIPTIONS[name];if(!description)return null;
+ return {description:description+' In game: your rating is added to checks using this skill. At half a bar or higher, Trained adds another +2 to those checks.'+(name==='Athletics'?' Trained Athletics also reduces ordinary fatigue buildup by 15%.':'')};
+}

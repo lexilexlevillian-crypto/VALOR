@@ -51,6 +51,7 @@ const rules=z.strictObject({
 });
 export const settingsSchema=z.strictObject({
  campaign:campaignConfigSchema.nullable().default(null),
+ residencePlans:z.record(z.string().max(160),z.strictObject({floors:z.number().int().min(3).max(60),unitsPerFloor:z.number().int().min(2).max(40)})).default({}),
  needs:z.boolean().default(false),fuel:z.boolean().default(false),weather:z.enum(['clear','rain','overcast','snow','fog']).default('clear'),narrationMode:z.enum(['grounded','anchored-prose']).default('grounded'),
  romance:z.boolean().default(false),intimacy:z.enum(['off','fade-to-black']).default('off'),
  intensity:z.enum(['restrained','grounded']).default('restrained'),difficulty:z.enum(['custom','narrative']).default('custom'),
@@ -82,6 +83,7 @@ const character=z.strictObject({...common,characterSchemaVersion:z.number().int(
  registryStatus:z.enum(npcRegistryStatuses).default('active'),lastActiveAt:z.iso.datetime().nullable().default(null),arrested:z.boolean().default(false),retirementNarrative:text.default(''),mergedIntoId:ref,mergeRecordId:ref,
  profileVisibility:z.record(z.string(),visibility).default(legacyProfileVisibility),portraitMediaId:ref,
  legalName:short.default(''),aliases:tags,dob:z.iso.date().nullable().default(null),ageYears:z.number().int().min(0).max(200).nullable().default(null),sex:short.default(''),gender:short.default(''),pronouns:short.default(''),
+ residence:z.strictObject({neighborhood:short,name:short.default(''),building:z.literal(1).default(1),floor:z.number().int().min(0).max(60).default(0),apartment:z.string().max(6).regex(/^$|^[0-9]{3,4}$/).default('')}).nullable().default(null),
  identity:z.record(z.string(),short).default({}),nationality:short.default(''),cultureContext:text.default(''),ethnicityContext:text.default(''),birthplace:short.default(''),originLocationId:ref,originNeighborhood:short.default(''),classContext:short.default(''),
  appearance:z.record(z.string(),short).default({}),appearanceDescription:text.default(''),heightCm:z.number().min(0).max(300).nullable().default(null),build:short.default(''),hair:short.default(''),eyes:short.default(''),
  complexion:short.default(''),features:tags,scars:tags,tattoos:tags,disabilities:tags,presentation:short.default(''),
@@ -159,6 +161,7 @@ const traitCombination=z.strictObject({id,name,traitIds:z.array(id).min(1).max(2
 const catalog=z.strictObject({...common,category:short.default(''),cost:z.number().min(-100).max(100).default(0),mode:z.enum(['descriptive','costed']).default('descriptive'),
  prerequisites:z.array(id).default([]),opposes:z.array(id).default([]),modifiers:z.record(z.string(),openNumber).default({}),permanent:z.boolean().default(false),acquirable:z.boolean().default(true),
  scopedCheckModifiers:z.array(scopedCheckModifier).max(100).default([]),
+ skillGrants:z.array(z.strictObject({skillId:id,fraction:z.number().min(0).max(1)})).max(30).default([]),
  effects:z.array(traitEffect).max(100).default([]),combinations:z.array(traitCombination).max(100).default([]),
  balance:z.enum(['neutral','advantage','disadvantage']).default('neutral'),
  acquisition:z.strictObject({mode:z.enum(['creator','earned','either']),requirements:tags,note:text.default('')}).default({mode:'either',requirements:[],note:''}),
@@ -391,7 +394,7 @@ export function validateState(s:State){
    for(let index=0;index<activeEffects.length;index++)for(let other=index+1;other<activeEffects.length;other++){const left=activeEffects[index]!,right=activeEffects[other]!,a=left.scope,b=right.scope;if(left.type===right.type&&left.key===right.key&&(left.conflictBehavior==='reject'||right.conflictBehavior==='reject')&&overlaps(a.attributes,b.attributes)&&overlaps(a.skillIds,b.skillIds)&&overlaps(a.contexts,b.contexts)&&overlaps(a.planTypes,b.planTypes)&&overlaps(a.needs,b.needs)&&overlaps(a.choiceIds,b.choiceIds)&&overlaps(a.observerContexts,b.observerContexts))throw new Error('trait_effect_conflict');}
   }
   if(e.kind==='traitTemplate'){const template=data(e,'traitTemplate');if(template.requiredTraitIds.some(id=>template.excludedTraitIds.includes(id)))throw new Error('trait_template_required_excluded');}
-  if(e.kind==='trait'){const trait=data(e,'trait');for(const effect of [...trait.effects,...trait.combinations.flatMap(combination=>combination.effects)])for(const skillId of effect.scope.skillIds)target(skillId,['skill']);for(const combination of trait.combinations)for(const traitId of combination.traitIds)target(traitId,['trait']);}
+  if(e.kind==='trait'){const trait=data(e,'trait');for(const grant of trait.skillGrants)target(grant.skillId,['skill']);for(const effect of [...trait.effects,...trait.combinations.flatMap(combination=>combination.effects)])for(const skillId of effect.scope.skillIds)target(skillId,['skill']);for(const combination of trait.combinations)for(const traitId of combination.traitIds)target(traitId,['trait']);}
   if(e.kind==='character'){const c=data(e,'character');if(c.journey){target(c.journey.originId,['location']);target(c.journey.destinationId,['location']);}if(c.reproductive&&c.reproductive.bleedingDays>c.reproductive.cycleDays)throw new Error('invalid_cycle');}
   if(e.kind==='faction')target(data(e,'faction').dispatchPolicy?.hospitalId,['location']);
   if(e.kind==='production'){const p=data(e,'production');if(new Set(p.inputs.map(i=>i.itemId)).size!==p.inputs.length||p.inputs.some(i=>i.itemId===p.outputId))throw new Error('invalid_production_inputs');for(const i of p.inputs)target(i.itemId,['item']);}
