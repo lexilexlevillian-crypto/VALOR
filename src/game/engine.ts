@@ -4,9 +4,9 @@ import {Store} from '../db.ts';
 import {Domain} from '../domain.ts';
 import {ensure} from '../contracts.ts';
 import type {Actor} from '../contracts.ts';
-import {actionSchema,applyCharacterProfileTemplate,beliefSchema,characterProfileTemplateSchema,data,entitySchema,factSchema,getEntity,knowledgeSchema,memorySchema,refs,settingsSchema,validateEntity,validateState} from './model.ts';
+import {actionSchema,applyCharacterProfileTemplate,beliefSchema,characterProfileTemplateSchema,data,entitySchema,factSchema,getEntity,knowledgeSchema,memorySchema,refs,remapEntityReference,settingsSchema,validateEntity,validateState} from './model.ts';
 import type {Action,Entity,State} from './model.ts';
-import {observerView,retrieve,observe,fact,gossip,remember,visible} from './epistemics.ts';
+import {observerView,project,retrieve,observe,fact,gossip,remember,visible} from './epistemics.ts';
 import {resolveAction} from './actions.ts';
 import type {CheckRecord} from './actions.ts';
 import {advance,type Effect} from './simulation.ts';
@@ -26,6 +26,8 @@ import {auditJson,ensureJsonBytes} from '../security.ts';
 import {canonSourceSchema,canonSnapshotSchema} from './canon.ts';
 import type {CanonSource} from './canon.ts';
 import {chronicleNoticeSchema,chroniclePresentation,chronicleSceneSchema} from './chronicle.ts';
+import {listNpcs,mergeNpcData,mergePayload,mergePayloadForChecksum,npcDerived,npcMergeConflicts,npcReferrers,remapNpcReferences} from './npcs.ts';
+import type {NpcFilters} from './npcs.ts';
 type Timeline={id:string;campaign_id:string;parent_id:string|null;parent_save_id:string|null;name:string;revision:number;clock:string;settings_json:string};
 type Mutation<T>={result:T;effects?:Effect[];draws?:number;checks?:CheckRecord[];characterId?:string;turnText?:string};
 const now=()=>new Date().toISOString();
@@ -290,11 +292,79 @@ export class Game {
   ensure(row,404,'character_profile_template_unavailable');const definition=characterProfileTemplateSchema.parse(JSON.parse(row.template_json));
   return this.mutate(actor,id,input.revision,key,input,'creator.character-profile-template',true,s=>{
    const character=getEntity(s,input.characterId,'character'),profile=data(character,'character');
-   profile.sections=applyCharacterProfileTemplate(profile.sections,definition);profile.characterSchemaVersion=4;character.data=profile as Entity['data'];
+   profile.sections=applyCharacterProfileTemplate(profile.sections,definition);profile.characterSchemaVersion=5;character.data=profile as Entity['data'];
    validateEntity(character);return {result:{characterId:character.id,templateId:input.templateId}};
   });
  }
  async preview(actor:Actor,id:string,characterId:string){await this.access(actor,id,true);const s=await this.load(id);getEntity(s,characterId,'character');return observerView(s,characterId);}
+ private npcMediaReferences(state:State,npc:Entity,allowedIds?:Set<string>){
+  const character=data(npc,'character'),ids=[...new Set([...(character.portraitMediaId?[character.portraitMediaId]:[]),...character.mediaIds])];
+  const references=ids.map(mediaId=>state.entities.find(entity=>entity.id===mediaId&&entity.kind==='media'&&!entity.archived)).filter((entity):entity is Entity=>!!entity&&(!allowedIds||allowedIds.has(entity.id))).map(entity=>{const media=data(entity,'media');return {id:entity.id,name:entity.name,mime:media.mime,alt:media.alt,visibility:entity.visibility};});
+  return {portrait:character.portraitMediaId?references.find(reference=>reference.id===character.portraitMediaId)??null:null,media:references.filter(reference=>reference.id!==character.portraitMediaId)};
+ }
+ private async npcEventHistory(id:string,npcId:string){
+  return await this.store.all<Record<string,unknown>>('SELECT id,revision,actor_id AS actorId,character_id AS characterId,type,input_json AS input,effects_json AS effects,clock,created_at AS createdAt FROM game_events WHERE timeline_id=? AND (character_id=? OR instr(input_json,?)>0 OR instr(effects_json,?)>0) ORDER BY rowid DESC LIMIT 100',id,npcId,npcId,npcId);
+ }
+ async npcRegistry(actor:Actor,id:string,filters:NpcFilters={}){
+  await this.access(actor,id,true);const state=await this.load(id),events=await this.store.all<{character_id:string|null;input_json:string;effects_json:string;created_at:string}>('SELECT character_id,input_json,effects_json,created_at FROM game_events WHERE timeline_id=? ORDER BY rowid',id),lastActive=new Map<string,string>();
+  const npcIds=new Set(state.entities.filter(entity=>entity.kind==='character'&&!entity.data.playable).map(entity=>entity.id)),uuid=/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/gi;
+  for(const event of events)for(const candidate of new Set([...(event.character_id?[event.character_id]:[]),...((event.input_json+' '+event.effects_json).match(uuid)??[])]))if(npcIds.has(candidate))lastActive.set(candidate,event.created_at);
+  const items=listNpcs(state,filters,lastActive);return {items,total:items.length};
+ }
+ async creatorNpcProfile(actor:Actor,id:string,npcId:string){
+  await this.access(actor,id,true);const state=await this.load(id),npc=state.entities.find(entity=>entity.id===npcId&&entity.kind==='character'&&!entity.data.playable);ensure(npc,404,'npc_unavailable');
+  const history=await this.npcEventHistory(id,npcId),lastActive=history[0]?.createdAt?String(history[0].createdAt):null;
+  return {kind:'creator-dossier',canonicalSource:'authored-record',entity:npc,derived:npcDerived(state,npc,lastActive),mediaReferences:this.npcMediaReferences(state,npc),
+   relationships:state.entities.filter(entity=>entity.kind==='relationship'&&(entity.data.fromId===npcId||entity.data.toId===npcId)),jobs:state.entities.filter(entity=>entity.kind==='job'&&entity.data.employeeId===npcId),
+   injuries:state.entities.filter(entity=>entity.kind==='injury'&&entity.data.characterId===npcId),references:npcReferrers(state,npcId),history};
+ }
+ async playerNpcProfile(actor:Actor,id:string,npcId:string,observerId:string){
+  const {access}=await this.access(actor,id),state=await this.load(id);this.controlled(actor,state,observerId,access.role);
+  const npc=state.entities.find(entity=>entity.id===npcId&&entity.kind==='character'&&!entity.archived&&!entity.data.playable);ensure(npc&&visible(state,npc,observerId),404,'npc_unavailable');
+  const view=observerView(state,observerId),presented=project(state,npc,observerId),allowedMedia=new Set([...(presented.data.mediaIds as string[]??[]),...(presented.data.portraitMediaId?[String(presented.data.portraitMediaId)]:[])]);
+  const facts=view.facts.filter(row=>row.subjectId===npcId);
+  const relationships=view.entities.filter(entity=>entity.kind==='relationship'&&(entity.data.fromId===npcId||entity.data.toId===npcId));
+  return {kind:'player-presentation',canonicalSource:'authored-and-learned-fields',entity:presented,knownFacts:facts,relationships,mediaReferences:this.npcMediaReferences(state,npc,allowedMedia)};
+ }
+ async previewNpcMerge(actor:Actor,id:string,sourceNpcId:string,targetNpcId:string){
+  await this.access(actor,id,true);ensure(sourceNpcId!==targetNpcId,400,'npc_merge_same_record');const state=await this.load(id),source=state.entities.find(entity=>entity.id===sourceNpcId&&entity.kind==='character'&&!entity.archived&&!entity.data.playable),target=state.entities.find(entity=>entity.id===targetNpcId&&entity.kind==='character'&&!entity.archived&&!entity.data.playable);ensure(source&&target,404,'npc_unavailable');
+  const sourceHistory=await this.npcEventHistory(id,sourceNpcId),targetHistory=await this.npcEventHistory(id,targetNpcId);
+  return {source:{id:source.id,name:source.name,revision:source.revision},target:{id:target.id,name:target.name,revision:target.revision},conflicts:npcMergeConflicts(source,target),references:{source:npcReferrers(state,source.id),target:npcReferrers(state,target.id)},events:{source:sourceHistory.length,target:targetHistory.length},eventPolicy:'immutable-events-retain-original-character-id',reversible:true};
+ }
+ async mergeNpcs(actor:Actor,id:string,input:{revision:number;sourceNpcId:string;targetNpcId:string;resolution:Record<string,'source'|'target'>},key:string){
+  ensure(input.sourceNpcId!==input.targetNpcId,400,'npc_merge_same_record');
+  return this.mutate(actor,id,input.revision,key,input,'creator.npc.merge',true,async(s,eventId)=>{
+   const source=s.entities.find(entity=>entity.id===input.sourceNpcId&&entity.kind==='character'&&!entity.archived&&!entity.data.playable),target=s.entities.find(entity=>entity.id===input.targetNpcId&&entity.kind==='character'&&!entity.archived&&!entity.data.playable);ensure(source&&target,404,'npc_unavailable');
+   const before=mergePayload(s),merged=mergeNpcData(source,target,input.resolution),mergeId=randomUUID();
+   remapNpcReferences(s,source.id,target.id,true);
+   const targetIndex=s.entities.findIndex(entity=>entity.id===target.id);s.entities[targetIndex]=remapEntityReference(merged,source.id,target.id);
+   const sourceIndex=s.entities.findIndex(entity=>entity.id===source.id),archived=structuredClone(source),sourceData=data(archived,'character');sourceData.registryStatus='retired';sourceData.mergedIntoId=target.id;sourceData.mergeRecordId=mergeId;archived.data=sourceData as Entity['data'];archived.archived=true;s.entities[sourceIndex]=archived;
+   validateState(s);const afterChecksum=checksum(mergePayloadForChecksum(s));
+   await this.store.run('INSERT INTO npc_merge_records(id,timeline_id,source_npc_id,target_npc_id,merge_revision,resolution_json,before_json,after_checksum,event_id,created_by,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)',mergeId,id,source.id,target.id,input.revision+1,JSON.stringify(input.resolution),JSON.stringify(before),afterChecksum,eventId,actor.id,now());
+   return {result:{mergeId,sourceNpcId:source.id,targetNpcId:target.id,archivedSource:true,reversible:true}};
+  });
+ }
+ async reverseNpcMerge(actor:Actor,id:string,input:{revision:number;mergeId:string},key:string){
+  return this.mutate(actor,id,input.revision,key,input,'creator.npc.merge-reversed',true,async s=>{
+   const row=await this.store.get<{before_json:string;after_checksum:string;reversed_at:string|null}>('SELECT before_json,after_checksum,reversed_at FROM npc_merge_records WHERE id=? AND timeline_id=?',input.mergeId,id);ensure(row,404,'npc_merge_unavailable');ensure(!row.reversed_at,409,'npc_merge_already_reversed');ensure(checksum(mergePayloadForChecksum(s))===row.after_checksum,409,'npc_merge_has_subsequent_changes');
+   const before=JSON.parse(row.before_json) as ReturnType<typeof mergePayload>;s.entities=before.entities;s.facts=before.facts;s.knowledge=before.knowledge;s.beliefs=before.beliefs;s.memories=before.memories;validateState(s);
+   await this.store.run('UPDATE npc_merge_records SET reversed_at=?,reversed_by=? WHERE id=? AND reversed_at IS NULL',now(),actor.id,input.mergeId);
+   return {result:{mergeId:input.mergeId,reversed:true}};
+  });
+ }
+ async retireNpc(actor:Actor,id:string,input:{revision:number;npcId:string;strategy:'replacement'|'retirement';replacementId?:string;narrative:string},key:string){
+  return this.mutate(actor,id,input.revision,key,input,'creator.npc.retired',true,async(s,eventId)=>{
+   const npc=s.entities.find(entity=>entity.id===input.npcId&&entity.kind==='character'&&!entity.archived&&!entity.data.playable);ensure(npc,404,'npc_unavailable');const character=data(npc,'character'),referrers=npcReferrers(s,npc.id);
+   ensure(input.narrative.trim().length>0,400,'npc_retirement_narrative_required');
+   if(character.condition!=='dead'&&referrers.length)ensure(input.strategy==='replacement'||input.strategy==='retirement',409,'living_referenced_npc_strategy_required');
+   if(input.strategy==='replacement'){
+    ensure(input.replacementId&&input.replacementId!==npc.id,400,'npc_replacement_required');const replacement=s.entities.find(entity=>entity.id===input.replacementId&&entity.kind==='character'&&!entity.archived&&!entity.data.playable);ensure(replacement,404,'npc_replacement_unavailable');remapNpcReferences(s,npc.id,replacement.id,true);
+   }
+   const current=s.entities.find(entity=>entity.id===npc.id)!,retired=data(current,'character');retired.registryStatus='retired';retired.retirementNarrative=input.narrative.trim();retired.lastActiveAt=s.clock;if(input.strategy==='replacement')retired.mergedIntoId=input.replacementId!;current.data=retired as Entity['data'];current.archived=true;validateState(s);
+   const retirementId=randomUUID();await this.store.run('INSERT INTO npc_retirement_records(id,timeline_id,npc_id,strategy,replacement_id,narrative,event_id,created_by,created_at) VALUES (?,?,?,?,?,?,?,?,?)',retirementId,id,npc.id,input.strategy,input.replacementId??null,input.narrative.trim(),eventId,actor.id,now());
+   return {result:{retirementId,npcId:npc.id,strategy:input.strategy,replacementId:input.replacementId??null,archived:true,preservedReferences:input.strategy==='retirement'?referrers.length:0}};
+  });
+ }
  async media(actor:Actor,id:string,mediaId:string,characterId:string){
   const {access}=await this.access(actor,id),s=await this.load(id);this.controlled(actor,s,characterId,access.role);const entity=getEntity(s,mediaId,'media');ensure(visible(s,entity,characterId),404,'media_unavailable');const m=data(entity,'media');return {mime:m.mime,bytes:mediaBytes(m.mime,m.body)};
  }

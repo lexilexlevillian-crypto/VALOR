@@ -1,10 +1,14 @@
 export const THEME_IDS=[
  'neon-green-terminal','neon-pink-scene','neon-purple-night','neon-blue-electric',
  'neon-red-heat','neon-amber','neon-cyan','neon-white-chrome',
- 'soft-baby-pink','soft-baby-blue','soft-butter-yellow'
+ 'soft-baby-pink','soft-baby-blue','soft-butter-yellow','soft-lavender','soft-mint','neon-orange','neon-yellow'
 ];
 export const ACCESSIBILITY_MODES=['theme','high-contrast','emergency'];
 export const THEMES={
+ 'soft-lavender':{label:'Soft Lavender',mood:'clouds / daydream',texture:'dots',accent:'bow',tokens:{base:'#f8f3ff',surface:'#fffbff',raised:'#efe5ff',text:'#302039',muted:'#665273',border:'#9271a6',glow:'#7945a3',selected:'#e3d0f4',success:'#277452',warning:'#805600',danger:'#a72e36',focus:'#642480',chart:'#8f61b5'}},
+ 'soft-mint':{label:'Soft Mint',mood:'fresh air / little hearts',texture:'dots',accent:'heart',tokens:{base:'#effcf6',surface:'#fbfffd',raised:'#dff4e9',text:'#193b2e',muted:'#48665b',border:'#668f7d',glow:'#267253',selected:'#cbe8da',success:'#216346',warning:'#805600',danger:'#a72e36',focus:'#174d39',chart:'#3f8668'}},
+ 'neon-orange':{label:'Neon Orange',mood:'sunset / electric',texture:'bars',accent:'spark',tokens:{base:'#1c0d06',surface:'#2a170b',raised:'#3d2310',text:'#fff6ed',muted:'#e0c3a9',border:'#ad8055',glow:'#ffad62',selected:'#653713',success:'#78e3ab',warning:'#ffe478',danger:'#ff958f',focus:'#ffe2c2',chart:'#ffad62'}},
+ 'neon-yellow':{label:'Neon Yellow',mood:'high voltage / stars',texture:'grid',accent:'star',tokens:{base:'#141405',surface:'#22220d',raised:'#303013',text:'#ffffe9',muted:'#d6d5a5',border:'#949552',glow:'#eeff61',selected:'#454a18',success:'#78e3ab',warning:'#ffcf79',danger:'#ff958f',focus:'#f6ffc2',chart:'#eeff61'}},
  'neon-green-terminal':{label:'Neon Green Terminal',mood:'signal / motion',texture:'grid',accent:'cross',tokens:{base:'#07110b',surface:'#0d1b12',raised:'#12261a',text:'#f2fff3',muted:'#b4d5b8',border:'#4b9b61',glow:'#69ff8c',selected:'#1e4e2d',success:'#79ff9a',warning:'#ffd166',danger:'#ff8f86',focus:'#d0ffda',chart:'#52e67a'}},
  'neon-pink-scene':{label:'Neon Pink Scene',mood:'after-hours / pulse',texture:'bars',accent:'heart',tokens:{base:'#180a16',surface:'#271027',raised:'#351435',text:'#fff2fb',muted:'#e0b8d5',border:'#a55691',glow:'#ff72cf',selected:'#62204e',success:'#70f0ba',warning:'#ffd166',danger:'#ff938d',focus:'#ffd0ed',chart:'#ef69c1'}},
  'neon-purple-night':{label:'Neon Purple Night',mood:'late streets / violet',texture:'grid',accent:'star',tokens:{base:'#100b1c',surface:'#1b1230',raised:'#281a43',text:'#f7f0ff',muted:'#c9b7e0',border:'#7659a7',glow:'#bc8cff',selected:'#442d72',success:'#75e0ba',warning:'#ffd166',danger:'#ff928f',focus:'#e5d1ff',chart:'#a780ef'}},
@@ -22,6 +26,7 @@ export function applyTheme(id,allowed=THEME_IDS){
  const safe=allowed.includes(id)?id:(allowed.includes('neon-green-terminal')?'neon-green-terminal':allowed[0]||'neon-green-terminal');
  const theme=themeById(safe),root=document.documentElement;
  root.dataset.theme=safe;root.dataset.texture=theme.texture;root.dataset.accent=theme.accent;
+ try{localStorage.setItem('valor.theme',safe);}catch{}
  for(const [key,value] of Object.entries(theme.tokens))root.style.setProperty('--theme-'+key,value);
  root.style.colorScheme=root.dataset.accessibility==='emergency'?'dark':safe.startsWith('soft-')?'light':'dark';
  const meta=document.querySelector('meta[name="theme-color"]');if(meta)meta.content=theme.tokens.base;

@@ -9,6 +9,7 @@ import type {NarrativeProvider} from './ai.ts';
 import {Readable} from 'node:stream';
 import {geminiFromEnvironment} from './gemini.ts';
 import {IntentGateway} from './ai-intent.ts';
+import {simulationTiers} from './simulation.ts';
 export function gameRoutes(app:FastifyInstance,game:Game,actor:(r:object)=>Actor,key:(headers:Record<string,unknown>)=>string){
  const providers:NarrativeProvider[]=[new GroundedProvider(),...(process.env.AI_GATEWAY_URL&&process.env.AI_GATEWAY_SECRET?[new JsonGatewayProvider(process.env.AI_GATEWAY_URL,process.env.AI_GATEWAY_SECRET)]:[])];
  const gemini=geminiFromEnvironment();if(gemini)providers.push(gemini);
@@ -17,7 +18,7 @@ export function gameRoutes(app:FastifyInstance,game:Game,actor:(r:object)=>Actor
  const timeline=(r:FastifyRequest)=>z.object({id}).parse(r.params).id;
  const bodyRevision=z.number().int().positive();
  const wrap=async(fn:()=>unknown)=>{try{return await fn();}catch(error){if(error instanceof Fault||error instanceof z.ZodError)throw error;if(error instanceof Error&&/^[a-z_]+$/.test(error.message))throw new Fault(400,error.message);throw error;}};
- app.get('/game/catalog',async r=>{actor(r);return {kinds,schemas:Object.fromEntries(kinds.map(k=>[k,z.toJSONSchema(dataSchemas[k])])),settings:z.toJSONSchema(settingsSchema),actions:actionSchema.options.map(option=>z.toJSONSchema(option)),providers:providers.map(p=>p.id)};});
+ app.get('/game/catalog',async r=>{actor(r);return {kinds,schemas:Object.fromEntries(kinds.map(k=>[k,z.toJSONSchema(dataSchemas[k])])),settings:z.toJSONSchema(settingsSchema),actions:actionSchema.options.map(option=>z.toJSONSchema(option)),simulationTiers,providers:providers.map(p=>p.id)};});
  app.get('/game/campaigns/:id/timelines',async r=>(await game.list(actor(r),timeline(r))));
  app.post('/game/campaigns/:id/timelines',async r=>(await game.initialize(actor(r),timeline(r))));
  app.get('/game/timelines/:id/roster',async r=>(await game.roster(actor(r),timeline(r))));
@@ -41,6 +42,17 @@ export function gameRoutes(app:FastifyInstance,game:Game,actor:(r:object)=>Actor
  app.get('/game/timelines/:id/character-profile-templates',async r=>wrap(()=>game.characterProfileTemplates(actor(r),timeline(r))));
  app.post('/game/timelines/:id/character-profile-templates',async r=>{const b=z.strictObject({name,characterId:id}).parse(r.body);return wrap(()=>game.createCharacterProfileTemplate(actor(r),timeline(r),b));});
  app.post('/game/timelines/:id/character-profile-templates/use',async r=>{const b=z.strictObject({revision:bodyRevision,templateId:id,characterId:id}).parse(r.body);return wrap(()=>game.useCharacterProfileTemplate(actor(r),timeline(r),b,key(r.headers)));});
+ const optionalBoolean=z.enum(['true','false']).transform(value=>value==='true').optional();
+ app.get('/game/timelines/:id/npcs',async r=>{
+  const q=z.strictObject({query:z.string().max(160).optional(),status:z.enum(['active','inactive','missing','retired']).optional(),locationId:id.optional(),factionId:id.optional(),relationship:z.string().max(160).optional(),job:z.string().max(160).optional(),schedule:z.string().max(160).optional(),scheduled:optionalBoolean,tags:z.string().max(1000).optional(),visibility:z.enum(['creator','campaign','owner','knowledge']).optional(),alive:optionalBoolean,injured:optionalBoolean,arrested:optionalBoolean,lastActiveFrom:z.iso.datetime().optional(),lastActiveUntil:z.iso.datetime().optional(),archive:z.enum(['active','archived','all']).optional()}).parse(r.query);
+  return wrap(()=>game.npcRegistry(actor(r),timeline(r),{...q,tags:q.tags?.split(',').map(tag=>tag.trim()).filter(Boolean)}));
+ });
+ app.get('/game/timelines/:id/npcs/merge-preview',async r=>{const q=z.strictObject({sourceNpcId:id,targetNpcId:id}).parse(r.query);return wrap(()=>game.previewNpcMerge(actor(r),timeline(r),q.sourceNpcId,q.targetNpcId));});
+ app.post('/game/timelines/:id/npcs/merge',async r=>{const b=z.strictObject({revision:bodyRevision,sourceNpcId:id,targetNpcId:id,resolution:z.record(z.string(),z.enum(['source','target']))}).parse(r.body);return wrap(()=>game.mergeNpcs(actor(r),timeline(r),b,key(r.headers)));});
+ app.post('/game/timelines/:id/npcs/merges/:mergeId/reverse',async r=>{const p=z.object({id,mergeId:id}).parse(r.params),b=z.strictObject({revision:bodyRevision}).parse(r.body);return wrap(()=>game.reverseNpcMerge(actor(r),p.id,{revision:b.revision,mergeId:p.mergeId},key(r.headers)));});
+ app.get('/game/timelines/:id/npcs/:npcId/dossier',async r=>{const p=z.object({id,npcId:id}).parse(r.params);return wrap(()=>game.creatorNpcProfile(actor(r),p.id,p.npcId));});
+ app.get('/game/timelines/:id/npcs/:npcId/profile',async r=>{const p=z.object({id,npcId:id}).parse(r.params),q=z.strictObject({characterId:id}).parse(r.query);return wrap(()=>game.playerNpcProfile(actor(r),p.id,p.npcId,q.characterId));});
+ app.post('/game/timelines/:id/npcs/:npcId/retire',async r=>{const p=z.object({id,npcId:id}).parse(r.params),b=z.strictObject({revision:bodyRevision,strategy:z.enum(['replacement','retirement']),replacementId:id.optional(),narrative:z.string().trim().min(1).max(16000)}).parse(r.body);return wrap(()=>game.retireNpc(actor(r),p.id,{...b,npcId:p.npcId},key(r.headers)));});
  app.post('/game/timelines/:id/developer/validate',async r=>{const b=z.strictObject({revision:bodyRevision,entities:z.array(z.unknown()).min(1).max(100)}).parse(r.body);return wrap(()=>game.developerValidate(actor(r),timeline(r),b));});
  app.post('/game/timelines/:id/developer/validate-settings',async r=>{const b=z.strictObject({revision:bodyRevision,settings:z.unknown()}).parse(r.body);return wrap(()=>game.developerValidateSettings(actor(r),timeline(r),b));});
  app.get('/game/timelines/:id/developer/simulation-preview',async r=>{const q=z.strictObject({minutes:z.coerce.number().int().min(1).max(1440)}).parse(r.query);return wrap(()=>game.developerSimulationPreview(actor(r),timeline(r),q.minutes));});

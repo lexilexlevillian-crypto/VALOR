@@ -55,7 +55,8 @@ test('iPad shell, keyboard login, Creator form, long prose, reduced motion and o
   assert.equal(await page.getByLabel('Place of work',{exact:true}).count(),3);
   const accessibility=await new AxeBuilder({page}).analyze();
   assert.deepEqual(accessibility.violations.map(v=>({id:v.id,impact:v.impact,description:v.description})),[]);
-  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+  await page.screenshot({path:'artifacts/creation-layout.png',fullPage:true});
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true,JSON.stringify(await page.evaluate(()=>[...document.querySelectorAll('main *')].filter(node=>node.getBoundingClientRect().right>innerWidth+1).slice(0,12).map(node=>({tag:node.tagName,cls:node.className,width:node.getBoundingClientRect().width,right:node.getBoundingClientRect().right})))));
   await page.screenshot({path:'artifacts/ipad-creator.png',fullPage:true});
   await page.setViewportSize({width:1180,height:820});
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);

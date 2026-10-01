@@ -63,9 +63,14 @@ export function project(s:State,e:Entity,observerId:string):Entity {
  const own=e.id===observerId||e.data.ownerId===observerId;
  if(e.kind==='character'&&!own){
   const d=data(e,'character'),actor=data(getEntity(s,observerId),'character');
-  copy.data={description:d.description,legalName:d.legalName,aliases:d.aliases,ageYears:d.ageYears,sex:d.sex,gender:d.gender,pronouns:d.pronouns,identity:d.identity,
-   appearance:d.appearance,appearanceDescription:d.appearanceDescription,heightCm:d.heightCm,build:d.build,hair:d.hair,eyes:d.eyes,complexion:d.complexion,features:d.features,scars:d.scars,tattoos:d.tattoos,disabilities:d.disabilities,
-   presentation:d.presentation,socialPresentation:d.socialPresentation,attractivenessContext:d.attractivenessContext,locationId:d.locationId===actor.locationId?d.locationId:null,condition:d.condition,characterSchemaVersion:d.characterSchemaVersion,sections:d.sections};
+  const learned=knows(s,observerId,e.id),permitted=(field:string)=>{const policy=d.profileVisibility[field];return policy==='campaign'||policy==='owner'&&own||policy==='knowledge'&&learned;};
+  const presentation:Record<string,unknown>={locationId:d.locationId===actor.locationId?d.locationId:null,condition:d.condition,characterSchemaVersion:d.characterSchemaVersion,sections:d.sections};
+  for(const [field,value] of Object.entries(d))if(permitted(field))presentation[field]=structuredClone(value);
+  const mediaIds=d.mediaIds.filter(id=>{const media=s.entities.find(candidate=>candidate.id===id&&candidate.kind==='media'&&!candidate.archived);return !!media&&visible(s,media,observerId);});
+  const portrait=d.portraitMediaId?s.entities.find(candidate=>candidate.id===d.portraitMediaId&&candidate.kind==='media'&&!candidate.archived):undefined;
+  presentation.mediaIds=mediaIds;
+  presentation.portraitMediaId=portrait&&visible(s,portrait,observerId)?portrait.id:null;
+  copy.data=presentation as Entity['data'];
  }else{
   for(const k of ['secrets','instructions','aiBehavior','hiddenSolution','embedding','pending','preferences','goals','fears','heat','forensicFindings'])delete copy.data[k];
   if(e.kind==='relationship'){for(const k of ['attraction','desire','affection','trust','respect','attachment','familiarity','jealousy','resentment','fear','loyalty','dependency'])delete copy.data[k];}
