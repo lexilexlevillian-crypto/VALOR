@@ -6,6 +6,7 @@ import type {Effect} from './simulation.ts';
 import {fact,observe,remember,visible} from './epistemics.ts';
 import {randomSource} from '../random.ts';
 import {choiceAccess,resolveTraitEffects} from './traits.ts';
+import {originFor} from '../../public/creation-rules.js';
 export type CheckOutcome='critical'|'partial'|'success'|'success-at-cost'|'failure-with-information'|'failure-with-consequence'|'impossible'|'no-roll';
 export type CheckModifier={kind:'trait'|'injury'|'context'|'condition'|'equipment';name:string;value:number;sourceId?:string};
 export type CheckRecord={id:string;eventId:string;characterId:string;checkDefinitionId:string|null;attribute:string;skillId:string|null;context:string;difficulty:number;dieValue:number|null;attributeValue:number;skillValue:number;total:number|null;outcome:CheckOutcome;modifiers:CheckModifier[];provenance:Record<string,unknown>};
@@ -40,7 +41,7 @@ export function resolveAction(s:State,actorId:string,action:Action,eventId:strin
   const check=definition?data(definition,'checkDefinition'):null;
   const chosenAttribute=(check?.attribute??attribute) as keyof typeof pc.attributes,chosenSkill=check?.skillId??skillId;
   const target=Number(check?.difficulty??difficulty??rule.threshold),attributeValue=Number(pc.attributes[chosenAttribute]??0),skillValue=chosenSkill?Number(pc.skills[chosenSkill]??0):0,contextName=context||String(check?.context??'');
-  const modifiers:CheckModifier[]=[];
+  const modifiers:CheckModifier[]=[];const background=originFor(pc.background.originChoice),backgroundBonus=background?.modifiers[chosenAttribute]??0;if(backgroundBonus)modifiers.push({kind:'context',name:'Background: '+background!.name,value:backgroundBonus});
   for(const traitId of pc.traits){
    const traitEntity=getEntity(s,traitId,'trait'),trait=data(traitEntity,'trait'),value=Number(trait.modifiers[chosenAttribute]??0);
    if(value)modifiers.push({kind:'trait',name:'Trait: '+traitEntity.name,value,sourceId:traitId});

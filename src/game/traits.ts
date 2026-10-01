@@ -57,13 +57,13 @@ export function traitBalance(s:State,traitIds:string[],budget=s.settings.traitBu
  return {advantageCost,disadvantageCredit,appliedCredit:credit,netCost:Math.max(0,advantageCost-credit),advantages,disadvantages,budget};
 }
 
-export function validateTraitSelection(s:State,traitIds:string[],budget=s.settings.traitBudget){
+export function validateTraitSelection(s:State,traitIds:string[],budget=s.settings.traitBudget,unlimited=false){
  const selected=new Set(traitIds);if(selected.size!==traitIds.length)throw new Error('duplicate_traits');
  const balance=traitBalance(s,traitIds,budget),policy=s.settings.traitBalance;
- if(traitIds.length>policy.maxTraits)throw new Error('trait_count_cap');
- if(balance.advantages>policy.maxAdvantages)throw new Error('trait_advantage_cap');
- if(balance.disadvantages>policy.maxDisadvantages)throw new Error('trait_disadvantage_cap');
- if(balance.netCost>budget)throw new Error('trait_budget_exceeded');
+ if(!unlimited&&traitIds.length>policy.maxTraits)throw new Error('trait_count_cap');
+ if(!unlimited&&balance.advantages>policy.maxAdvantages)throw new Error('trait_advantage_cap');
+ if(!unlimited&&balance.disadvantages>policy.maxDisadvantages)throw new Error('trait_disadvantage_cap');
+ if(!unlimited&&balance.netCost>budget)throw new Error('trait_budget_exceeded');
  for(const traitId of traitIds){
   const trait=data(getEntity(s,traitId,'trait'),'trait');
   if(!trait.prerequisites.every(id=>selected.has(id))||trait.opposes.some(id=>selected.has(id)))throw new Error('trait_prerequisite_or_opposition');
@@ -97,7 +97,7 @@ export function generateNpcTraitSelection(s:State,templateId:string,seed:string)
   const next=[...selected,traitId],categoryCount=next.filter(id=>data(getEntity(s,id,'trait'),'trait').category===trait.category).length;
   if(categoryCount>(template.categoryCaps[trait.category]??Number.POSITIVE_INFINITY))return false;
   for(const tag of trait.generation.tags)if(next.filter(id=>data(getEntity(s,id,'trait'),'trait').generation.tags.includes(tag)).length>(template.tagCaps[tag]??Number.POSITIVE_INFINITY))return false;
-  try{validateTraitSelection(s,next,template.budget);}catch{return false;}selected.push(traitId);return true;
+  try{validateTraitSelection(s,next,template.budget,true);}catch{return false;}selected.push(traitId);return true;
  };
  const required=(traitId:string,stack=new Set<string>())=>{if(selected.includes(traitId))return;if(stack.has(traitId))throw new Error('trait_prerequisite_cycle');stack.add(traitId);const trait=data(getEntity(s,traitId,'trait'),'trait');for(const prerequisite of trait.prerequisites)required(prerequisite,stack);stack.delete(traitId);if(!add(traitId)&&!selected.includes(traitId))throw new Error('trait_template_required_conflict');};
  for(const traitId of template.requiredTraitIds)required(traitId);
@@ -111,6 +111,6 @@ export function generateNpcTraitSelection(s:State,templateId:string,seed:string)
   if(!add(chosen.entity.id)){traits.splice(traits.findIndex(entity=>entity.id===chosen.entity.id),1);continue;}
  }
  if(selected.length<template.minTraits)throw new Error('trait_template_unsatisfied');
- validateTraitSelection(s,selected,template.budget);
+ validateTraitSelection(s,selected,template.budget,true);
  return {traitIds:selected,seed,templateId,balance:traitBalance(s,selected,template.budget)};
 }

@@ -1,5 +1,17 @@
 # Creation Studio and game menu
 
+## City guide and balanced starting lives
+
+About Valor contains the supplied city document in regional pages, a searchable place directory, and the supplied map recolored at display time. Source wording is preserved. The serif typography uses Georgia/Times as a map-inspired approximation, not an identified original font.
+
+The occupation list supplies 33 workplaces with matching player roles and additional supervisory NPC roles. Existing custom workplace/position values are preserved. Profile occupations alone do not create wages or employment contracts; those remain campaign job records.
+
+New playable characters and launched lives receive 35 attribute points (10 per full campaign-scale bar), 12 skill points (5 per full skill-scale bar), and 6 trait points with at most 6 disadvantage refunds. Unused points are allowed. Eight selectable backgrounds each add two total points to specified checks, not stored ratings. Existing lives and later training are not rebalanced. NPCs have no point-spending or trait-count caps; valid scales, references, prerequisites, oppositions and effect conflicts still apply.
+
+Trait, skill and background pools show descriptions and effects before selection. Ordinary players can customize public start-package builds and profile occupations. Starts with private trait or skill choices are protected. Validation and persistence use the existing atomic, permission-checked start workflow.
+
+Reviewed catalog installation upgrades untouched stock trait descriptors to mechanical, costed definitions while preserving IDs and custom effects. This remains an explicit audited Creator action; deployment does not silently rewrite live catalogs. Existing legal trait counts and selections are retained when the upgrade adjusts campaign allowances. Newly created lives still have the independent starting budgets.
+
 The creation UI follows the OC-sheet hierarchy: essentials first, simulation and AI authoring underneath closed disclosure panels. The signed-in campaign menu uses a title-screen layout; the same visual themes extend through login, creation and play.
 
 The title screen keeps the VALOR wordmark and decoration, with New Life, Load Life, and About Valor inside the same card. The top bar contains only navigation, campaign context, mode and connection status. Main menu, Creation Studio, Style and High Visibility are in the navigation sidebar, opened with the menu icon before play or on phones. Campaign and timeline selection happen on separate screens. Gameplay sidebar entries require an actively selected character and are absent from the title screen, roster, New Life, and authoring screens. Creation Studio has separate People, Lore & stories, Places, Objects & media, Skills & systems, and World & diagnostics pages; advanced tools are not mixed into record creation.

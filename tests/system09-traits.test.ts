@@ -24,7 +24,7 @@ test('System 09 rejects opposing traits and overlapping reject-conflict effects'
 test('System 09 caps disadvantage credits and removes current-only credit with its source',()=>{
  const advantage=validateEntity({id:randomUUID(),kind:'trait',name:'Costed advantage',visibility:'campaign',data:{category:'personality',mode:'costed',balance:'advantage',cost:8}}),disadvantage=validateEntity({id:randomUUID(),kind:'trait',name:'Costed disadvantage',visibility:'campaign',data:{category:'personality',mode:'costed',balance:'disadvantage',cost:-10}}),extra=validateEntity({id:randomUUID(),kind:'trait',name:'Second disadvantage',visibility:'campaign',data:{category:'personality',mode:'costed',balance:'disadvantage',cost:-10}});
  const policy={traitBudget:5,traitBalance:{maxTraits:10,maxAdvantages:2,maxDisadvantages:1,disadvantageCreditCap:3,refundPolicy:'capped-current'}};
- const valid=validateEntity({id:randomUUID(),kind:'character',name:'Balanced',visibility:'campaign',data:character(null,{traits:[advantage.id,disadvantage.id]})});
+ const valid=validateEntity({id:randomUUID(),kind:'character',name:'Balanced',visibility:'campaign',data:character(null,{playable:true,traits:[advantage.id,disadvantage.id]})});
  assert.doesNotThrow(()=>validateState(state([advantage,disadvantage,extra,valid],policy)));
  const stacked=structuredClone(valid);stacked.data.traits=[advantage.id,disadvantage.id,extra.id];assert.throws(()=>validateState(state([advantage,disadvantage,extra,stacked],policy)),/trait_disadvantage_cap/);
  const removed=structuredClone(valid);removed.data.traits=[advantage.id];assert.throws(()=>validateState(state([advantage,disadvantage,extra,removed],policy)),/trait_budget_exceeded/);

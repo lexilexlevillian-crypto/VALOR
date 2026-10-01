@@ -164,3 +164,24 @@ body{background-attachment:fixed}
 .guided-character-details [data-creation-group=system]{border-style:dashed}
 .routine-days .check-chip{display:inline-flex;align-items:center;gap:5px;margin:4px 10px 4px 0}
 @container(max-width:540px){.oc-attributes{gap:6px 10px}.oc-sheet .oc-attributes .rating-control{grid-template-columns:minmax(0,1fr) 44px}.oc-attributes .rating-control>label{grid-column:1/-1;min-height:16px}.oc-attributes .rating-scale{grid-column:1}.guided-character-details>.sheet-more>.field-grid{grid-template-columns:1fr}}
+ /* Map-inspired serif type throughout; native readable fallback, no remote font dependency. */
+:root{--serif:Georgia,'Times New Roman',serif;--utility:var(--serif);font-family:var(--serif)}
+body,button,input,select,textarea,#app *{font-family:var(--serif)}
+.title-menu button{text-transform:uppercase;font-family:var(--serif);font-weight:700;letter-spacing:.1em}
+.registry-column{min-width:0;align-self:start}.registry-column>aside{border:1px solid var(--border);background:var(--surface);padding:12px}.registry-column>button{width:100%;margin-top:12px}
+.oc-personality-ratings .rating-control{grid-template-columns:minmax(115px,1.35fr) minmax(45px,1fr) 44px}
+.oc-personality-ratings label{white-space:normal;overflow-wrap:normal;text-overflow:clip;overflow:visible}
+@container(min-width:900px){.oc-psychology{grid-template-columns:minmax(0,.55fr) minmax(0,1.2fr)}}
+.city-guide{background:var(--surface);padding:clamp(12px,3vw,32px);border:1px solid var(--border)}
+.city-guide-nav{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:24px}.city-guide-nav [aria-pressed=true]{background:var(--selected);border-color:var(--glow)}
+.city-map{max-width:650px;margin:0 auto 16px;background:var(--base);isolation:isolate;position:relative}.city-map::before{content:'';position:absolute;inset:0;background:var(--glow);mask-image:url('/city-map.png');mask-size:100% 100%;mask-repeat:no-repeat;pointer-events:none}.city-map img{display:block;width:100%;height:auto;mix-blend-mode:luminosity;position:relative}
+.city-prose{max-width:80ch;margin:auto}.city-entry{margin:28px 0}.city-entry h4{font-size:20px;color:var(--text)}.city-guide p{font-size:16px;line-height:1.7}
+.selection-pool{min-width:0}.choice-pool{display:grid;grid-template-columns:repeat(auto-fit,minmax(125px,1fr));gap:6px;max-height:300px;overflow:auto;padding:4px;margin:10px 0}
+.pool-choice{text-align:left;font-size:14px;min-height:44px;overflow-wrap:anywhere}.pool-choice[aria-pressed=true]{background:var(--selected);border:2px solid var(--glow)}
+.choice-detail:empty{display:none}.choice-detail{padding:12px;border:1px solid var(--border);background:var(--raised)}.choice-detail h4{margin:0 0 8px;font-size:18px}
+.selected-choice{display:flex;gap:8px;align-items:center;justify-content:space-between;border-bottom:1px solid var(--border);padding:8px 0}.selected-choice .rating-control{flex:1}
+ .starting-budget h2{font-size:20px}.starting-budget{padding:14px;border:1px solid var(--border);background:var(--raised);margin-bottom:10px}.starting-budget[hidden]{display:none}.budget-line{display:inline-block;margin:4px 12px 4px 0;color:var(--text)}.over-budget{color:var(--danger);font-weight:bold}
+@media(max-width:900px){.registry-column>aside{display:grid;grid-template-columns:1fr 1fr;gap:8px}.registry-column .entity-list{grid-column:1/-1;max-height:160px}.registry-column>aside>.field:first-child{grid-column:1/-1}}
+@media(max-width:500px){.registry-column>aside{grid-template-columns:1fr}.selected-choice{align-items:stretch;flex-direction:column}.oc-personality-ratings .rating-control{grid-template-columns:minmax(120px,1fr) minmax(45px,1fr) 44px}}
+@media(forced-colors:active){.city-map img{mix-blend-mode:normal}}
+@media(max-width:600px){.player-start .oc-attributes .rating-control{grid-template-columns:minmax(0,1fr) 44px}.player-start .oc-attributes .rating-control>label{grid-column:1/-1}.player-start .oc-attributes .rating-scale{grid-column:1}.player-start .oc-attributes{gap:8px}}

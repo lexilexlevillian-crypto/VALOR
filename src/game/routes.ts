@@ -22,6 +22,7 @@ export function gameRoutes(app:FastifyInstance,game:Game,actor:(r:object)=>Actor
  app.get('/game/campaigns/:id/timelines',async r=>(await game.list(actor(r),timeline(r))));
  app.post('/game/campaigns/:id/timelines',async r=>(await game.initialize(actor(r),timeline(r))));
  app.get('/game/timelines/:id/roster',async r=>(await game.roster(actor(r),timeline(r))));
+ app.get('/game/timelines/:id/creation-options',async r=>wrap(()=>game.creationOptions(actor(r),timeline(r))));
  app.get('/game/timelines/:id/start-packages',async r=>wrap(()=>game.startPackages(actor(r),timeline(r))));
  app.post('/game/timelines/:id/start-packages',async r=>{
   const b=z.strictObject({name,slug:z.string().trim().min(1).max(80).regex(/^[a-z0-9][a-z0-9._-]*$/),description:z.string().max(16000).default(''),kind:z.enum(['guided','freeform','template']),visibility:z.enum(['creator','campaign']).default('campaign'),status:z.enum(['draft','published','archived']).default('draft'),definition:z.unknown()}).parse(r.body);
@@ -32,7 +33,7 @@ export function gameRoutes(app:FastifyInstance,game:Game,actor:(r:object)=>Actor
   return wrap(()=>game.duplicateStartPackage(actor(r),p.id,p.packageId,b,key(r.headers)));
  });
  app.post('/game/timelines/:id/start',async r=>{
-  const b=z.strictObject({revision:bodyRevision,packageId:id.optional(),definition:z.unknown().optional()}).refine(v=>Boolean(v.packageId)!==Boolean(v.definition),'one_start_source_required').parse(r.body);
+  const b=z.strictObject({revision:bodyRevision,packageId:id.optional(),definition:z.unknown().optional(),choices:z.unknown().optional()}).refine(v=>Boolean(v.packageId)!==Boolean(v.definition),'one_start_source_required').parse(r.body);
   return wrap(()=>game.start(actor(r),timeline(r),b,key(r.headers)));
  });
  app.get('/game/timelines/:id/view',async r=>{const query=z.strictObject({characterId:id}).parse(r.query);return wrap(async ()=>(await game.view(actor(r),timeline(r),query.characterId)));});

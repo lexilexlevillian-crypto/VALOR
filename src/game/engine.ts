@@ -12,6 +12,8 @@ import type {CheckRecord} from './actions.ts';
 import {advance,type Effect} from './simulation.ts';
 import {skillNames,traitBackgroundRequirements,traitGenerationTags,traitGroups,traitOppositions} from './catalog.ts';
 import {generateNpcTraitSelection,validateTraitSelection} from './traits.ts';
+import {validateStartingBuild,applyPlayerChoices} from './creation.ts';
+import {stockTrait,startingBudget} from '../../public/creation-rules.js';
 import type {InStatement,InValue} from '@libsql/client';
 import {buildContextManifest,contextBrief} from './context.ts';
 import {proposeIntent} from './intent.ts';
@@ -183,7 +185,7 @@ export class Game {
   const characterId=randomUUID();
   const rawData={...definition.character.data,description:definition.character.description,playable:true,controllerUserId:actor.id};
   const character=validateEntity({id:characterId,kind:'character',name:definition.character.name,visibility:'owner',data:rawData});
-  s.entities.push(character);
+  validateStartingBuild(s,data(character,'character'));s.entities.push(character);
   const sources=[...new Set([...definition.grantEntityIds,...definition.plotHookIds])];
   for(const sourceId of sources){
    const source=getEntity(s,sourceId);
@@ -218,9 +220,10 @@ export class Game {
   if(!privileged(role))ensure(row.visibility==='campaign'&&row.status==='published',403,'start_package_unavailable');
   return {...row,definition:startDefinitionSchema.parse(JSON.parse(row.definition_json))};
  }
+ async creationOptions(actor:Actor,id:string){await this.access(actor,id);const s=await this.load(id);return {settings:{attributeScale:s.settings.attributeScale},entities:s.entities.filter(e=>!e.archived&&e.visibility==='campaign'&&['trait','skill'].includes(e.kind)).map(e=>({id:e.id,kind:e.kind,name:e.name,data:{description:e.data.description,scale:e.data.scale,mode:e.data.mode,cost:e.data.cost,modifiers:e.data.modifiers,scopedCheckModifiers:e.data.scopedCheckModifiers,effects:e.data.effects,prerequisites:e.data.prerequisites,opposes:e.data.opposes}}))};}
  async startPackages(actor:Actor,id:string){
   const {t,access}=await this.access(actor,id),developer=privileged(access.role)&&(await this.domain.userMode(actor)).mode==='developer';
-  const state=await this.load(id),rows=await this.store.all<{id:string;slug:string;name:string;description:string;kind:string;visibility:string;status:string;definition_json:string;schema_version:number;revision:number;created_at:string;updated_at:string}>("SELECT id,slug,name,description,kind,visibility,status,definition_json,schema_version,revision,created_at,updated_at FROM campaign_start_packages WHERE campaign_id=? AND archived_at IS NULL AND (status='published' AND visibility='campaign' OR ?=1) ORDER BY name,id",t.campaign_id,developer?1:0);  return rows.map(row=>{const definition=startDefinitionSchema.parse(JSON.parse(row.definition_json));return {id:row.id,slug:row.slug,name:row.name,description:row.description,kind:row.kind,visibility:row.visibility,status:row.status,schemaVersion:row.schema_version,revision:row.revision,createdAt:row.created_at,updatedAt:row.updated_at,summary:this.startSummary(state,definition),...(developer?{definition}:{})};});
+  const state=await this.load(id),rows=await this.store.all<{id:string;slug:string;name:string;description:string;kind:string;visibility:string;status:string;definition_json:string;schema_version:number;revision:number;created_at:string;updated_at:string}>("SELECT id,slug,name,description,kind,visibility,status,definition_json,schema_version,revision,created_at,updated_at FROM campaign_start_packages WHERE campaign_id=? AND archived_at IS NULL AND (status='published' AND visibility='campaign' OR ?=1) ORDER BY name,id",t.campaign_id,developer?1:0);  return rows.map(row=>{const definition=startDefinitionSchema.parse(JSON.parse(row.definition_json));const build={attributes:definition.character.data.attributes??{},skills:definition.character.data.skills??{},traits:definition.character.data.traits??[],background:{originChoice:(definition.character.data.background as Record<string,unknown>|undefined)?.originChoice??''}};const ids=[...(Array.isArray(build.traits)?build.traits:[]),...Object.keys(build.skills as object)];const customizable=ids.every(id=>state.entities.some(e=>e.id===id&&!e.archived&&e.visibility==='campaign'));return {customizable,...(customizable?{build}:{}),id:row.id,slug:row.slug,name:row.name,description:row.description,kind:row.kind,visibility:row.visibility,status:row.status,schemaVersion:row.schema_version,revision:row.revision,createdAt:row.created_at,updatedAt:row.updated_at,summary:this.startSummary(state,definition),...(developer?{definition}:{})};});
  }
  async createStartPackage(actor:Actor,id:string,input:unknown,key:string){
   keySchema.parse(key);
@@ -240,12 +243,13 @@ export class Game {
   const {t}=await this.access(actor,id,true),source=await this.packageFor(actor,t,packageId);
   return this.createStartPackage(actor,id,{name:input.name,slug:input.slug,description:source.description,kind:'template',visibility:input.visibility??'creator',status:input.status??'draft',definition:source.definition},key);
  }
- async start(actor:Actor,id:string,input:{revision:number;packageId?:string;definition?:unknown},key:string){
-  const parsed=z.strictObject({revision:z.number().int().positive(),packageId:z.uuid().optional(),definition:z.unknown().optional()}).refine(v=>Boolean(v.packageId)!==Boolean(v.definition),'one_start_source_required').parse(input);
+ async start(actor:Actor,id:string,input:{revision:number;packageId?:string;definition?:unknown;choices?:unknown},key:string){
+  const parsed=z.strictObject({revision:z.number().int().positive(),packageId:z.uuid().optional(),definition:z.unknown().optional(),choices:z.strictObject({occupations:z.array(z.strictObject({placeOfWork:z.string().max(1000),position:z.string().max(1000)})).max(3).optional(),attributes:z.record(z.string(),z.number()).optional(),skills:z.record(z.string(),z.number()).optional(),traits:z.array(z.uuid()).max(100).optional(),background:z.record(z.string(),z.string()).optional()}).optional()}).refine(v=>Boolean(v.packageId)!==Boolean(v.definition),'one_start_source_required').parse(input);
   return this.mutate(actor,id,parsed.revision,key,parsed,'start.character',false,async(s,eventId,seed,role)=>{
    const timeline=(await this.store.get<Timeline>('SELECT * FROM timelines WHERE id=?',id))!;
    const definition=parsed.packageId?(await this.packageFor(actor,timeline,parsed.packageId)).definition:startDefinitionSchema.parse(parsed.definition);
    if(!parsed.packageId)ensure(privileged(role),403,'freeform_start_creator_only');
+   if(parsed.choices){ensure(Boolean(parsed.packageId),400,'package_required_for_choices');definition.character.data=z.record(z.string(),z.json()).parse(applyPlayerChoices(s,definition.character.data,parsed.choices));}
    const character=this.materializeStart(s,actor,definition);
    const effects:Effect[]=[{id:randomUUID(),text:'A new playable life is ready in the roster.',observers:[character.id],type:'start.created',subjectId:character.id}];
    return {result:{characterId:character.id,packageId:parsed.packageId??null},effects,characterId:character.id,turnText:'start.character'};
@@ -462,7 +466,7 @@ export class Game {
     const aligned=(value:number,min:number,step:number)=>Math.abs((value-min)/step-Math.round((value-min)/step))<1e-9;
     for(const value of Object.values(c.attributes)){ensure(value>=s.settings.attributeScale.min&&value<=s.settings.attributeScale.max,400,'attribute_out_of_scale');ensure(aligned(value,s.settings.attributeScale.min,s.settings.attributeScale.step),400,'attribute_step_mismatch');}
     for(const [skillId,value] of Object.entries(c.skills)){const skill=data(getEntity(s,skillId,'skill'),'skill');ensure(value>=skill.scale.min&&value<=skill.scale.max,400,'skill_out_of_scale');ensure(aligned(value,skill.scale.min,skill.scale.step),400,'skill_step_mismatch');}
-    validateTraitSelection(s,c.traits);
+    validateTraitSelection(s,c.traits,undefined,!c.playable);if(c.playable&&(!previous||!previous.data.playable))validateStartingBuild(s,c);
     if(previous){
      const before=new Set(data(previous,'character').traits);
      for(const old of before){const trait=data(getEntity(s,old,'trait'),'trait');ensure(!trait.permanent&&trait.loss.mode!=='never'||seen.has(old),400,'permanent_trait');}
@@ -642,11 +646,23 @@ export class Game {
      generation:{weight:1,tags:traitGenerationTags[name]??[],requiresBackgroundTags:traitBackgroundRequirements[name]??[]}
     }}));count++;
    }
+   // Upgrade only untouched stock descriptors; keep custom mechanics and all stable IDs.
+   let upgraded=0;
+   for(const entity of s.entities.filter(e=>e.kind==='trait'&&!e.archived)){
+    const old=data(entity,'trait'),stock=stockTrait(entity.name);
+    if(!stock||old.mode!=='descriptive'||Object.keys(old.modifiers).length||old.effects.length||old.scopedCheckModifiers.length||old.combinations.length||!['A Creator-editable characterization descriptor.','An authored social-presentation descriptor.'].some(prefix=>old.description.startsWith(prefix)))continue;
+    const skill=stock.skill?s.entities.find(e=>e.kind==='skill'&&e.name===stock.skill&&!e.archived):null;
+    if(stock.skill&&!skill)continue;
+    const replacement=validateEntity({...entity,revision:entity.revision+1,data:{...old,mode:'costed',balance:stock.cost>0?'advantage':'disadvantage',cost:stock.cost,description:stock.description,modifiers:stock.modifiers,scopedCheckModifiers:skill?[{name:entity.name,value:stock.bonus,skillId:skill.id,contexts:[]}]:[] }});
+    s.entities[s.entities.indexOf(entity)]=replacement;upgraded++;
+   }
+   // Existing lives retain their legal selections; new lives also have the independent starting budget.
+   if(upgraded){const existingPlayers=s.entities.filter(e=>e.kind==='character'&&e.data.playable).map(e=>data(e,'character').traits.map(id=>data(getEntity(s,id,'trait'),'trait')));s.settings.traitBalance.maxAdvantages=Math.max(s.settings.traitBalance.maxAdvantages,...existingPlayers.map(traits=>traits.filter(t=>t.mode==='costed'&&t.cost>0).length));s.settings.traitBalance.maxDisadvantages=Math.max(s.settings.traitBalance.maxDisadvantages,...existingPlayers.map(traits=>traits.filter(t=>t.mode==='costed'&&t.cost<0).length));s.settings.traitBalance.refundPolicy='capped-current';s.settings.traitBalance.disadvantageCreditCap=Math.max(6,s.settings.traitBalance.disadvantageCreditCap);s.settings.traitBudget=Math.max(6,s.settings.traitBudget,...s.entities.filter(e=>e.kind==='character'&&e.data.playable).map(e=>Math.max(0,startingBudget(e.data,s.entities,s.settings.attributeScale).traits)));}
    const addTemplate=(name:string,data:Record<string,unknown>)=>{if(s.entities.some(entity=>entity.kind==='traitTemplate'&&entity.name===name))return;s.entities.push(validateEntity({id:randomUUID(),kind:'traitTemplate',name,visibility:'creator',data}));count++;};
    const tagCaps={stature:1,build:1,strength:1,coordination:1,'trust-style':1,'empathy-style':1,'truth-style':1,'social-class':1};
    addTemplate('Grounded civilian traits',{description:'Weighted, contradiction-checked NPC characterization without specialized police, military, firearms, or criminal background.',backgroundTags:[],categoryWeights:{physical:2,personality:3,experience:1,social:2},minTraits:4,maxTraits:7,budget:0,categoryCaps:{physical:3,personality:3,experience:1,social:2},tagCaps});
    addTemplate('Police-background traits',{description:'Weighted NPC characterization for an explicitly authored police background.',backgroundTags:['police','firearms'],categoryWeights:{physical:2,personality:3,experience:2,social:2},requiredTraitIds:[traitIds.get('Police training')!],minTraits:5,maxTraits:8,budget:0,categoryCaps:{physical:3,personality:3,experience:2,social:2},tagCaps});
-   return {result:{created:count}};
+   return {result:{created:count,upgraded}};
   }));
  }
  async generateNpcTraits(actor:Actor,id:string,input:{revision:number;characterId:string;templateId:string;seed:string},key:string){
