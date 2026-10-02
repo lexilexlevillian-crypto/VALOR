@@ -12,6 +12,7 @@ import {injuryRate,needsRate} from './policy.ts';
 import {resolveTraitEffects,socialPresentationDescriptors} from './traits.ts';
 import {applyRelationshipMovement,decayReputations,recordRelationshipHistory,relationshipBehaviorSignal} from './social.ts';
 import {carriedBy,itemPossessor} from './items.ts';
+import {creditCharacter,debitBusiness,jobEligible,postTransaction} from './economy.ts';
 export type Effect={id:string;text:string;observers:string[];type:string;subjectId:string};
 export const simulationTiers={
  active:{
@@ -131,6 +132,16 @@ function advanceStep(s:State,minutes:number,eventId:string,effects:Effect[],play
  }
  s.clock=new Date(end).toISOString();
  decayReputations(s);
+ // Authored obligations advance on clock boundaries. No invisible need penalty or automatic payment is invented.
+ for(const bill of s.entities.filter(entity=>entity.kind==='bill'&&!entity.archived)){
+  const record=data(bill,'bill');if(['paid','waived','overdue'].includes(record.status)||Date.parse(record.dueAt)>end)continue;
+  record.status='overdue';if(record.lateFeeCents>0)record.outstandingCents+=record.lateFeeCents;bill.data=record as Entity['data'];
+ }
+ for(const home of s.entities.filter(entity=>entity.kind==='housing'&&!entity.archived)){
+  const housing=data(home,'housing');if(housing.status!=='current'||Date.parse(housing.dueAt)>end)continue;housing.status='late';housing.arrearsCents=Math.max(housing.arrearsCents,housing.rentCents);home.data=housing as Entity['data'];
+ }
+ const shifted=s.entities.filter(entity=>entity.kind==='job'&&!entity.archived&&entity.data.status==='active'&&entity.data.shift);
+ if(shifted.length)for(let at=start+60000;at<=end;at+=60000){const parts=timeParts(new Date(at).toISOString(),s.settings.timezone);for(const entity of shifted){const job=data(entity,'job'),shift=job.shift;if(!shift||parts.minute!==shift.endMinute||!shift.days.includes(parts.day)||job.attendance.some(row=>row.date===parts.date))continue;job.attendance.push({id:deterministicUuid(entity.id+'|absence|'+parts.date),date:parts.date,scheduledAt:new Date(at).toISOString(),startedAt:null,endedAt:null,status:'absent',minutes:0,wageCents:0,tipCents:0,transactionId:null,eventId,note:job.absencePolicy.description});job.warnings++;if(job.absencePolicy.terminateAfter>0&&job.warnings>=job.absencePolicy.terminateAfter)job.status='terminated';else if(job.absencePolicy.warningAfter>0&&job.warnings>=job.absencePolicy.warningAfter)job.status='suspended';entity.data=job as Entity['data'];}}
  for(const relation of s.entities.filter(entity=>entity.kind==='relationship'&&!entity.archived))expireConsentRequests(s,relation);
  const weather=s.settings.weatherSchedule.filter(w=>w.status==='actual'&&Date.parse(w.at)<=end).sort((a,b)=>a.at.localeCompare(b.at)).at(-1);
  if(weather)s.settings.weather=weather.weather;
@@ -159,7 +170,7 @@ function advanceStep(s:State,minutes:number,eventId:string,effects:Effect[],play
    d.intoxication=Math.max(0,d.intoxication-rules.soberingPerHour*minutes/60);
    if(d.withdrawalEnabled&&d.dependence>0&&d.lastDoseAt)d.withdrawal=Math.min(100,d.withdrawal+rules.withdrawalPerDay*minutes/1440*d.dependence/100);
   }
-  if(s.settings.needs&&needsMultiplier>0){
+  if(needsMultiplier>0){
    const rate=(need:'hunger'|'thirst'|'fatigue'|'hygiene')=>{const resolution=resolveTraitEffects(s,character.id,'need-rate',{need,context:'time-passage'});traitTrace(d,resolution.applied,need,'need rate applied',s.clock);const skillRate=need==='fatigue'?Math.min(0,...s.entities.filter(e=>e.kind==='skill'&&!e.archived&&Object.hasOwn(d.skills,e.id)).map(e=>skillStatus(e,d.skills[e.id]!).fatigueRate)):0;return Math.max(0,1+skillRate+resolution.applied.reduce((sum,effect)=>sum+effect.value,0));};
    d.hunger=Math.min(100,d.hunger+minutes/60*needsMultiplier*rate('hunger'));d.thirst=Math.min(100,d.thirst+minutes/30*needsMultiplier*rate('thirst'));d.fatigue=Math.min(100,d.fatigue+minutes/120*needsMultiplier*rate('fatigue'));d.hygiene=Math.max(0,d.hygiene-minutes/240*needsMultiplier*rate('hygiene'));
   }
@@ -291,8 +302,10 @@ function advanceStep(s:State,minutes:number,eventId:string,effects:Effect[],play
    if(plan.type==='work'&&target.kind==='job'){
     const job=data(target,'job'),employer=getEntity(s,job.employerId,'business'),business=data(employer,'business');
     const elapsed=Math.floor(due*interval/job.minutesPerShift)*job.minutesPerShift;
-    const pay=Math.floor(job.hourlyCents*elapsed/60);
-    if(job.employeeId===npc.id&&job.locationId===d.locationId&&isOpen(business.hours,s,business.closedWeather)&&pay>0&&business.cash>=pay){business.cash-=pay;d.cash+=pay;job.lastWorked=s.clock;target.data=job as Entity['data'];employer.data=business as Entity['data'];performed=true;activityOutcome='worked-shift';activitySummary='Worked '+elapsed+' minutes and received authored wages.';}
+    const pay=Math.floor(job.hourlyCents*elapsed/60),employerCanPay=business.settlementAccountId?(()=>{const account=data(getEntity(s,business.settlementAccountId!,'account'),'account');return account.status==='open'&&account.balanceCents-account.pendingCents>=pay;})():business.cash>=pay,payAccount=job.wagePayment==='account'&&job.payAccountId?data(getEntity(s,job.payAccountId,'account'),'account'):null,employeeCanReceive=job.wagePayment==='cash'||!!payAccount&&payAccount.status==='open'&&(payAccount.ownerId===npc.id||payAccount.authorizedUserIds.includes(npc.id));
+    if(job.employeeId===npc.id&&job.status==='active'&&jobEligible(s,job,npc.id)&&job.locationId===d.locationId&&isOpen(business.hours,s,business.closedWeather)&&pay>0&&employerCanPay&&employeeCanReceive){
+     const employerAccount=debitBusiness(s,employer,pay),employeeAccount=job.wagePayment==='account'?creditCharacter(s,npc.id,pay,'account',job.payAccountId):null;if(job.wagePayment==='cash')d.cash+=pay;const transaction=postTransaction(s,eventId,{ownerId:npc.id,accountId:employeeAccount,sourceAccountId:employerAccount,destinationAccountId:employeeAccount,direction:'credit',category:'wage',amountCents:pay,counterpartyIds:[employer.id],relatedId:target.id,reason:'Wages from '+employer.name,source:'npc-simulation'}),parts=timeParts(s.clock,s.settings.timezone),linkedEventId=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(eventId)?eventId:null;job.attendance.push({id:deterministicUuid(target.id+'|npc-work|'+s.clock+'|'+job.attendance.length),date:parts.date,scheduledAt:s.clock,startedAt:s.clock,endedAt:new Date(Date.parse(s.clock)+elapsed*60000).toISOString(),status:'present',minutes:elapsed,wageCents:pay,tipCents:0,transactionId:transaction.id,eventId:linkedEventId,note:'NPC authored work plan'});job.completedShifts++;job.lastWorked=s.clock;target.data=job as Entity['data'];performed=true;activityOutcome='worked-shift';activitySummary='Worked '+elapsed+' minutes and received authored wages.';
+    }
    }
    if(plan.type==='socialize'&&target.kind==='character'&&target.data.locationId===d.locationId&&target.id!==npc.id){
     let relation=s.entities.find(e=>e.kind==='relationship'&&!e.archived&&e.data.fromId===npc.id&&e.data.toId===target.id);

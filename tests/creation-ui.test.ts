@@ -12,7 +12,7 @@ test('Creation Studio preserves exact ratings, hidden notes and jobs across them
  const f=await fixture(),browser=await chromium.launch({headless:true});
  const context=await browser.newContext({viewport:{width:1536,height:1100},reducedMotion:'reduce'}),page=await context.newPage(),errors:string[]=[];page.on('pageerror',error=>errors.push(error.message));
  try{
-  const navAction=async(name:string)=>{const control=page.locator('.rail').getByRole('button',{name,exact:true});if(!await control.isVisible())await page.getByRole('button',{name:'Toggle navigation'}).click();await control.click();};
+  const navAction=async(name:string)=>{const selector='.rail button';if(!await page.locator('.rail').getByRole('button',{name,exact:true}).isVisible())await page.getByRole('button',{name:'Toggle navigation'}).click();await page.waitForFunction(({selector,name})=>[...document.querySelectorAll(selector)].some(node=>node.textContent?.trim()===name),{selector,name});await page.evaluate(({selector,name})=>{const node=[...document.querySelectorAll(selector)].find(node=>node.textContent?.trim()===name) as HTMLButtonElement|undefined;if(!node)throw new Error('navigation unavailable');node.click();},{selector,name});};
   const game=new Game(f.store),timeline=await game.initialize(f.creator,f.campaign.id),id=randomUUID(),skillId=randomUUID();
   await game.configure(f.creator,timeline.id,1,{attributeScale:{min:-10,max:200,step:.25}},key());
   await game.edit(f.creator,timeline.id,{revision:2,entity:validateEntity({id:skillId,kind:'skill',name:'Driving',visibility:'campaign',data:{category:'skill',scale:{min:0,max:30,step:.25,unit:'rating'}}})},key());

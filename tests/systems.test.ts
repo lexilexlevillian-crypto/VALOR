@@ -98,7 +98,7 @@ test('authored cooking, hygiene, weather and health rules persist without defaul
   await f.edit(f.pc,{hygiene:10,dependence:100,lastDoseAt:at,intoxication:20});
   const wound=await f.add('injury','Test wound',{characterId:f.pc,category:'cut',bodyPart:'arm',severity:10,startedAt:at});
   await f.turn({type:'hygiene',operation:'wash',itemId:null});await f.turn({type:'wait',minutes:60});
-  const state=await f.state();assert.equal(state.settings.weather,'rain');assert.equal(state.entities.find(e=>e.id===f.pc)!.data.hygiene,30);assert.ok(Number(state.entities.find(e=>e.id===wound)!.data.infection)>0);
+  const state=await f.state();assert.equal(state.settings.weather,'rain');assert.equal(state.entities.find(e=>e.id===f.pc)!.data.hygiene,10);assert.ok(Number(state.entities.find(e=>e.id===wound)!.data.infection)>0);
  }finally{await f.close();}
 });
 test('compound Watchers arbitrate conflicts and do not expose hidden traces',async()=>{

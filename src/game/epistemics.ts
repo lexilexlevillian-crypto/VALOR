@@ -6,6 +6,7 @@ import {calendarView,hoursOpen,weatherView} from './calendar.ts';
 import {carriedBy,itemPossessor} from './items.ts';
 import {transitOption,vehicleHasPermission} from './vehicle.ts';
 import {cosine,embedText} from './embedding.ts';
+import {needsEnabled,needsPresentation} from './policy.ts';
 const unique=(values:string[]=[])=>([...new Set(values)].sort());
 const within=(now:number,from?:string|null,until?:string|null)=>!(from&&Date.parse(from)>now)&&!(until&&Date.parse(until)<=now);
 const audienceAllows=(s:State,observerId:string,audience:string[]=[])=>{if(!audience.length||audience.includes('campaign')||audience.includes(observerId))return true;const observer=data(getEntity(s,observerId,'character'),'character');return observer.factionIds.some(id=>audience.includes(id));};
@@ -38,6 +39,10 @@ export function visible(s:State,e:Entity,observerId:string):boolean{
  if(e.visibility==='creator')return false;
  if(e.kind==='location'&&(e.data.discoverable||(e.data.discoveredByIds as string[]??[]).includes(observerId)||(e.data.visitedByIds as string[]??[]).includes(observerId)))return true;
  if(['transition','production','socialRule'].includes(e.kind))return false;
+ if(e.kind==='account'){const account=data(e,'account');return account.ownerId===observerId||account.authorizedUserIds.includes(observerId);}
+ if(e.kind==='transaction'){const transaction=data(e,'transaction');return transaction.ownerId===observerId||transaction.counterpartyIds.includes(observerId);}
+ if(e.kind==='receipt'){const receipt=data(e,'receipt');return receipt.ownerId===observerId||receipt.buyerId===observerId||receipt.sellerId===observerId;}
+ if(e.kind==='bill'){const bill=data(e,'bill');return bill.debtorId===observerId||bill.creditorId===observerId;}
  if(e.kind==='dispatch')return e.data.requesterId===observerId||e.data.responderId===observerId||e.data.patientId===observerId;
  if(e.kind==='estate')return e.data.executorId===observerId||e.data.beneficiaryId===observerId;
  if(e.kind==='judgment')return e.data.characterId===observerId&&!!e.data.appliedAt;
@@ -119,7 +124,7 @@ export function project(s:State,e:Entity,observerId:string):Entity {
   }
   if(e.kind==='location')copy.data.exits=(copy.data.exits as {to:string;interruption?:unknown}[]).filter(exit=>s.entities.some(target=>target.id===exit.to&&visible(s,target,observerId))).map(({interruption,...route})=>route) as never;
  }
- if(e.kind==='character'&&e.id===observerId){const character=data(e,'character'),band=(value:number)=>value<25?'low':value<50?'moderate':value<75?'high':'severe';copy.data.healthSummary={condition:character.condition,blood:character.blood>75?'stable':character.blood>25?'reduced':'critical',pain:band(character.pain),fatigue:band(character.fatigue),intoxication:band(character.intoxication),withdrawal:character.withdrawalEnabled?band(character.withdrawal):'not-enabled',activeEffects:character.activeSubstances.filter(exposure=>Date.parse(exposure.expiresAt)>Date.parse(s.clock)).map(exposure=>({name:exposure.name,kind:exposure.kind,expiresAt:exposure.expiresAt}))};for(const key of ['blood','pain','intoxication','withdrawal','withdrawalEnabled','dependence','lastDoseAt','activeSubstances','restUntil'])delete copy.data[key];}
+ if(e.kind==='character'&&e.id===observerId){const character=data(e,'character'),band=(value:number)=>value<25?'low':value<50?'moderate':value<75?'high':'severe',needs=needsPresentation(s);copy.data.healthSummary={condition:character.condition,blood:character.blood>75?'stable':character.blood>25?'reduced':'critical',pain:band(character.pain),fatigue:band(character.fatigue),intoxication:band(character.intoxication),withdrawal:character.withdrawalEnabled?band(character.withdrawal):'not-enabled',activeEffects:character.activeSubstances.filter(exposure=>Date.parse(exposure.expiresAt)>Date.parse(s.clock)).map(exposure=>({name:exposure.name,kind:exposure.kind,expiresAt:exposure.expiresAt}))};if(needsEnabled(s)&&needs.ui==='summary'){copy.data.needsSummary={hunger:band(character.hunger),thirst:band(character.thirst),hygiene:character.hygiene>75?'clean':character.hygiene>25?'needs-attention':'poor'};for(const key of ['hunger','thirst','hygiene'])delete copy.data[key];}else if(!needsEnabled(s)||needs.ui==='hidden')for(const key of ['hunger','thirst','hygiene','needsContext'])delete copy.data[key];for(const key of ['blood','pain','intoxication','withdrawal','withdrawalEnabled','dependence','lastDoseAt','activeSubstances','restUntil'])delete copy.data[key];}
  const sections=(copy.data.sections??[]) as {id:string;parentId:string|null;visibility?:string;archived?:boolean;fields:{visibility:string;archived?:boolean}[]}[];
  // Custom section containers reveal only those fields explicitly allowed to this observer.
  const canSee=(v:string|undefined)=>v==='campaign'||v==='owner'&&own||v==='knowledge'&&knows(s,observerId,e.id);
@@ -131,7 +136,7 @@ export function project(s:State,e:Entity,observerId:string):Entity {
 export function observerView(s:State,observerId:string){
  const entities=s.entities.filter(e=>visible(s,e,observerId)).map(e=>project(s,e,observerId)),now=Date.parse(s.clock);
  const factIds=new Set(s.knowledge.filter(k=>k.observerId===observerId&&(!k.expiresAt||Date.parse(k.expiresAt)>now)).map(k=>k.factId));
- return {clock:s.clock,calendar:calendarView(s),weather:weatherView(s),locationBrowser:locationBrowser(s,observerId),settings:{needs:s.settings.needs,fuel:s.settings.fuel,romance:s.settings.romance,intimacy:s.settings.intimacy,intensity:s.settings.intensity,weather:s.settings.weather,rulesConfigured:s.settings.rules!==null},
+ const needs=needsPresentation(s);return {clock:s.clock,calendar:calendarView(s),weather:weatherView(s),locationBrowser:locationBrowser(s,observerId),settings:{needs:needsEnabled(s),needsPolicy:{intensity:s.settings.campaign?.needsIntensity??(s.settings.needs?'grounded':'off'),...needs},fuel:s.settings.fuel,romance:s.settings.romance,intimacy:s.settings.intimacy,intensity:s.settings.intensity,weather:s.settings.weather,rulesConfigured:s.settings.rules!==null},
  entities,facts:s.facts.filter(f=>factIds.has(f.id)&&!f.retiredAt&&within(now,f.validFrom,f.validUntil)&&audienceAllows(s,observerId,f.audience)),
  beliefs:s.beliefs.filter(b=>b.observerId===observerId&&within(now,b.validFrom,b.validUntil)&&audienceAllows(s,observerId,b.audience)),
  memories:s.memories.filter(m=>m.observerId===observerId&&(!m.expiresAt||Date.parse(m.expiresAt)>now)).map(m=>({...m,currentSalience:memorySalience(s,m)}))};

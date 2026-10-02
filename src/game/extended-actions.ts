@@ -3,7 +3,7 @@ import type {Action,Data,Entity,State} from './model.ts';
 import {visible,fact} from './epistemics.ts';
 import {add,emit,isOpen} from './simulation.ts';
 import type {Effect} from './simulation.ts';
-import {lawResponseMinutes} from './policy.ts';
+import {lawResponseMinutes,needsEnabled} from './policy.ts';
 import {acceptsCommunication,communicationDelayMinutes,contactFor,conversationThread,phonePowered,recipientPhone,requirePhone,touchContact} from './phone.ts';
 import {carriedBy} from './items.ts';
 const requireCondition=(ok:unknown,code:string)=>{if(!ok)throw new Error(code);};
@@ -105,9 +105,9 @@ export function extendedAction(s:State,actorId:string,pc:Data<'character'>,actio
    const place=pc.locationId?getEntity(s,pc.locationId,'location'):null;requireCondition(place,'location_required');
    const rule=s.settings.dailyLife!;
    requireCondition((place!.data.tags as string[]).includes(action.operation==='wash'?'washing-facilities':'laundry-facilities'),'facilities_required');
-   if(action.operation==='wash')pc.hygiene=Math.min(100,pc.hygiene+rule.hygieneGain);
+   if(action.operation==='wash'){if(needsEnabled(s))pc.hygiene=Math.min(100,pc.hygiene+rule.hygieneGain);}
    else{const item=getEntity(s,action.itemId??'','item');requireCondition(carriedBy(s,item,actorId)&&item.data.category==='clothing','clothing_required');item.data.dirty=Math.max(0,Number(item.data.dirty??0)-rule.hygieneGain);}
-   output('The selected routine is completed.');return rule.minutes;
+   output(action.operation==='wash'&&!needsEnabled(s)?'The routine is completed; daily-need meters are disabled for this campaign.':'The selected routine is completed.');return rule.minutes;
   }
   case 'pay-bail':{
    const file=getEntity(s,action.caseId,'case'),c=data(file,'case');

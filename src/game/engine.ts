@@ -480,6 +480,7 @@ export class Game {
  }
  private async applyEntity(id:string,s:State,entity:Entity){
    const previous=s.entities.find(e=>e.id===entity.id);ensure(!previous||previous.kind===entity.kind,400,'entity_kind_immutable');
+   if(previous&&['transaction','receipt'].includes(previous.kind))ensure(checksum(previous)===checksum(entity),409,'immutable_financial_record');
    if(entity.kind==='character'&&entity.data.controllerUserId)ensure((await this.store.get('SELECT user_id FROM memberships WHERE campaign_id=(SELECT campaign_id FROM timelines WHERE id=?) AND user_id=?',id,String(entity.data.controllerUserId))),400,'controller_not_member');
    if(entity.kind==='character'){
     const c=data(entity,'character');prepareAppearance(s,c,previous?data(previous,'character'):undefined);entity.data=c;if(!previous){applyStartingGrants(c,s.entities);entity.data=c;}const seen=new Set(c.traits);ensure(seen.size===c.traits.length,400,'duplicate_traits');
