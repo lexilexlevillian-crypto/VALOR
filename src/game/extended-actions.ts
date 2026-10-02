@@ -3,7 +3,6 @@ import type {Action,Data,Entity,State} from './model.ts';
 import {visible,fact} from './epistemics.ts';
 import {add,emit,isOpen} from './simulation.ts';
 import type {Effect} from './simulation.ts';
-import {vehicleOperational} from './vehicle.ts';
 import {lawResponseMinutes} from './policy.ts';
 import {acceptsCommunication,communicationDelayMinutes,contactFor,conversationThread,phonePowered,recipientPhone,requirePhone,touchContact} from './phone.ts';
 import {carriedBy} from './items.ts';
@@ -93,17 +92,6 @@ export function extendedAction(s:State,actorId:string,pc:Data<'character'>,actio
    if(action.operation==='restore'){m.deletedByIds=m.deletedByIds.filter(id=>id!==actorId);m.hiddenFromIds=m.hiddenFromIds.filter(id=>id!==actorId);}else if(action.operation==='delete'){if(!m.deletedByIds.includes(actorId))m.deletedByIds.push(actorId);}else if(!m.hiddenFromIds.includes(actorId))m.hiddenFromIds.push(actorId);
    message.data=m as Entity['data'];output(action.operation==='restore'?'Message restored.':'Message hidden from this phone view.');return 0;
   }
-  case 'vehicle-access':{
-   const vehicle=getEntity(s,action.vehicleId,'vehicle'),v=data(vehicle,'vehicle');
-   requireCondition(v.locationId===pc.locationId&&pc.locationId&&visible(s,vehicle,actorId),'vehicle_not_present');
-   const access=v.ownerId===actorId||!!v.keyId&&s.entities.some(e=>e.id===v.keyId&&!e.archived&&e.kind==='item'&&carriedBy(s,e,actorId));
-   if(action.operation==='leave'){requireCondition(v.occupants.includes(actorId),'not_in_vehicle');v.occupants=v.occupants.filter(id=>id!==actorId);}
-   else{requireCondition(access,'vehicle_access_denied');
-    if(action.operation==='enter'){requireCondition(!v.locked&&vehicleOperational(v),'vehicle_unavailable');requireCondition(!v.occupants.includes(actorId)&&v.occupants.length<v.capacity,'vehicle_capacity');requireCondition(!s.entities.some(e=>e.kind==='vehicle'&&e.id!==vehicle.id&&(e.data.occupants as string[]).includes(actorId)),'already_in_vehicle');v.occupants.push(actorId);}
-    else v.locked=action.operation==='lock';
-   }
-   vehicle.data=v as Entity['data'];output('Vehicle access recorded: '+action.operation+'.');return 0;
-  }
   case 'cook':{
    const recipe=getEntity(s,action.recipeId,'recipe'),r=data(recipe,'recipe');requireCondition(visible(s,recipe,actorId),'recipe_unknown');
    requireCondition(!r.locationId||r.locationId===pc.locationId,'recipe_location_required');
@@ -130,14 +118,14 @@ export function extendedAction(s:State,actorId:string,pc:Data<'character'>,actio
   }
   case 'clinical-care':case 'forensic-test':{
    const service=getEntity(s,action.serviceId,'service'),rule=data(service,'service'),business=getEntity(s,rule.businessId,'business'),b=data(business,'business');
-   requireCondition(visible(s,service,actorId)&&b.locationId===pc.locationId&&isOpen(b.hours,s),'service_unavailable');
+   requireCondition(visible(s,service,actorId)&&b.locationId===pc.locationId&&isOpen(b.hours,s,b.closedWeather),'service_unavailable');
    requireCondition(pc.cash>=rule.costCents,'insufficient_funds');
    if(action.type==='clinical-care'){
     requireCondition(rule.category==='clinical','wrong_service');const injury=getEntity(s,action.injuryId,'injury'),w=data(injury,'injury');
     requireCondition(w.characterId===actorId&&!w.permanent,'clinical_treatment_unavailable');
     requireCondition(rule.medicineId,'authored_medicine_required');const medicine=getEntity(s,rule.medicineId!,'item'),m=data(medicine,'item');
     requireCondition(m.category==='medicine'&&m.ownerId===business.id&&m.quantity>0,'clinic_supply_unavailable');
-    medicine.data.quantity=m.quantity-1;w.treated=true;w.bleeding=0;w.infection=0;w.severity=Math.max(0,w.severity-rule.severityReduction);injury.data=w as Entity['data'];
+    requireCondition(rule.treatmentQuality>=w.treatmentRequirements.minimumQuality,'clinical_quality_insufficient');medicine.data.quantity=m.quantity-1;w.treated=true;w.stabilized=true;w.bleeding=0;w.infection=Math.max(0,w.infection-rule.severityReduction);w.severity=Math.max(0,w.severity-rule.severityReduction);w.course.status=w.severity===0?'resolved':'recovering';if(w.severity===0)w.course.resolvedAt=s.clock;w.treatments.push({id:crypto.randomUUID(),at:s.clock,eventId,providerId:actorId,method:'clinical',itemId:medicine.id,serviceId:service.id,quality:rule.treatmentQuality,outcome:w.severity===0?'improved':'stabilized',minutes:rule.minutes,note:service.name});if(!w.knownByIds.includes(actorId))w.knownByIds.push(actorId);if(!w.diagnosedByIds.includes(actorId))w.diagnosedByIds.push(actorId);w.assessments.push({id:crypto.randomUUID(),at:s.clock,eventId,assessorId:actorId,method:'clinical',severityBand:w.severity<25?'minor':w.severity<50?'moderate':w.severity<75?'serious':'critical',diagnosis:w.category+' · '+w.bodyPart,confidence:rule.treatmentQuality,sharedWithIds:[actorId]});injury.data=w as Entity['data'];
     if(w.severity===0)injury.archived=true;
     fact(s,injury.id,'clinical-treatment',{serviceId:service.id,costCents:rule.costCents},eventId,[actorId]);output('Authored clinical treatment completed; continuing recovery follows campaign rules.');
    }else{

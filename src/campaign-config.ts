@@ -11,7 +11,7 @@ const calendar=z.strictObject({
 });
 const lawEnforcement=z.strictObject({profileId:id.nullable(),posture:z.enum(['authored','lax','balanced','strict']),variance:jsonMap});
 const technology=z.strictObject({era:z.string().trim().min(1).max(80),features:z.record(z.string().max(80),z.boolean()),serviceVariability:z.enum(['fixed','authored','variable'])});
-const saveBehavior=z.strictObject({autosave:z.enum(['safe-commit','manual-only','off']),branchOnDeath:z.boolean(),maxManualSaves:z.number().int().min(1).max(10000)});
+const saveBehavior=z.strictObject({autosave:z.enum(['safe-commit','manual-only','off']),branchOnDeath:z.boolean(),postDeath:z.enum(['load-or-branch','roster','observer']).default('load-or-branch'),maxManualSaves:z.number().int().min(1).max(10000)});
 const uiDefaults=z.strictObject({density:z.enum(['compact','comfortable','spacious']),startView:z.string().trim().min(1).max(80),mapMode:z.enum(['list','graphical','hybrid'])});
 export const relationshipSafetySchema=z.strictObject({minimumRomanceAge:z.number().int().min(18).max(100),minimumIntimacyAge:z.number().int().min(18).max(100),consentWindowMinutes:z.number().int().min(1).max(1440),intoxicationBlocksConsentAt:z.number().min(1).max(100),allowNpcInitiative:z.boolean()}).default({minimumRomanceAge:18,minimumIntimacyAge:18,consentWindowMinutes:30,intoxicationBlocksConsentAt:50,allowNpcInitiative:true});
 
@@ -69,7 +69,7 @@ export function defaultCampaignConfig(startAt:string,timezone:string):CampaignCo
   startAt,timezone,calendar:{id:'gregorian',daysPerWeek:7,firstDayOfWeek:0,months:[]},enabledSystems:{},difficulty:'grounded',
   contentRating:'mature',matureContent:'fade-to-black',relationshipSafety:{minimumRomanceAge:18,minimumIntimacyAge:18,consentWindowMinutes:30,intoxicationBlocksConsentAt:50,allowNpcInitiative:true},needsIntensity:'off',injuryIntensity:'grounded',
   lawEnforcement:{profileId:null,posture:'authored',variance:{}},technology:{era:'authored',features:{},serviceVariability:'authored'},
-  travelAbstraction:'route',saveBehavior:{autosave:'safe-commit',branchOnDeath:true,maxManualSaves:100},
+  travelAbstraction:'route',saveBehavior:{autosave:'safe-commit',branchOnDeath:true,postDeath:'load-or-branch',maxManualSaves:100},
   uiDefaults:{density:'compact',startView:'chronicle',mapMode:'list'}
  });
 }

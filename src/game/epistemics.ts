@@ -1,9 +1,10 @@
 import {canonSources} from './canon.ts';
 import {randomUUID} from 'node:crypto';
 import {data,getEntity} from './model.ts';
-import type {Entity,State} from './model.ts';
-import {calendarView} from './calendar.ts';
+import type {Data,Entity,State} from './model.ts';
+import {calendarView,hoursOpen,weatherView} from './calendar.ts';
 import {carriedBy,itemPossessor} from './items.ts';
+import {transitOption,vehicleHasPermission} from './vehicle.ts';
 import {cosine,embedText} from './embedding.ts';
 const unique=(values:string[]=[])=>([...new Set(values)].sort());
 const within=(now:number,from?:string|null,until?:string|null)=>!(from&&Date.parse(from)>now)&&!(until&&Date.parse(until)<=now);
@@ -35,6 +36,7 @@ export function visible(s:State,e:Entity,observerId:string):boolean{
  if(e.id===observerId)return true;
  if(e.kind==='location'&&e.id===observer.locationId)return true;
  if(e.visibility==='creator')return false;
+ if(e.kind==='location'&&(e.data.discoverable||(e.data.discoveredByIds as string[]??[]).includes(observerId)||(e.data.visitedByIds as string[]??[]).includes(observerId)))return true;
  if(['transition','production','socialRule'].includes(e.kind))return false;
  if(e.kind==='dispatch')return e.data.requesterId===observerId||e.data.responderId===observerId||e.data.patientId===observerId;
  if(e.kind==='estate')return e.data.executorId===observerId||e.data.beneficiaryId===observerId;
@@ -43,7 +45,10 @@ export function visible(s:State,e:Entity,observerId:string):boolean{
  if(e.kind==='socialPost'){const post=data(e,'socialPost');if(post.deleted||post.hiddenFromIds.includes(observerId)||post.source==='simulation'&&!post.validated)return false;const author=data(getEntity(s,post.authorId,'character'),'character'),hasFeed=s.entities.some(candidate=>{if(candidate.kind!=='item'||candidate.archived)return false;const item=data(candidate,'item');return item.category==='phone'&&item.phoneState==='active'&&item.condition>0&&!item.locked&&(!item.batteryRequired||item.battery>0)&&(carriedBy(s,candidate,observerId)||item.authorizedUserIds.includes(observerId))&&item.phoneApps.social;});if(!hasFeed)return false;if(post.authorId===observerId)return true;if(post.privacy==='public')return true;if(post.privacy==='friends')return author.socialConnections.friendIds.includes(observerId);if(post.privacy==='followers')return author.socialConnections.followerIds.includes(observerId);if(post.privacy==='custom')return post.allowedViewerIds.includes(observerId);return false;}
  if(e.kind==='relationship'){const d=data(e,'relationship'),disclosure=d.secret?'secret':d.disclosure;return socialAllows(disclosure,d.knownByIds,observerId,[d.fromId,d.toId]);}
  if(e.kind==='reputation'||e.kind==='obligation')return false;
- if(e.kind==='injury')return e.data.characterId===observerId;
+ if(e.kind==='injury'){const injury=data(e,'injury'),patient=data(getEntity(s,injury.characterId,'character'),'character');return injury.characterId===observerId||injury.knownByIds.includes(observerId)||injury.diagnosedByIds.includes(observerId)||injury.healthVisibility==='public'||injury.healthVisibility==='symptoms'&&patient.locationId===observer.locationId&&injury.symptoms.some(symptom=>symptom.visibility==='observable');}
+ if(e.kind==='deathRecord'){const death=data(e,'deathRecord');return death.characterId===observerId||death.witnessIds.includes(observerId)||death.identifiedByIds.includes(observerId)||death.notifiedIds.includes(observerId);}
+ if(e.kind==='combat'){const combat=data(e,'combat');return combat.participants.includes(observerId)||!!combat.locationId&&combat.locationId===observer.locationId;}
+ if(e.kind==='chase'){const chase=data(e,'chase');return chase.participants.includes(observerId)||chase.witnessIds.includes(observerId)||chase.status==='active'&&chase.locationId===observer.locationId;}
  if(e.kind==='case')return e.data.investigatorId===observerId||(e.data.suspectIds as string[]).includes(observerId)&&['jail','bail','charged','trial','sentenced','probation','parole'].includes(String(e.data.stage));
  if(e.kind==='evidence')return (e.data.discoveredBy as string[]).includes(observerId);
  if(e.kind==='watcher')return false;
@@ -52,7 +57,7 @@ export function visible(s:State,e:Entity,observerId:string):boolean{
   if(e.data.category==='phone'&&(e.data.authorizedUserIds as string[]??[]).includes(observerId))return true;
   if(carriedBy(s,e,observerId))return true;
   if(e.data.concealed&&!(e.data.discoveredByIds as string[]??[]).includes(observerId))return false;
-  if(e.data.containerId){const container=s.entities.find(c=>c.id===e.data.containerId&&!c.archived);if(container?.kind==='vehicle'&&(container.data.locationId!==observer.locationId||container.data.ownerId!==observerId&&!s.entities.some(key=>key.id===container.data.keyId&&!key.archived&&key.data.ownerId===observerId)))return false;return !!container&&!container.data.locked&&visible(s,container,observerId);}
+  if(e.data.containerId){const container=s.entities.find(c=>c.id===e.data.containerId&&!c.archived);if(container?.kind==='vehicle'&&(container.data.locationId!==observer.locationId||!vehicleHasPermission(s,container,observerId,'trunk')))return false;return !!container&&!container.data.locked&&visible(s,container,observerId);}
   if(e.data.locationId===observer.locationId&&observer.locationId!==null)return true;
   const possessor=itemPossessor(s,e);return s.entities.some(b=>!b.archived&&b.data.locationId===observer.locationId&&observer.locationId!==null&&b.id===(possessor??e.data.ownerId)&&(b.kind==='business'&&(b.data.stock as string[]).includes(e.id)||b.kind==='character'&&e.data.equipped&&visible(s,b,observerId)));
  }
@@ -65,8 +70,16 @@ export function project(s:State,e:Entity,observerId:string):Entity {
  if(e.kind==='media')delete copy.data.body;
  copy.data.mediaIds=((e.data.mediaIds??[]) as string[]).filter(id=>{const media=s.entities.find(e=>e.id===id&&e.kind==='media');return media&&visible(s,media,observerId);});
  if(e.kind==='case'&&e.data.investigatorId!==observerId){copy.name='Case notice';copy.data={stage:e.data.stage!,bailAmountCents:e.data.bailAmountCents??null};return copy;}
- const own=e.id===observerId||e.kind==='item'&&carriedBy(s,e,observerId)||e.data.ownerId===observerId||e.kind==='item'&&e.data.category==='phone'&&(e.data.authorizedUserIds as string[]??[]).includes(observerId);
+ if(e.kind==='injury'){
+  const injury=data(e,'injury'),medical=injury.diagnosedByIds.includes(observerId),patient=injury.characterId===observerId,assessment=[...injury.assessments].reverse().find(row=>row.sharedWithIds.includes(observerId)||row.assessorId===observerId),band=(value:number)=>value<25?'low':value<50?'moderate':value<75?'high':'severe';
+  copy.data={healthSchemaVersion:injury.healthSchemaVersion,characterId:injury.characterId,bodyPart:injury.bodyPart,bodyRegion:injury.bodyRegion,side:injury.side,category:medical||assessment||injury.healthVisibility==='public'?injury.category:'condition',symptoms:injury.symptoms.filter(symptom=>medical||patient&&symptom.visibility!=='medical'||!patient&&symptom.visibility==='observable').map(symptom=>({name:symptom.name,intensity:band(symptom.severity),description:symptom.description})),assessment:assessment?{at:assessment.at,method:assessment.method,severityBand:assessment.severityBand,diagnosis:assessment.diagnosis,confidenceBand:band(assessment.confidence)}:null,treatmentStatus:injury.course.status,treated:injury.treated,stabilized:injury.stabilized,permanent:injury.permanent,expectedCourse:assessment||medical?{expectedDays:injury.course.expectedDays,requiresClinical:injury.treatmentRequirements.requiresClinical}:null,onsetAt:patient||medical?injury.onsetAt:null} as Entity['data'];return copy;
+ }
+ if(e.kind==='deathRecord'){
+  const death=data(e,'deathRecord'),identified=death.identified||death.identifiedByIds.includes(observerId),remains=s.entities.find(entity=>entity.id===death.remainsId),evidenceIds=death.evidenceIds.filter(id=>{const evidence=s.entities.find(entity=>entity.id===id);return !!evidence&&visible(s,evidence,observerId);});copy.data={occurredAt:death.occurredAt,locationId:death.locationId,status:death.status,identified,characterId:identified?death.characterId:null,remainsId:remains&&visible(s,remains,observerId)?death.remainsId:null,evidenceIds,continuation:death.continuation} as Entity['data'];return copy;
+ }
+ const own=e.id===observerId||e.kind==='item'&&carriedBy(s,e,observerId)||e.data.ownerId===observerId||e.kind==='vehicle'&&vehicleHasPermission(s,e,observerId,'manage')||e.kind==='item'&&e.data.category==='phone'&&(e.data.authorizedUserIds as string[]??[]).includes(observerId);
  if(e.kind==='item'&&!own){delete copy.data.secretContents;delete copy.data.provenanceRecords;delete copy.data.eventHistory;}
+ if(e.kind==='vehicle'&&!own){for(const key of ['vin','registration','keyId','keyIds','accessGrants','authorizedDriverIds','hotwiredByIds','custodianId','custodyRole','custodyHistory','theftReports','repairRecords','history'])delete copy.data[key];if(!(e.data.discoveredByIds as string[]).includes(observerId)){delete copy.data.stolen;delete copy.data.theftStatus;}}
  if(e.kind==='character'&&!own){
   const d=data(e,'character'),actor=data(getEntity(s,observerId),'character');
   const learned=knows(s,observerId,e.id),permitted=(field:string)=>{const policy=d.profileVisibility[field];return policy==='campaign'||policy==='owner'&&own||policy==='knowledge'&&learned;};
@@ -78,7 +91,8 @@ export function project(s:State,e:Entity,observerId:string):Entity {
   presentation.portraitMediaId=portrait&&visible(s,portrait,observerId)?portrait.id:null;
   copy.data=presentation as Entity['data'];
  }else{
-  for(const k of ['secrets','instructions','aiBehavior','hiddenSolution','embedding','pending','preferences','goals','fears','heat','forensicFindings'])delete copy.data[k];
+  for(const k of ['secrets','instructions','aiBehavior','hiddenSolution','embedding','pending','preferences','goals','fears','forensicFindings'])delete copy.data[k];
+  if(e.kind!=='location')delete copy.data.heat;
   if(e.kind==='relationship'){
    const relation=data(e,'relationship'),participants=[relation.fromId,relation.toId];
    for(const k of ['attraction','desire','affection','trust','respect','attachment','familiarity','jealousy','resentment','fear','loyalty','dependency','boundaries','inertia','cooldownMinutes','movementThreshold','lastMeaningfulAt','knownByIds','pending','secret'])delete copy.data[k];
@@ -91,13 +105,21 @@ export function project(s:State,e:Entity,observerId:string):Entity {
   if(e.kind==='faction')for(const k of ['memberIds','reputation','treasuryCents','groupPolicy','lastGroupAt','dispatchPolicy'])delete copy.data[k];
   if(e.kind==='quest')delete copy.data.branches;
   if(e.kind==='character'&&!s.settings.reproductiveHealth)delete copy.data.reproductive;
-  if(e.kind==='combat'){const allowed=new Set(s.entities.filter(entity=>visible(s,entity,observerId)).map(entity=>entity.id));copy.data.participants=(e.data.participants as string[]).filter(id=>allowed.has(id));copy.data.positions=Object.fromEntries(Object.entries(e.data.positions??{}).filter(([id])=>allowed.has(id))) as never;delete copy.data.blockedLines;}
+  if(e.kind==='combat'){
+   const combat=data(e,'combat'),allowed=new Set(combat.participants.filter(id=>id===observerId||visible(s,getEntity(s,id,'character'),observerId))),actorStates=Object.fromEntries(Object.entries(combat.actorStates).filter(([id])=>allowed.has(id)).map(([id,state])=>{const projected=structuredClone(state);if(id!==observerId)for(const key of ['goal','fear','morale','surrenderThreshold','fleeThreshold','visibleTargetIds','availableActions'] as const)delete projected[key];else projected.visibleTargetIds=projected.visibleTargetIds.filter(id=>allowed.has(id));return [id,projected];}));
+   copy.data={...copy.data,participants:combat.participants.filter(id=>allowed.has(id)),sides:Object.fromEntries(Object.entries(combat.sides).filter(([id])=>allowed.has(id))),turnOrder:combat.turnOrder.filter(id=>allowed.has(id)),positions:Object.fromEntries(Object.entries(combat.positions).filter(([id])=>allowed.has(id))),cover:Object.fromEntries(Object.entries(combat.cover).filter(([id])=>allowed.has(id))),defenses:Object.fromEntries(Object.entries(combat.defenses).filter(([id])=>allowed.has(id))),actorStates,blockedLines:[]} as Entity['data'];
+  }
+  if(e.kind==='chase'){
+   const chase=data(e,'chase'),allowed=new Set(chase.participants.filter(id=>id===observerId||visible(s,getEntity(s,id,'character'),observerId))),actorStates=Object.fromEntries(Object.entries(chase.actorStates).filter(([id])=>allowed.has(id)).map(([id,state])=>[id,id===observerId?state:{role:state.role,zoneId:state.zoneId,vehicleId:state.vehicleId,escaped:state.escaped,caught:state.caught,visibleOpponentIds:state.visibleOpponentIds.filter(targetId=>allowed.has(targetId))}]));
+   copy.data={...copy.data,participants:chase.participants.filter(id=>allowed.has(id)),pursuerIds:chase.pursuerIds.filter(id=>allowed.has(id)),quarryIds:chase.quarryIds.filter(id=>allowed.has(id)),turnOrder:chase.turnOrder.filter(id=>allowed.has(id)),actorStates,witnessIds:chase.witnessIds.includes(observerId)?[observerId]:[],history:chase.history.filter(entry=>allowed.has(entry.actorId))} as Entity['data'];
+  }
   if(e.kind==='character'){
    copy.data.traits=(copy.data.traits as string[]).filter(traitId=>{const trait=s.entities.find(entity=>entity.id===traitId&&entity.kind==='trait'&&!entity.archived);return !!trait&&visible(s,trait,observerId);});
    delete copy.data.plans;delete copy.data.traitEffectTrace;
   }
   if(e.kind==='location')copy.data.exits=(copy.data.exits as {to:string;interruption?:unknown}[]).filter(exit=>s.entities.some(target=>target.id===exit.to&&visible(s,target,observerId))).map(({interruption,...route})=>route) as never;
  }
+ if(e.kind==='character'&&e.id===observerId){const character=data(e,'character'),band=(value:number)=>value<25?'low':value<50?'moderate':value<75?'high':'severe';copy.data.healthSummary={condition:character.condition,blood:character.blood>75?'stable':character.blood>25?'reduced':'critical',pain:band(character.pain),fatigue:band(character.fatigue),intoxication:band(character.intoxication),withdrawal:character.withdrawalEnabled?band(character.withdrawal):'not-enabled',activeEffects:character.activeSubstances.filter(exposure=>Date.parse(exposure.expiresAt)>Date.parse(s.clock)).map(exposure=>({name:exposure.name,kind:exposure.kind,expiresAt:exposure.expiresAt}))};for(const key of ['blood','pain','intoxication','withdrawal','withdrawalEnabled','dependence','lastDoseAt','activeSubstances','restUntil'])delete copy.data[key];}
  const sections=(copy.data.sections??[]) as {id:string;parentId:string|null;visibility?:string;archived?:boolean;fields:{visibility:string;archived?:boolean}[]}[];
  // Custom section containers reveal only those fields explicitly allowed to this observer.
  const canSee=(v:string|undefined)=>v==='campaign'||v==='owner'&&own||v==='knowledge'&&knows(s,observerId,e.id);
@@ -109,10 +131,19 @@ export function project(s:State,e:Entity,observerId:string):Entity {
 export function observerView(s:State,observerId:string){
  const entities=s.entities.filter(e=>visible(s,e,observerId)).map(e=>project(s,e,observerId)),now=Date.parse(s.clock);
  const factIds=new Set(s.knowledge.filter(k=>k.observerId===observerId&&(!k.expiresAt||Date.parse(k.expiresAt)>now)).map(k=>k.factId));
- return {clock:s.clock,calendar:calendarView(s),settings:{needs:s.settings.needs,fuel:s.settings.fuel,romance:s.settings.romance,intimacy:s.settings.intimacy,intensity:s.settings.intensity,weather:s.settings.weather,rulesConfigured:s.settings.rules!==null},
+ return {clock:s.clock,calendar:calendarView(s),weather:weatherView(s),locationBrowser:locationBrowser(s,observerId),settings:{needs:s.settings.needs,fuel:s.settings.fuel,romance:s.settings.romance,intimacy:s.settings.intimacy,intensity:s.settings.intensity,weather:s.settings.weather,rulesConfigured:s.settings.rules!==null},
  entities,facts:s.facts.filter(f=>factIds.has(f.id)&&!f.retiredAt&&within(now,f.validFrom,f.validUntil)&&audienceAllows(s,observerId,f.audience)),
  beliefs:s.beliefs.filter(b=>b.observerId===observerId&&within(now,b.validFrom,b.validUntil)&&audienceAllows(s,observerId,b.audience)),
  memories:s.memories.filter(m=>m.observerId===observerId&&(!m.expiresAt||Date.parse(m.expiresAt)>now)).map(m=>({...m,currentSalience:memorySalience(s,m)}))};
+}
+export function locationBrowser(s:State,observerId:string){
+ const observer=data(getEntity(s,observerId,'character'),'character'),currentId=observer.locationId,visibleLocations=s.entities.filter(entity=>entity.kind==='location'&&visible(s,entity,observerId)),visibleIds=new Set(visibleLocations.map(entity=>entity.id)),carriedTags=new Set(s.entities.filter(entity=>entity.kind==='item'&&carriedBy(s,entity,observerId)).flatMap(entity=>entity.data.tags as string[])),carriedIds=new Set(s.entities.filter(entity=>entity.kind==='item'&&carriedBy(s,entity,observerId)).map(entity=>entity.id));
+ const access=(location:Data<'location'>)=>{const explicitlyAllowed=location.ownerId===observerId||location.access.allowedCharacterIds.includes(observerId),configured=location.access.requiredItemIds.length+location.access.requiredTags.length>0,credentials=configured&&location.access.requiredItemIds.every(id=>carriedIds.has(id))&&location.access.requiredTags.every(tag=>observer.tags.includes(tag)||carriedTags.has(tag));return location.access.policy==='public'||location.access.policy==='restricted'&&(explicitlyAllowed||credentials)||location.access.policy==='private'&&explicitlyAllowed&&(!configured||credentials);};
+ const current=currentId?s.entities.find(entity=>entity.kind==='location'&&entity.id===currentId&&!entity.archived):null,currentData=current?data(current,'location'):null;
+ const routes=currentData?.exits.filter(route=>visibleIds.has(route.to)).map(route=>({...route,interruption:undefined,weatherMinutes:route.weatherPenalties?.[s.settings.weather]??0}))??[];
+ const hierarchy=(locationId:string)=>{const path:string[]=[];let cursor=s.entities.find(entity=>entity.kind==='location'&&entity.id===locationId&&!entity.archived);const seen=new Set<string>();while(cursor&&visibleIds.has(cursor.id)&&!seen.has(cursor.id)){seen.add(cursor.id);path.unshift(cursor.name);const parentId=data(cursor,'location').parentId;cursor=parentId?s.entities.find(entity=>entity.kind==='location'&&entity.id===parentId&&!entity.archived):undefined;}return path;};
+ const locations=visibleLocations.filter(entity=>!data(entity,'location').mapPresentation.hidden||entity.id===currentId).map(entity=>{const location=data(entity,'location'),authoredRoutes=routes.filter(route=>route.to===entity.id).map(route=>({mode:route.modes,minutes:route.minutes+(route.weatherPenalties?.[s.settings.weather]??0),baseMinutes:route.minutes,distanceKm:route.distanceKm??null,fareCents:route.fare,locked:route.locked,serviceId:null})),serviceRoutes=currentId&&entity.id!==currentId?(['transit','taxi'] as const).flatMap(mode=>{const option=transitOption(s,currentId,entity.id,mode);return option&&visible(s,option.service,observerId)&&Number.isFinite(option.totalMinutes)?[{mode:[mode],minutes:option.totalMinutes,baseMinutes:option.route.minutes,distanceKm:null,fareCents:option.route.fareCents,locked:false,serviceId:option.service.id}]:[]}):[],routeOptions=[...authoredRoutes,...serviceRoutes],occupants=s.entities.filter(candidate=>candidate.kind==='character'&&!candidate.archived&&candidate.data.locationId===entity.id&&visible(s,candidate,observerId)).map(candidate=>({id:candidate.id,name:candidate.name})),isOpen=hoursOpen(s,location.hours,location.closedDates,location.closedWeather),accessible=access(location),visited=entity.id===currentId||location.visitedByIds.includes(observerId)||s.facts.some(fact=>fact.subjectId===entity.id&&fact.predicate==='visited'&&s.knowledge.some(row=>row.observerId===observerId&&row.factId===fact.id));return {id:entity.id,name:location.mapPresentation.label||entity.name,description:location.description,category:location.category,parentId:location.parentId,hierarchy:hierarchy(entity.id),tags:location.tags,discovery:visited?'visited':location.discoveredByIds.includes(observerId)?'discovered':location.discoverable?'public':'learned',current:entity.id===currentId,open:isOpen,accessible,access:location.access,reasonableToGo:entity.id===currentId||routeOptions.length>0&&isOpen&&accessible,routes:routeOptions,hours:location.hours,occupants,safety:location.safety,heat:location.heat,weatherExposed:location.weatherExposed,visibilityPenalty:location.weatherExposed?(s.settings.weatherVisibilityPenalties[s.settings.weather]??0):0,mapPresentation:location.mapPresentation};}).sort((left,right)=>Number(right.current)-Number(left.current)||left.mapPresentation.order-right.mapPresentation.order||left.hierarchy.length-right.hierarchy.length||left.name.localeCompare(right.name));
+ return {currentLocationId:currentId,breadcrumbs:currentId?hierarchy(currentId):[],weather:weatherView(s),locations};
 }
 export type RetrievalFilters={entityIds?:string[];tags?:string[];from?:string|null;until?:string|null;placeIds?:string[];personIds?:string[];relationshipIds?:string[];eventIds?:string[];evidenceIds?:string[];factionIds?:string[];kinds?:Array<'lore'|'storycard'|'canon'>};
 const normalizedFilters=(filters:RetrievalFilters):Required<Omit<RetrievalFilters,'from'|'until'>>&Pick<RetrievalFilters,'from'|'until'>=>({entityIds:unique(filters.entityIds),tags:unique(filters.tags?.map(tag=>tag.toLowerCase())),from:filters.from??null,until:filters.until??null,placeIds:unique(filters.placeIds),personIds:unique(filters.personIds),relationshipIds:unique(filters.relationshipIds),eventIds:unique(filters.eventIds),evidenceIds:unique(filters.evidenceIds),factionIds:unique(filters.factionIds),kinds:unique(filters.kinds) as Array<'lore'|'storycard'|'canon'>});

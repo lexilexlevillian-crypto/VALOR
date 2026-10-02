@@ -129,7 +129,8 @@ export class Game {
   const write=(sql:string,...args:InValue[])=>{statements.push({sql,args});};
   const previousRows=await this.store.all<{id:string;revision:number;name:string;visibility:string;data_json:string;archived_at:string|null}>('SELECT id,revision,name,visibility,data_json,archived_at FROM game_entities WHERE timeline_id=?',id);
   const byId=new Map(previousRows.map(row=>[row.id,row]));
-  write('DELETE FROM entity_links WHERE timeline_id=?',id);
+  const previousLinks=await this.store.all<{entity_id:string;target_id:string}>('SELECT entity_id,target_id FROM entity_links WHERE timeline_id=?',id),linksByEntity=new Map<string,Set<string>>();
+  for(const link of previousLinks){let targets=linksByEntity.get(link.entity_id);if(!targets){targets=new Set();linksByEntity.set(link.entity_id,targets);}targets.add(link.target_id);}
   for(const e of s.entities){
    const previous=byId.get(e.id);
    const json=JSON.stringify(e.data),changed=!previous||previous.name!==e.name||previous.visibility!==e.visibility||previous.data_json!==json||!!previous.archived_at!==e.archived;
@@ -137,7 +138,14 @@ export class Game {
    if(changed)write('INSERT INTO game_entities VALUES (?,?,?,?,?,?,?,NULL,?,?,?) ON CONFLICT(timeline_id,id) DO UPDATE SET name=excluded.name,visibility=excluded.visibility,data_json=excluded.data_json,revision=excluded.revision,updated_at=excluded.updated_at,archived_at=excluded.archived_at',
     id,e.id,e.kind,e.name,e.visibility,json,e.revision,timestamp,timestamp,e.archived?timestamp:null);
   }
-  for(const e of s.entities)for(const ref of refs(e))write('INSERT INTO entity_links VALUES (?,?,?)',id,e.id,ref);
+  const currentIds=new Set(s.entities.map(entity=>entity.id));
+  for(const e of s.entities){
+   const current=new Set(refs(e)),previous=linksByEntity.get(e.id)??new Set<string>();
+   if(current.size===previous.size&&[...current].every(ref=>previous.has(ref)))continue;
+   write('DELETE FROM entity_links WHERE timeline_id=? AND entity_id=?',id,e.id);
+   for(const ref of current)write('INSERT INTO entity_links VALUES (?,?,?)',id,e.id,ref);
+  }
+  for(const entityId of linksByEntity.keys())if(!currentIds.has(entityId))write('DELETE FROM entity_links WHERE timeline_id=? AND entity_id=?',id,entityId);
   for(const raw of s.facts){const f=factSchema.parse(raw),eventIds=[...new Set([f.eventId,...f.eventIds])];write('INSERT INTO world_facts(timeline_id,id,subject_id,predicate,value_json,source_event_id,created_at,retired_at,object_id,qualifiers_json,source,truth_status,audience_json,confidence,observed_at,learned_at,valid_from,valid_until,event_ids_json,evidence_ids_json,tags_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(timeline_id,id) DO UPDATE SET retired_at=excluded.retired_at,truth_status=excluded.truth_status',id,f.id,f.subjectId,f.predicate,JSON.stringify(f.value),f.eventId,f.at,f.retiredAt,f.objectId,JSON.stringify(f.qualifiers),f.source,f.truthStatus,JSON.stringify(f.audience),f.confidence,f.observedAt,f.learnedAt,f.validFrom,f.validUntil,JSON.stringify(eventIds),JSON.stringify(f.evidenceIds),JSON.stringify(f.tags));}
   for(const raw of s.knowledge){const k=knowledgeSchema.parse(raw);write('INSERT INTO character_knowledge(timeline_id,observer_id,fact_id,source,learned_at,confidence,observed_at,expires_at,evidence_ids_json) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING',id,k.observerId,k.factId,k.source,k.at,k.confidence,k.observedAt,k.expiresAt,JSON.stringify(k.evidenceIds));}
   for(const raw of s.beliefs){const b=beliefSchema.parse(raw);write('INSERT INTO character_beliefs(timeline_id,id,observer_id,proposition,confidence,source,updated_at,corrected_by,subject_id,predicate,object_id,value_json,qualifiers_json,truth_status,audience_json,observed_at,valid_from,valid_until,event_ids_json,evidence_ids_json,tags_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(timeline_id,id) DO UPDATE SET proposition=excluded.proposition,confidence=excluded.confidence,source=excluded.source,updated_at=excluded.updated_at,corrected_by=excluded.corrected_by,truth_status=excluded.truth_status,audience_json=excluded.audience_json,valid_until=excluded.valid_until,event_ids_json=excluded.event_ids_json,evidence_ids_json=excluded.evidence_ids_json,tags_json=excluded.tags_json',id,b.id,b.observerId,b.proposition,b.confidence,b.source,b.at,b.correctedBy,b.subjectId,b.predicate,b.objectId,JSON.stringify(b.value),JSON.stringify(b.qualifiers),b.truthStatus,JSON.stringify(b.audience),b.observedAt,b.validFrom,b.validUntil,JSON.stringify(b.eventIds),JSON.stringify(b.evidenceIds),JSON.stringify(b.tags));}
@@ -197,7 +205,7 @@ export class Game {
    const clone=structuredClone(source);
    clone.id=randomUUID();clone.revision=1;clone.archived=false;clone.visibility=source.kind==='relationship'?'owner':source.visibility;
    if(source.kind==='item'){const d=data(clone,'item');d.ownerId=characterId;d.locationId=null;d.containerId=null;d.equipped=false;d.provenance='start:'+characterId;clone.data=d as Entity['data'];}
-   if(source.kind==='vehicle'){const d=data(clone,'vehicle');d.ownerId=characterId;d.locationId=data(character,'character').locationId;d.keyId=null;d.occupants=[];clone.data=d as Entity['data'];}
+   if(source.kind==='vehicle'){const d=data(clone,'vehicle');d.ownerId=characterId;d.registeredOwnerId=characterId;d.locationId=data(character,'character').locationId;d.keyId=null;d.keyIds=[];d.occupants=[];d.ignition='off';d.authorizedDriverIds=[];d.accessGrants=[];d.hotwiredByIds=[];d.routeState=null;d.custodianId=null;d.custodyRole=null;d.custodyHistory=[];d.stolen=false;d.theftStatus='none';d.theftReports=[];d.discoveredByIds=[];clone.data=d as Entity['data'];}
    if(source.kind==='quest'){const d=data(clone,'quest');d.characterId=characterId;clone.data=d as Entity['data'];}
    if(source.kind==='housing'){const d=data(clone,'housing');d.tenantId=characterId;clone.data=d as Entity['data'];}
    if(source.kind==='relationship'){const d=data(clone,'relationship');d.fromId=characterId;d.disclosure=d.secret?'secret':'private';d.knownByIds=[...new Set([...d.knownByIds,characterId,d.toId])];clone.data=d as Entity['data'];}
@@ -410,7 +418,7 @@ export class Game {
    if(trace?.expectedCursor!==undefined)ensure(cursor.cursor===trace.expectedCursor,409,'turn_cursor_conflict');
    recorder?.mark('turn-lock','succeeded',{protocol:'database-compare-and-swap',revision:t.revision,cursorMatched:trace?.expectedCursor!==undefined});
    const s=await run('state-load',()=>this.load(id)),beforeState=structuredClone(s),eventId=randomUUID(),seed=randomBytes(32).toString('hex');
-   const beforeDeath=s.settings.campaign?.saveBehavior.branchOnDeath?structuredClone(s):null;
+   const beforeDeath=(s.settings.campaign?.saveBehavior.branchOnDeath??true)?structuredClone(s):null;
    const action=await run('deterministic-simulation',()=>fn(s,eventId,seed,access.role),{eventId,seedDigest:checksum(seed)});
    await run('state-projection',()=>this.persist(id,s));
    const revision=t.revision+1,nextCursor=randomUUID();
@@ -434,13 +442,10 @@ export class Game {
    }
    await this.audit(actor,t.campaign_id,type,eventId,{reason:type,before:creator?{revision:t.revision,command:body}:undefined,after:creator?{revision,effects:action.effects??[]}:undefined});
    const response={revision,eventId,turnCursor:nextCursor,...action.result};
-   await this.store.run('INSERT INTO game_receipts VALUES (?,?,?,?,?)',id,actor.id,key,checksum(body),JSON.stringify(response));
    if((s.settings.campaign?.saveBehavior.autosave??'safe-commit')==='safe-commit')await this.saveInternal(actor,id,'Autosave '+revision,s,revision,true);
-   if(beforeDeath&&s.entities.some(e=>e.kind==='character'&&e.data.playable&&e.data.condition==='dead'&&beforeDeath.entities.some(old=>old.id===e.id&&old.data.condition!=='dead'))){
-    const saveId=await this.saveInternal(actor,id,'Before death',beforeDeath,t.revision,true);
-    const branch=await this.branch(actor,id,saveId,'Before death');Object.assign(response,{deathBranchId:branch.id});
-    await this.store.run('UPDATE game_receipts SET result_json=? WHERE timeline_id=? AND actor_id=? AND key=?',JSON.stringify(response),id,actor.id,key);
-   }
+   const newlyDead=s.entities.find(e=>e.kind==='character'&&e.data.playable&&e.data.condition==='dead'&&beforeState.entities.some(old=>old.id===e.id&&old.data.condition!=='dead'));
+   if(newlyDead){let deathBranchId:string|null=null;if(beforeDeath){const saveId=await this.saveInternal(actor,id,'Before death',beforeDeath,t.revision,true),branch=await this.branch(actor,id,saveId,'Before death');deathBranchId=branch.id;}const mode=s.settings.campaign?.saveBehavior.postDeath??'load-or-branch',record=s.entities.find(entity=>entity.kind==='deathRecord'&&entity.data.characterId===newlyDead.id&&!entity.archived),options=mode==='observer'?['observe','roster']:mode==='roster'?['roster']:deathBranchId?['load-protected-branch','roster']:['roster'];Object.assign(response,{deathBranchId,deathTransition:{mode,characterId:newlyDead.id,deathRecordId:record?.id??null,branchId:deathBranchId,options}});}
+   await this.store.run('INSERT INTO game_receipts VALUES (?,?,?,?,?)',id,actor.id,key,checksum(body),JSON.stringify(response));
    return response;
   }));
  } async developerValidate(actor:Actor,id:string,input:{revision:number;entities:unknown[]}){
@@ -563,7 +568,7 @@ export class Game {
     const resolved=resolveAction(s,input.characterId,action,eventId,seed);
     const permitted=resolved.effects.filter(e=>e.observers.includes(input.characterId));
     const narration=permitted.map(e=>e.text).join('\n\n')||'The action resolved. No observer-visible change was recorded.';
-    return {result:{narration,permitted,checks:resolved.checks??[]},effects:resolved.effects,draws:resolved.draws,checks:resolved.checks,characterId:input.characterId,turnText:input.text??action.type};
+    return {result:{narration,permitted,checks:resolved.checks??[],time:resolved.time},effects:resolved.effects,draws:resolved.draws,checks:resolved.checks,characterId:input.characterId,turnText:input.text??action.type};
    },{recorder,expectedCursor:input.cursor}),{rollbackOnFailure:true});
    const typed=result as {eventId:string};await persistTurnTrace(this.store,trace.traceId,recorder.steps,'committed',typed.eventId);return {...result,traceId:trace.traceId};
   }catch(error){await persistTurnTrace(this.store,trace.traceId,recorder.steps,'failed',undefined,failureReason(error)).catch(()=>{});throw error;}

@@ -15,7 +15,7 @@ export function proposeIntent(s:State,characterId:string,text:string):IntentProp
  const inspect=/^inspect\s+(.+)$/i.exec(input);
  if(inspect){const query=inspect[1]!.toLowerCase(),matches=view.entities.filter(entity=>entity.id!==characterId&&entity.name.toLowerCase()===query);return matches.length===1?propose({type:'inspect',targetId:matches[0]!.id}):unclear(matches.length?'Several known records share that name. Choose the exact target using the action panel.':'No uniquely known target matches that name.');}
  const say=/^say\s+([\s\S]+)$/i.exec(input);if(say)return propose({type:'say',text:say[1]});
- const wait=/^(wait|sleep)\s+(\d+)(?:\s+minutes?)?$/i.exec(input);if(wait)return propose({type:wait[1]!.toLowerCase(),minutes:Number(wait[2])});
+ const wait=/^(wait|sleep|fast[- ]forward)\s+(\d+)(?:\s+minutes?)?$/i.exec(input);if(wait)return propose({type:wait[1]!.toLowerCase().replace(' ','-'),minutes:Number(wait[2])});
  const named=/^(go to|go|travel to|travel|take|equip|unequip|consume|cook)\s+(.+)$/i.exec(input);
  if(!named)return unclear();
  const verb=named[1]!.toLowerCase(),name=named[2]!.toLowerCase();

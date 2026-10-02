@@ -6,10 +6,11 @@ const hash=(text:string)=>createHash('sha256').update(text).digest('hex');
 const hashSchema=z.string().regex(/^[a-f0-9]{64}$/);
 const manifestSchema=z.strictObject({storageVersion:z.literal(2),version:z.literal(1),clock:z.string(),settings:z.unknown(),canon:z.unknown().optional(),worldHistory:z.array(z.unknown()).optional(),eventIds:z.array(z.string()).optional(),blocks:z.strictObject({entities:z.array(hashSchema),facts:z.array(hashSchema),knowledge:z.array(hashSchema),beliefs:z.array(hashSchema),memories:z.array(hashSchema),transcript:z.array(hashSchema)})});
 type Snapshot={version:number;worldHistory?:unknown[];state:{canon?:unknown;clock:string;settings:unknown;entities:unknown[];facts:unknown[];knowledge:unknown[];beliefs:unknown[];memories:unknown[];eventIds?:string[]};transcript:unknown[]};
+const entityBlockSize=16;
 export async function encodeSnapshot(store:Store,snapshot:Snapshot){
  const pending=new Map<string,string>();
  const pack=(rows:unknown[],size:number)=>{const ids:string[]=[];for(let offset=0;offset<rows.length;offset+=size){const json=JSON.stringify(rows.slice(offset,offset+size)),id=hash(json);pending.set(id,json);ids.push(id);}return ids;};
- const s=snapshot.state,manifest={storageVersion:2 as const,version:1 as const,clock:s.clock,settings:s.settings,...(s.canon===undefined?{}:{canon:s.canon}),...(snapshot.worldHistory===undefined?{}:{worldHistory:snapshot.worldHistory}),...(s.eventIds===undefined?{}:{eventIds:s.eventIds}),blocks:{entities:pack(s.entities,1),facts:pack(s.facts,64),knowledge:pack(s.knowledge,64),beliefs:pack(s.beliefs,64),memories:pack(s.memories,64),transcript:pack(snapshot.transcript,32)}};
+ const s=snapshot.state,manifest={storageVersion:2 as const,version:1 as const,clock:s.clock,settings:s.settings,...(s.canon===undefined?{}:{canon:s.canon}),...(snapshot.worldHistory===undefined?{}:{worldHistory:snapshot.worldHistory}),...(s.eventIds===undefined?{}:{eventIds:s.eventIds}),blocks:{entities:pack(s.entities,entityBlockSize),facts:pack(s.facts,64),knowledge:pack(s.knowledge,64),beliefs:pack(s.beliefs,64),memories:pack(s.memories,64),transcript:pack(snapshot.transcript,32)}};
  const ids=[...pending.keys()];
  for(let offset=0;offset<ids.length;offset+=200){
   const group=ids.slice(offset,offset+200),existing=new Set((await store.all<{hash:string}>('SELECT hash FROM snapshot_chunks WHERE hash IN ('+group.map(()=>'?').join(',')+')',...group)).map(r=>r.hash));

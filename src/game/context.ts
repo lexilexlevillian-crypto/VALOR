@@ -118,7 +118,14 @@ export function reviewMechanicalClaims(text:string,effects:Effect[]=[]){
   {pattern:/\b(?:empty[- ]?)?click(?:s|ed)?\b/i,eventTypes:['weapon.empty-click'],value:'empty-click'},
   {pattern:/\b(?:spent )?casings?\b/i,eventTypes:['weapon.shot'],value:'casing'},
   {pattern:/\bdisarm(?:s|ed|ing)?\b/i,eventTypes:['weapon.disarmed'],value:'disarmed-weapon'},
-  {pattern:/\brecover(?:s|ed|ing)?\b.{0,40}\b(?:gun|weapon|firearm|pistol|rifle)\b|\b(?:gun|weapon|firearm|pistol|rifle)\b.{0,40}\brecover(?:s|ed|ing)?\b/i,eventTypes:['weapon.recovered'],value:'recovered-weapon'}
+  {pattern:/\brecover(?:s|ed|ing)?\b.{0,40}\b(?:gun|weapon|firearm|pistol|rifle)\b|\b(?:gun|weapon|firearm|pistol|rifle)\b.{0,40}\brecover(?:s|ed|ing)?\b/i,eventTypes:['weapon.recovered'],value:'recovered-weapon'},
+  {pattern:/\b(?:restrain(?:s|ed|ing)?|handcuff(?:s|ed|ing)?)\b/i,eventTypes:['combat.restrained'],value:'restraint'},
+  {pattern:/\bgrappl(?:e|es|ed|ing)\b/i,eventTypes:['combat.grappled'],value:'grapple'},
+  {pattern:/\bsurrender(?:s|ed|ing)?\b/i,eventTypes:['combat.surrendered'],value:'surrender'},
+  {pattern:/\b(?:flees?|fled)\b/i,eventTypes:['combat.fled'],value:'combat-flee'},
+  {pattern:/\b(?:caught|intercepted)\b.{0,30}\b(?:chase|pursuit|quarry|suspect)\b|\b(?:chase|pursuit|quarry|suspect)\b.{0,30}\b(?:caught|intercepted)\b/i,eventTypes:['chase.caught'],value:'chase-caught'},
+  {pattern:/\b(?:escaped?|got away)\b.{0,30}\b(?:chase|pursuit|pursuer)\b|\b(?:chase|pursuit|pursuer)\b.{0,30}\b(?:escaped?|got away)\b/i,eventTypes:['chase.escaped'],value:'chase-escaped'},
+  {pattern:/\b(?:crash(?:es|ed|ing)?|collision)\b/i,eventTypes:['chase.collision','vehicle.damage'],value:'collision'}
  ];
  return claims.filter(claim=>claim.pattern.test(text)&&!claim.eventTypes.some(type=>emitted.has(type))).map(claim=>({kind:'unsupported-mechanical-claim',value:claim.value}));
 }

@@ -34,26 +34,33 @@ export const simulationTiers={
  }
 } as const;
 export type SimulationTier=keyof typeof simulationTiers;
+type NpcTierContext={characters:Map<string,Entity>;player:Entity|null;nearLocationIds:Set<string>;effectIds:Set<string>;recentContactIds:Set<string>;relationshipConflictIds:Set<string>;factionConflictIds:Set<string>;materialIds:Set<string>};
+function npcTierContext(s:State,playerId:string,effects:Effect[]):NpcTierContext{
+ const characters=new Map(s.entities.filter(entity=>entity.kind==='character'&&!entity.archived).map(entity=>[entity.id,entity])),player=characters.get(playerId)??null,playerLocationId=player?.data.locationId as string|null??null,nearLocationIds=new Set<string>(),effectIds=new Set(effects.map(effect=>effect.subjectId)),recentContactIds=new Set<string>(),relationshipConflictIds=new Set<string>(),factionConflictIds=new Set<string>(),materialIds=new Set<string>(),recent=Date.parse(s.clock)-2*60*60000;
+ if(playerLocationId){nearLocationIds.add(playerLocationId);const playerLocation=s.entities.find(entity=>entity.kind==='location'&&!entity.archived&&entity.id===playerLocationId);if(playerLocation)for(const exit of data(playerLocation,'location').exits)nearLocationIds.add(exit.to);for(const location of s.entities.filter(entity=>entity.kind==='location'&&!entity.archived))if(data(location,'location').exits.some(exit=>exit.to===playerLocationId))nearLocationIds.add(location.id);}
+ for(const entity of s.entities){if(entity.archived)continue;
+  if(entity.kind==='message'){const from=entity.data.fromId as string|null,to=entity.data.toId as string|null;if((from===playerId||to===playerId)&&(entity.data.callState==='ringing'||entity.data.callState==='active'||Date.parse(String(entity.data.at))>=recent)){if(from&&from!==playerId)recentContactIds.add(from);if(to&&to!==playerId)recentContactIds.add(to);}}
+  else if(entity.kind==='relationship'&&(entity.data.pending||Number(entity.data.resentment)>=50||Number(entity.data.fear)>=50||Number(entity.data.jealousy)>=50)){relationshipConflictIds.add(String(entity.data.fromId));relationshipConflictIds.add(String(entity.data.toId));}
+  else if(entity.kind==='faction'&&Object.values(entity.data.reputation as Record<string,number>).some(value=>value<0))for(const memberId of entity.data.memberIds as string[])factionConflictIds.add(memberId);
+  else if(entity.kind==='quest'&&entity.data.status==='active'&&entity.data.characterId)materialIds.add(String(entity.data.characterId));
+  else if(entity.kind==='watcher'&&!entity.data.fired){if(entity.data.subjectId)materialIds.add(String(entity.data.subjectId));if(entity.data.targetId)materialIds.add(String(entity.data.targetId));}
+ }
+ return {characters,player,nearLocationIds,effectIds,recentContactIds,relationshipConflictIds,factionConflictIds,materialIds};
+}
 const deterministicUuid=(seed:string):ReturnType<typeof randomUUID>=>{
  const hex=createHash('sha256').update(seed).digest('hex').slice(0,32);
  return (hex.slice(0,8)+'-'+hex.slice(8,12)+'-4'+hex.slice(13,16)+'-8'+hex.slice(17,20)+'-'+hex.slice(20)) as ReturnType<typeof randomUUID>;
 };
-export function npcSimulationTier(s:State,npcId:string,playerId:string,effects:Effect[]=[]):{tier:SimulationTier;reason:string}{
- const npc=s.entities.find(entity=>entity.id===npcId&&entity.kind==='character'&&!entity.archived),player=s.entities.find(entity=>entity.id===playerId&&entity.kind==='character'&&!entity.archived);
+export function npcSimulationTier(s:State,npcId:string,playerId:string,effects:Effect[]=[],context=npcTierContext(s,playerId,effects)):{tier:SimulationTier;reason:string}{
+ const npc=context.characters.get(npcId),player=context.player;
  if(!npc||npc.data.playable||!player)return {tier:'distant',reason:'not currently material'};
  if(npc.data.locationId&&npc.data.locationId===player.data.locationId)return {tier:'active',reason:'in the player scene'};
- const playerLocation=player.data.locationId?s.entities.find(entity=>entity.id===player.data.locationId&&entity.kind==='location'&&!entity.archived):null;
- const npcLocation=npc.data.locationId?s.entities.find(entity=>entity.id===npc.data.locationId&&entity.kind==='location'&&!entity.archived):null;
- if((playerLocation&&data(playerLocation,'location').exits.some(exit=>exit.to===npc.data.locationId))||(npcLocation&&data(npcLocation,'location').exits.some(exit=>exit.to===player.data.locationId)))return {tier:'relevant',reason:'near the player'};
- if(effects.some(effect=>effect.subjectId===npc.id))return {tier:'relevant',reason:'named by an active event'};
- const recentContact=s.entities.some(entity=>entity.kind==='message'&&!entity.archived&&((entity.data.fromId===npc.id&&entity.data.toId===player.id)||(entity.data.toId===npc.id&&entity.data.fromId===player.id))&&(entity.data.callState==='ringing'||entity.data.callState==='active'||Date.parse(String(entity.data.at))>=Date.parse(s.clock)-2*60*60000));
- if(recentContact)return {tier:'relevant',reason:'contacted by phone'};
- const relationshipConflict=s.entities.some(entity=>entity.kind==='relationship'&&!entity.archived&&(entity.data.fromId===npc.id||entity.data.toId===npc.id)&&(entity.data.pending||Number(entity.data.resentment)>=50||Number(entity.data.fear)>=50||Number(entity.data.jealousy)>=50));
- if(relationshipConflict)return {tier:'relevant',reason:'involved in a relationship conflict'};
- const factionConflict=s.entities.some(entity=>entity.kind==='faction'&&!entity.archived&&(entity.data.memberIds as string[]).includes(npc.id)&&Object.values(entity.data.reputation as Record<string,number>).some(value=>value<0));
- if(factionConflict)return {tier:'relevant',reason:'involved in a faction conflict'};
- const materiallyReferenced=s.entities.some(entity=>!entity.archived&&(entity.kind==='quest'&&entity.data.status==='active'&&entity.data.characterId===npc.id||entity.kind==='watcher'&&!entity.data.fired&&(entity.data.subjectId===npc.id||entity.data.targetId===npc.id)));
- if(materiallyReferenced||(npc.data.plans as Array<{targetId:string;enabled:boolean}>).some(plan=>plan.enabled&&plan.targetId===player.id)||(npc.data.goals as string[]).length)return {tier:'relevant',reason:'materially relevant to an active goal or event'};
+ if(npc.data.locationId&&context.nearLocationIds.has(String(npc.data.locationId)))return {tier:'relevant',reason:'near the player'};
+ if(context.effectIds.has(npc.id))return {tier:'relevant',reason:'named by an active event'};
+ if(context.recentContactIds.has(npc.id))return {tier:'relevant',reason:'contacted by phone'};
+ if(context.relationshipConflictIds.has(npc.id))return {tier:'relevant',reason:'involved in a relationship conflict'};
+ if(context.factionConflictIds.has(npc.id))return {tier:'relevant',reason:'involved in a faction conflict'};
+ if(context.materialIds.has(npc.id)||(npc.data.plans as Array<{targetId:string;enabled:boolean}>).some(plan=>plan.enabled&&plan.targetId===player.id)||(npc.data.goals as string[]).length)return {tier:'relevant',reason:'materially relevant to an active goal or event'};
  return {tier:'distant',reason:'schedule-only catch-up'};
 }
 function recordNpcActivity(s:State,npc:Entity,d:Data<'character'>,eventId:string,outcome:Data<'character'>['activityTimeline'][number]['outcome'],source:Data<'character'>['activityTimeline'][number]['source'],sourceEntityId:string|null,summary:string,at=s.clock){
@@ -79,8 +86,10 @@ export function timeParts(at:string,timezone:string){
  const val=(key:string)=>p.find(x=>x.type===key)!.value;
  return {minute:Number(val('hour'))*60+Number(val('minute')),day:['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].indexOf(val('weekday')),date:val('year')+'-'+val('month')+'-'+val('day')};
 }
-export function isOpen(hours:{opens:number;closes:number}|null,s:State){
- if(!hours)return true;const h=Math.floor(timeParts(s.clock,s.settings.timezone).minute/60);
+export function isOpen(hours:{opens:number;closes:number;days?:number[];closedOnHolidays?:boolean}|null,s:State,closedWeather:string[]=[],closedDates:string[]=[]){
+ if(closedWeather.includes(s.settings.weather))return false;const parts=timeParts(s.clock,s.settings.timezone);
+ if(closedDates.includes(parts.date)||hours?.closedOnHolidays&&s.settings.holidays.some(holiday=>holiday.date===parts.date))return false;
+ if(!hours)return true;if(hours.days&&!hours.days.includes(parts.day))return false;const h=Math.floor(parts.minute/60);
  if(hours.opens===hours.closes)return true;
  return hours.closes>hours.opens?h>=hours.opens&&h<hours.closes:h>=hours.opens||h<hours.closes;
 }
@@ -97,8 +106,9 @@ function advanceStep(s:State,minutes:number,eventId:string,effects:Effect[],play
  const slots:{at:number;minute:number;day:number}[]=[];
  if(npcs.some(n=>Array.isArray(n.data.schedule)&&n.data.schedule.length))for(let t=start+60000;t<=end;t+=60000){const p=timeParts(new Date(t).toISOString(),s.settings.timezone);slots.push({at:t,minute:p.minute,day:p.day});}
  // Exact schedule boundary catch-up. No AI calls; a near/active NPC produces more observable detail.
+ const scheduleTierContext=npcTierContext(s,playerId,effects);
  for(const npc of npcs){
-  const d=data(npc,'character'),classification=npcSimulationTier(s,npc.id,playerId,effects);d.simulationTier=classification.tier;d.simulationTierReason=classification.reason;
+  const d=data(npc,'character'),classification=npcSimulationTier(s,npc.id,playerId,effects,scheduleTierContext);d.simulationTier=classification.tier;d.simulationTierReason=classification.reason;
   if(d.condition==='dead')continue;
   let previousLocation=d.locationId;
   for(const parts of slots){
@@ -122,8 +132,10 @@ function advanceStep(s:State,minutes:number,eventId:string,effects:Effect[],play
  s.clock=new Date(end).toISOString();
  decayReputations(s);
  for(const relation of s.entities.filter(entity=>entity.kind==='relationship'&&!entity.archived))expireConsentRequests(s,relation);
- const weather=s.settings.weatherSchedule.filter(w=>Date.parse(w.at)<=end).sort((a,b)=>a.at.localeCompare(b.at)).at(-1);
+ const weather=s.settings.weatherSchedule.filter(w=>w.status==='actual'&&Date.parse(w.at)<=end).sort((a,b)=>a.at.localeCompare(b.at)).at(-1);
  if(weather)s.settings.weather=weather.weather;
+ const weatherMood=s.settings.weatherMood[s.settings.weather];
+ if(weatherMood)for(const character of s.entities.filter(entity=>entity.kind==='character'&&!entity.archived&&entity.data.locationId)){const location=s.entities.find(entity=>entity.kind==='location'&&entity.id===character.data.locationId&&!entity.archived);if(location?.data.weatherExposed)character.data.mood=weatherMood;}
  for(const entity of s.entities.filter(e=>e.kind==='message'&&!e.archived&&e.data.callState==='ringing')){
   if(end-Date.parse(String(entity.data.at))>=s.settings.communications.ringSeconds*1000){entity.data.callState='missed';entity.data.endedAt=s.clock;}
  }
@@ -142,31 +154,40 @@ function advanceStep(s:State,minutes:number,eventId:string,effects:Effect[],play
  const needsMultiplier=needsRate(s),injuryMultiplier=injuryRate(s);
  for(const character of s.entities.filter(e=>e.kind==='character'&&!e.archived)){
   const d=data(character,'character'),priorCondition=d.condition;if(d.condition==='dead')continue;
+  d.activeSubstances=d.activeSubstances.filter(exposure=>Date.parse(exposure.expiresAt)>end);
   if(s.settings.healthRules){const rules=s.settings.healthRules;
    d.intoxication=Math.max(0,d.intoxication-rules.soberingPerHour*minutes/60);
-   if(d.dependence>0&&d.lastDoseAt)d.withdrawal=Math.min(100,d.withdrawal+rules.withdrawalPerDay*minutes/1440*d.dependence/100);
+   if(d.withdrawalEnabled&&d.dependence>0&&d.lastDoseAt)d.withdrawal=Math.min(100,d.withdrawal+rules.withdrawalPerDay*minutes/1440*d.dependence/100);
   }
   if(s.settings.needs&&needsMultiplier>0){
    const rate=(need:'hunger'|'thirst'|'fatigue'|'hygiene')=>{const resolution=resolveTraitEffects(s,character.id,'need-rate',{need,context:'time-passage'});traitTrace(d,resolution.applied,need,'need rate applied',s.clock);const skillRate=need==='fatigue'?Math.min(0,...s.entities.filter(e=>e.kind==='skill'&&!e.archived&&Object.hasOwn(d.skills,e.id)).map(e=>skillStatus(e,d.skills[e.id]!).fatigueRate)):0;return Math.max(0,1+skillRate+resolution.applied.reduce((sum,effect)=>sum+effect.value,0));};
    d.hunger=Math.min(100,d.hunger+minutes/60*needsMultiplier*rate('hunger'));d.thirst=Math.min(100,d.thirst+minutes/30*needsMultiplier*rate('thirst'));d.fatigue=Math.min(100,d.fatigue+minutes/120*needsMultiplier*rate('fatigue'));d.hygiene=Math.max(0,d.hygiene-minutes/240*needsMultiplier*rate('hygiene'));
   }
-  const wounds=s.entities.filter(e=>e.kind==='injury'&&!e.archived&&e.data.characterId===character.id);
+  const wounds=s.entities.filter(e=>e.kind==='injury'&&!e.archived&&e.data.characterId===character.id),resting=!!d.restUntil&&Date.parse(d.restUntil)>=end;let fatalCondition=false,totalPain=0;
   for(const wound of wounds){
    const injury=data(wound,'injury');
    if(s.settings.healthRules&&!injury.treated&&!injury.permanent){
     injury.infection=Math.min(100,injury.infection+s.settings.healthRules.infectionPerDay*minutes/1440*injuryMultiplier);
     injury.severity=Math.min(100,injury.severity+s.settings.healthRules.untreatedSeverityPerDay*minutes/1440*injuryMultiplier);
    }
+   if(!injury.stabilized&&!injury.permanent){injury.severity=Math.min(100,injury.severity+injury.course.deteriorationPerDay*minutes/1440*injuryMultiplier);injury.infection=Math.min(100,injury.infection+injury.course.infectionRisk*minutes/1440*injuryMultiplier);}
    if(s.settings.rules){
     d.blood=Math.max(0,d.blood-injury.bleeding*s.settings.rules.bleedPerMinute*minutes*injuryMultiplier);
-    if(injury.treated&&!injury.permanent){injury.severity=Math.max(0,injury.severity-s.settings.rules.recoveryPerDay*minutes/1440);if(injury.severity===0)wound.archived=true;}
+    if(injury.treated&&!injury.permanent){const base=Math.max(s.settings.rules.recoveryPerDay,injury.course.recoveryPerDay),restMultiplier=resting?(s.settings.healthRules?.restRecoveryMultiplier??1):1;injury.severity=Math.max(0,injury.severity-base*restMultiplier*minutes/1440);}
    }
+   if(injury.treated&&!s.settings.rules&&!injury.permanent&&injury.course.recoveryPerDay>0){const restMultiplier=resting?(s.settings.healthRules?.restRecoveryMultiplier??1):1;injury.severity=Math.max(0,injury.severity-injury.course.recoveryPerDay*restMultiplier*minutes/1440);}
+   d.fatigue=Math.min(100,d.fatigue+injury.mechanicalImpact.fatiguePerDay*minutes/1440);totalPain+=injury.pain*Math.max(.1,injury.severity/100);if(injury.course.fatalAtSeverity!==null&&injury.severity>=injury.course.fatalAtSeverity)fatalCondition=true;
+   if(injury.severity===0&&!injury.permanent){injury.course.status='resolved';injury.course.resolvedAt=s.clock;if(injury.course.leavesScar&&!d.scars.includes(injury.bodyPart+' scar'))d.scars.push(injury.bodyPart+' scar');wound.archived=true;}else if(injury.stabilized)injury.course.status=injury.treated?'recovering':'stable';
    wound.data=injury as Entity['data'];
   }
-  if(d.blood<=0){d.condition='dead';const observers=atLocation(s,d.locationId).map(e=>e.id);fact(s,character.id,'death',{at:s.clock},eventId,observers);emit(effects,character.name+' has died.',observers,'death',character.id);
-   const remains=add(s,'item','Remains of '+character.name,{category:'container',locationId:d.locationId,capacity:100000,provenance:eventId,deceasedId:character.id},'campaign');
-   for(const item of s.entities.filter(e=>e.kind==='item'&&!e.archived&&itemPossessor(s,e)===character.id)){item.data.possessorId=null;item.data.locationId=null;item.data.containerId=remains.id;item.data.equipped=false;item.data.wearState='stowed';}
-  }else if(d.blood<20)d.condition='unconscious';
+  d.pain=Math.max(0,Math.min(100,totalPain-d.activeSubstances.reduce((sum,exposure)=>sum+exposure.painRelief,0)));if(resting&&s.settings.healthRules&&wounds.every(wound=>data(wound,'injury').bleeding===0))d.blood=Math.min(100,d.blood+s.settings.healthRules.bloodRecoveryPerDay*minutes/1440);if(d.restUntil&&Date.parse(d.restUntil)<=end)d.restUntil=null;
+  const deathBlood=s.settings.healthRules?.deathBloodThreshold??0,unconsciousBlood=s.settings.healthRules?.unconsciousBloodThreshold??20,incapacitated=wounds.some(wound=>{const injury=data(wound,'injury');return injury.mechanicalImpact.incapacitateAtSeverity!==null&&injury.severity>=injury.mechanicalImpact.incapacitateAtSeverity!;});
+  if((d.blood<=deathBlood||fatalCondition)&&!d.deathRecordId){d.condition='dead';d.journey=null;const witnesses=atLocation(s,d.locationId).filter(entity=>entity.kind==='character'&&entity.id!==character.id).map(entity=>entity.id),causeInjuryIds=wounds.filter(wound=>!wound.archived).map(wound=>wound.id),remains=add(s,'item','Remains of '+character.name,{category:'container',locationId:d.locationId,capacity:100000,provenance:eventId,deceasedId:character.id},'campaign'),propertyIds:string[]=[];
+   for(const item of s.entities.filter(e=>e.kind==='item'&&!e.archived&&e.id!==remains.id&&itemPossessor(s,e)===character.id)){item.data.possessorId=null;item.data.locationId=null;item.data.containerId=remains.id;item.data.equipped=false;item.data.wearState='stowed';propertyIds.push(item.id);}
+   for(const vehicle of s.entities.filter(entity=>entity.kind==='vehicle'&&!entity.archived&&(entity.data.occupants as string[]).includes(character.id)))vehicle.data.occupants=(vehicle.data.occupants as string[]).filter(id=>id!==character.id);
+   for(const combat of s.entities.filter(entity=>entity.kind==='combat'&&!entity.archived&&(entity.data.participants as string[]).includes(character.id)))combat.data.active=false;
+   const scene=add(s,'evidence','Death scene: '+character.name,{description:'Persistent death-scene record linked to remains and immediate witnesses.',locationId:d.locationId,objectId:remains.id,sourceEventId:eventId,discoveredBy:witnesses},'knowledge'),continuation=s.settings.campaign?.saveBehavior.postDeath??'load-or-branch',record=add(s,'deathRecord','Death of '+character.name,{characterId:character.id,occurredAt:s.clock,locationId:d.locationId,sourceEventId:eventId,causeInjuryIds,witnessIds:witnesses,remainsId:remains.id,propertyIds,evidenceIds:[scene.id],identified:false,continuation},'knowledge');d.deathRecordId=record.id;fact(s,character.id,'death',{at:s.clock,deathRecordId:record.id,remainsId:remains.id},eventId,witnesses,{evidenceIds:[scene.id]});emit(effects,character.name+' has died. Ordinary actions for this canonical character are now closed.',witnesses,'death',character.id);
+  }else if(d.blood<unconsciousBlood||incapacitated)d.condition='unconscious';else if(d.condition==='unconscious')d.condition='conscious';
   if(!d.playable&&priorCondition!==d.condition){if(d.condition==='dead')recordNpcActivity(s,character,d,eventId,'killed','health',wounds[0]?.id??null,'Died from simulated injuries.');else if(d.condition==='unconscious')recordNpcActivity(s,character,d,eventId,'injured','health',wounds[0]?.id??null,'Became unconscious from simulated injuries.');}
   character.data=d as Entity['data'];
  }
@@ -229,11 +250,11 @@ function advanceStep(s:State,minutes:number,eventId:string,effects:Effect[],play
   if(!d.history.some(h=>h.label==='routine contact'&&h.at.slice(0,10)===s.clock.slice(0,10)))recordRelationshipHistory(s,r,eventId,'routine contact','routine',d.fromId,'private');
  }
  // Bounded deterministic planning; all voluntary actions belong to NPCs.
- let initiatives=0;
+ let initiatives=0;const initiativeTierContext=npcTierContext(s,playerId,effects);
  for(const npc of npcs){
   if(initiatives>=s.settings.npcInitiativeBudget)break;
   const d=data(npc,'character');if(d.condition!=='conscious')continue;
-  const classification=npcSimulationTier(s,npc.id,playerId,effects),tier=classification.tier;d.simulationTier=tier;d.simulationTierReason=classification.reason;
+  const classification=npcSimulationTier(s,npc.id,playerId,effects,initiativeTierContext),tier=classification.tier;d.simulationTier=tier;d.simulationTierReason=classification.reason;
   const minInterval=simulationTiers[tier].updateFrequencyMinutes;
   const plans=[...d.plans].filter(p=>p.enabled).map(plan=>{const resolution=resolveTraitEffects(s,npc.id,'ai-priority',{planType:plan.type,context:plan.type}),target=s.entities.find(entity=>entity.id===plan.targetId&&!entity.archived),socialTarget=target?.kind==='character'?target.id:target?.kind==='relationship'&&target.data.fromId===npc.id?String(target.data.toId):null;return {plan,resolution,priority:plan.priority+resolution.applied.reduce((sum,effect)=>sum+effect.value,0)+(socialTarget?relationshipBehaviorSignal(s,npc.id,socialTarget,plan.type):0)};}).sort((a,b)=>b.priority-a.priority||a.plan.id.localeCompare(b.plan.id));
   for(const candidate of plans){const plan=candidate.plan;
@@ -271,7 +292,7 @@ function advanceStep(s:State,minutes:number,eventId:string,effects:Effect[],play
     const job=data(target,'job'),employer=getEntity(s,job.employerId,'business'),business=data(employer,'business');
     const elapsed=Math.floor(due*interval/job.minutesPerShift)*job.minutesPerShift;
     const pay=Math.floor(job.hourlyCents*elapsed/60);
-    if(job.employeeId===npc.id&&job.locationId===d.locationId&&isOpen(business.hours,s)&&pay>0&&business.cash>=pay){business.cash-=pay;d.cash+=pay;job.lastWorked=s.clock;target.data=job as Entity['data'];employer.data=business as Entity['data'];performed=true;activityOutcome='worked-shift';activitySummary='Worked '+elapsed+' minutes and received authored wages.';}
+    if(job.employeeId===npc.id&&job.locationId===d.locationId&&isOpen(business.hours,s,business.closedWeather)&&pay>0&&business.cash>=pay){business.cash-=pay;d.cash+=pay;job.lastWorked=s.clock;target.data=job as Entity['data'];employer.data=business as Entity['data'];performed=true;activityOutcome='worked-shift';activitySummary='Worked '+elapsed+' minutes and received authored wages.';}
    }
    if(plan.type==='socialize'&&target.kind==='character'&&target.data.locationId===d.locationId&&target.id!==npc.id){
     let relation=s.entities.find(e=>e.kind==='relationship'&&!e.archived&&e.data.fromId===npc.id&&e.data.toId===target.id);
@@ -304,7 +325,7 @@ function advanceStep(s:State,minutes:number,eventId:string,effects:Effect[],play
    if(plan.type==='travel'&&target.kind==='location'&&d.locationId&&target.id!==d.locationId){
     const current=data(getEntity(s,d.locationId,'location'),'location'),route=current.exits.find(e=>e.to===target.id&&e.modes.includes('walk')&&!e.locked);
     if(s.settings.npcRouteTravel){performed=startNpcJourney(s,npc,d,target.id,Math.max(start,previous+interval*60000),'travel');finishNpcJourney(s,npc,d,end,eventId,effects);}
-    else if(route&&route.minutes<=minutes&&isOpen(data(target,'location').hours,s)){d.locationId=target.id;fact(s,npc.id,'location',target.id,eventId,atLocation(s,target.id).map(e=>e.id));performed=true;}
+    else if(route&&route.minutes<=minutes&&isOpen(data(target,'location').hours,s,data(target,'location').closedWeather,data(target,'location').closedDates)){d.locationId=target.id;fact(s,npc.id,'location',target.id,eventId,atLocation(s,target.id).map(e=>e.id));performed=true;}
     if(performed&&d.locationId===target.id){activityOutcome=target.id===d.homeId?'traveled-home':'traveled';activitySummary=target.id===d.homeId?'Traveled home through a supported route.':'Traveled through a supported route.';}
    }
    if(plan.type==='crime'&&target.kind==='law'&&d.locationId){

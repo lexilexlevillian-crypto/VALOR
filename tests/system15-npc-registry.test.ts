@@ -117,7 +117,7 @@ test('System 15 migrates persisted schema-v4 NPCs without losing authored identi
   await store.run("UPDATE game_entities SET data_json=json_remove(json_set(data_json,'$.characterSchemaVersion',4),'$.registryStatus','$.profileVisibility','$.lastActiveAt','$.arrested','$.retirementNarrative','$.mergedIntoId','$.mergeRecordId','$.portraitMediaId'),updated_at=? WHERE timeline_id=? AND id=?",new Date().toISOString(),timeline.id,npc.id);
   assert.equal((await store.get<{schema_version:number}>('SELECT schema_version FROM character_profile_schema_versions WHERE character_id=?',npc.id))!.schema_version,4);
   await store.migrate();const loaded=(await new Game(store).load(timeline.id)).entities.find(entity=>entity.id===npc.id)!;
-  assert.equal(loaded.data.characterSchemaVersion,8);assert.equal(loaded.data.registryStatus,'active');assert.equal(loaded.data.legalName,'Authored Legacy Name');assert.deepEqual(loaded.data.aliases,['Legacy']);assert.equal((loaded.data.profileVisibility as Record<string,string>).legalName,'campaign');
+  assert.equal(loaded.data.characterSchemaVersion,9);assert.equal(loaded.data.registryStatus,'active');assert.equal(loaded.data.legalName,'Authored Legacy Name');assert.deepEqual(loaded.data.aliases,['Legacy']);assert.equal((loaded.data.profileVisibility as Record<string,string>).legalName,'campaign');
   assert.equal((await store.get<{schema_version:number}>('SELECT schema_version FROM character_profile_schema_versions WHERE character_id=?',npc.id))!.schema_version,8);
  }finally{store.close();cleanupTestDirectory(dir);}
 });
