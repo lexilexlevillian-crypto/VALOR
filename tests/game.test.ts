@@ -82,7 +82,7 @@ test('objects, ammunition and phones conserve state and enforce privacy',async()
   let s=(await f.game.load(f.timeline.id));assert.equal(s.entities.find(e=>e.id===gun)!.data.loaded,6);assert.equal(s.entities.find(e=>e.id===ammo)!.data.quantity,2);
   (await f.turn({type:'combat',targetId:f.npc}));
   (await f.turn({type:'attack',targetId:f.npc,weaponId:gun,bodyPart:'arm'}));
-  s=(await f.game.load(f.timeline.id));assert.equal(s.entities.find(e=>e.id===gun)!.data.loaded,5);assert.equal(s.entities.filter(e=>e.kind==='evidence').length,1);assert.equal(s.entities.filter(e=>e.kind==='injury').length,1);
+   s=(await f.game.load(f.timeline.id));assert.equal(s.entities.find(e=>e.id===gun)!.data.loaded,5);assert.deepEqual(s.entities.filter(e=>e.kind==='evidence').map(e=>e.data.evidenceType).sort(),['blood','shell-casing']);assert.equal(s.entities.filter(e=>e.kind==='injury').length,1);
   (await f.turn({type:'surrender'}));
   const phone=(await f.add('item','Test phone',{category:'phone',ownerId:f.pc,contacts:[{characterId:f.npc,label:'Known contact'}]}));
   (await f.turn({type:'message',phoneId:phone,toId:f.npc,text:'Explicit player message',medium:'sms'}));

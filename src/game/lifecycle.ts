@@ -7,6 +7,8 @@ import type {Effect} from './simulation.ts';
 import {matchesCondition} from './conditions.ts';
 import {recordRelationshipHistory,recordReputation} from './social.ts';
 import {itemPossessor} from './items.ts';
+import {decayCriminalHeat,noticeHeatSignal} from './investigation.ts';
+import {advanceFactions} from './factions.ts';
 type Outcome=Data<'transition'>['outcomes'][number];
 const set=(e:Entity,d:unknown)=>{e.data=d as Entity['data'];};
 export function applyOutcomes(s:State,outcomes:Outcome[],eventId:string,effects:Effect[]){
@@ -46,6 +48,8 @@ export function finishNpcJourney(s:State,entity:Entity,d:Data<'character'>,until
 }
 export function advanceLifecycle(s:State,start:number,end:number,eventId:string,effects:Effect[]){
  const entities=s.entities.filter(e=>!e.archived);
+ decayCriminalHeat(s,start,end);
+ advanceFactions(s,start,end,eventId,effects);
  // Authored production consumes actual stock, never creates money or infinite inputs.
  const factories=entities.filter(e=>e.kind==='production').map(e=>({e,p:data(e,'production')})).filter(x=>x.p.enabled);
  let iterations=0;
@@ -81,15 +85,26 @@ export function advanceLifecycle(s:State,start:number,end:number,eventId:string,
   // A player responder must actually travel; dispatch never moves them implicitly.
   if(responder.data.locationId!==d.locationId)continue;
   d.status='arrived';set(entity,d);fact(s,entity.id,'dispatch-arrived',true,eventId,[d.requesterId,d.responderId]);
+  if(d.kind==='police'&&d.caseId){const file=s.entities.find(candidate=>candidate.id===d.caseId&&candidate.kind==='case'&&!candidate.archived);if(file)for(const suspectId of data(file,'case').suspectIds){const suspect=s.entities.find(candidate=>candidate.id===suspectId&&candidate.kind==='character'&&!candidate.archived);if(suspect?.data.locationId===d.locationId)noticeHeatSignal(s,{subjectId:suspectId,watcherId:d.agencyId,locationId:d.locationId,kind:'dispatch',description:'A police response connected to the reported incident became visible nearby.',noticedByIds:[suspectId]});}}
   emit(effects,'The requested responder has arrived.',[d.requesterId,d.responderId],'dispatch.arrived',entity.id);
+ }
+ for(const entity of entities.filter(e=>e.kind==='case')){
+  const c=data(entity,'case');
+  if(c.stage==='booking'&&c.bookingCompletesAt&&Date.parse(c.bookingCompletesAt)<=end)c.stage='jail';
+  if(c.stage==='jail'&&c.holdingUntil&&Date.parse(c.holdingUntil)<=end&&c.releaseEligible){
+   c.stage='bail';c.releasedAt=s.clock;
+   for(const suspectId of c.suspectIds){const suspect=getEntity(s,suspectId,'character');if(suspect.data.restrainedBy===c.investigatorId)suspect.data.restrainedBy=null;suspect.data.arrested=false;c.suspectStatus[suspectId]='released';}
+   c.history.push({at:s.clock,operation:'bail',actorId:null,targetId:null,authorized:true,knowledgeScore:c.evidenceScore,agencyScore:c.priority,reason:'posture-based release after authored detention period'});
+  }
+  set(entity,c);
  }
  for(const entity of entities.filter(e=>e.kind==='judgment')){
   const j=data(entity,'judgment');if(j.appliedAt)continue;
   const file=getEntity(s,j.caseId,'case'),c=data(file,'case');if(c.stage!=='trial'||!c.suspectIds.includes(j.characterId))continue;
   const person=getEntity(s,j.characterId,'character'),p=data(person,'character');
   if(j.verdict==='convicted'&&p.cash<j.fineCents)continue; // Unpaid disposition stays pending; no negative balances.
-  if(j.verdict==='convicted'){p.cash-=j.fineCents;const agency=getEntity(s,c.agencyId,'faction');agency.data.treasuryCents=Number(agency.data.treasuryCents??0)+j.fineCents;c.stage='sentenced';}
-  else{c.stage='closed';if(p.restrainedBy===c.investigatorId)p.restrainedBy=null;}
+  if(j.verdict==='convicted'){p.cash-=j.fineCents;const agency=getEntity(s,c.agencyId,'faction');agency.data.treasuryCents=Number(agency.data.treasuryCents??0)+j.fineCents;c.stage='sentenced';c.suspectStatus[j.characterId]='convicted';}
+  else{c.stage='closed';c.suspectStatus[j.characterId]='cleared';p.arrested=false;if(p.restrainedBy===c.investigatorId)p.restrainedBy=null;}
   j.appliedAt=s.clock;set(entity,j);set(person,p);set(file,c);
   fact(s,file.id,'authored-judgment',{verdict:j.verdict,authority:j.authority,fineCents:j.fineCents},eventId,[j.characterId,c.investigatorId]);
  }

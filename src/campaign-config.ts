@@ -9,7 +9,15 @@ const calendar=z.strictObject({
  firstDayOfWeek:z.number().int().min(0).max(13),
  months:z.array(z.strictObject({id:slug,label:z.string().trim().min(1).max(80),days:z.number().int().min(1).max(100)})).max(64)
 });
-const lawEnforcement=z.strictObject({profileId:id.nullable(),posture:z.enum(['authored','lax','balanced','strict']),variance:jsonMap});
+const lawDelay=z.strictObject({min:z.number().int().min(1).max(10080),max:z.number().int().min(1).max(10080)}).refine(value=>value.min<=value.max,'invalid_law_delay');
+const lawEnforcement=z.strictObject({
+ profileId:id.nullable(),posture:z.enum(['authored','lax','balanced','strict']),variance:jsonMap,
+ reportProbability:z.number().min(0).max(100).default(35),dispatchDelay:lawDelay.default({min:20,max:60}),officerAvailability:z.number().min(0).max(100).default(45),solveRate:z.number().min(0).max(100).default(25),
+ evidenceThreshold:z.number().min(0).max(100).default(55),stopThreshold:z.number().min(0).max(100).default(35),searchThreshold:z.number().min(0).max(100).default(60),casePriority:z.number().min(-100).max(100).default(0),
+ bookingMinutes:z.number().int().min(1).max(10080).default(240),detentionMinutes:z.number().int().min(1).max(525600).default(1440),bailLikelihood:z.number().min(0).max(100).default(70),releaseLikelihood:z.number().min(0).max(100).default(60),courtDelayDays:lawDelay.default({min:30,max:180}),
+ informalResolution:z.number().min(0).max(100).default(20),corruptionTolerance:z.number().min(0).max(100).default(0),corruptionAuthored:z.boolean().default(false),seriousCrimeThreshold:z.number().min(0).max(100).default(75),
+ directWitnessWeight:z.number().min(0).max(100).default(25),highProfileWeight:z.number().min(0).max(100).default(25),rivalPressureWeight:z.number().min(0).max(100).default(15),accumulatedEvidenceWeight:z.number().min(0).max(100).default(30)
+});
 const technology=z.strictObject({era:z.string().trim().min(1).max(80),features:z.record(z.string().max(80),z.boolean()),serviceVariability:z.enum(['fixed','authored','variable'])});
 const saveBehavior=z.strictObject({autosave:z.enum(['safe-commit','manual-only','off']),branchOnDeath:z.boolean(),postDeath:z.enum(['load-or-branch','roster','observer']).default('load-or-branch'),maxManualSaves:z.number().int().min(1).max(10000)});
 const uiDefaults=z.strictObject({density:z.enum(['compact','comfortable','spacious']),startView:z.string().trim().min(1).max(80),mapMode:z.enum(['list','graphical','hybrid'])});
@@ -70,7 +78,7 @@ export function defaultCampaignConfig(startAt:string,timezone:string):CampaignCo
  return campaignConfigSchema.parse({
   startAt,timezone,calendar:{id:'gregorian',daysPerWeek:7,firstDayOfWeek:0,months:[]},enabledSystems:{},difficulty:'grounded',
   contentRating:'mature',matureContent:'fade-to-black',relationshipSafety:{minimumRomanceAge:18,minimumIntimacyAge:18,consentWindowMinutes:30,intoxicationBlocksConsentAt:50,allowNpcInitiative:true},needsIntensity:'off',needsPolicy:{ui:'hidden',costs:'none',penalties:'none'},injuryIntensity:'grounded',
-  lawEnforcement:{profileId:null,posture:'authored',variance:{}},technology:{era:'authored',features:{},serviceVariability:'authored'},
+  lawEnforcement:{profileId:null,posture:'authored',variance:{},reportProbability:35,dispatchDelay:{min:20,max:60},officerAvailability:45,solveRate:25,evidenceThreshold:55,stopThreshold:35,searchThreshold:60,casePriority:0,bookingMinutes:240,detentionMinutes:1440,bailLikelihood:70,releaseLikelihood:60,courtDelayDays:{min:30,max:180},informalResolution:20,corruptionTolerance:0,corruptionAuthored:false,seriousCrimeThreshold:75,directWitnessWeight:25,highProfileWeight:25,rivalPressureWeight:15,accumulatedEvidenceWeight:30},technology:{era:'authored',features:{},serviceVariability:'authored'},
   travelAbstraction:'route',saveBehavior:{autosave:'safe-commit',branchOnDeath:true,postDeath:'load-or-branch',maxManualSaves:100},
   uiDefaults:{density:'compact',startView:'chronicle',mapMode:'list'}
  });

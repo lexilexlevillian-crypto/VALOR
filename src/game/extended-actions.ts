@@ -3,9 +3,10 @@ import type {Action,Data,Entity,State} from './model.ts';
 import {visible,fact} from './epistemics.ts';
 import {add,emit,isOpen} from './simulation.ts';
 import type {Effect} from './simulation.ts';
-import {lawResponseMinutes,needsEnabled} from './policy.ts';
+import {needsEnabled} from './policy.ts';
 import {acceptsCommunication,communicationDelayMinutes,contactFor,conversationThread,phonePowered,recipientPhone,requirePhone,touchContact} from './phone.ts';
 import {carriedBy} from './items.ts';
+import {availableOfficer,postureDelayMinutes,resolveLawPosture} from './law.ts';
 const requireCondition=(ok:unknown,code:string)=>{if(!ok)throw new Error(code);};
 export function extendedAction(s:State,actorId:string,pc:Data<'character'>,action:Action,eventId:string,effects:Effect[]):number{
  const output=(text:string)=>emit(effects,text,[actorId],action.type,actorId);
@@ -17,8 +18,8 @@ export function extendedAction(s:State,actorId:string,pc:Data<'character'>,actio
    requireCondition(visible(s,agency,actorId)&&a.dispatchPolicy&&a.jurisdictionIds.includes(pc.locationId!),'dispatch_unavailable');
    requireCondition(!s.entities.some(e=>e.kind==='dispatch'&&!e.archived&&e.data.requesterId===actorId&&e.data.agencyId===agency.id&&e.data.status!=='closed'),'dispatch_already_pending');
    if(action.patientId){const patient=getEntity(s,action.patientId,'character');requireCondition(patient.data.locationId===pc.locationId&&visible(s,patient,actorId),'patient_not_present');}
-   const responder=s.entities.filter(e=>e.kind==='character'&&!e.archived&&a.memberIds.includes(e.id)&&!e.data.playable&&e.data.condition==='conscious'&&!s.entities.some(call=>call.kind==='dispatch'&&call.data.responderId===e.id&&['enroute','arrived'].includes(String(call.data.status)))).sort((x,y)=>x.id.localeCompare(y.id))[0];
-   const responseMinutes=a.dispatchPolicy!.kind==='police'?lawResponseMinutes(s,agency.id,a.dispatchPolicy!.responseMinutes):a.dispatchPolicy!.responseMinutes,call=add(s,'dispatch','Assistance request',{agencyId:agency.id,requesterId:actorId,locationId:pc.locationId,responderId:responder?.id??null,patientId:action.patientId,destinationId:a.dispatchPolicy!.hospitalId,report:action.report,kind:a.dispatchPolicy!.kind,status:responder?'enroute':'queued',dueAt:responder?new Date(Date.parse(s.clock)+responseMinutes*60000).toISOString():null,transportConsent:action.patientId===actorId&&action.transportConsent,createdAt:s.clock},'owner');
+   const responder=a.dispatchPolicy!.kind==='police'?availableOfficer(s,agency.id,pc.locationId!,eventId):s.entities.filter(e=>e.kind==='character'&&!e.archived&&a.memberIds.includes(e.id)&&!e.data.playable&&e.data.condition==='conscious'&&!s.entities.some(call=>call.kind==='dispatch'&&call.data.responderId===e.id&&['enroute','arrived'].includes(String(call.data.status)))).sort((x,y)=>x.id.localeCompare(y.id))[0];
+   const responseMinutes=a.dispatchPolicy!.kind==='police'?postureDelayMinutes(resolveLawPosture(s,pc.locationId,agency.id),eventId):a.dispatchPolicy!.responseMinutes,call=add(s,'dispatch','Assistance request',{agencyId:agency.id,requesterId:actorId,locationId:pc.locationId,responderId:responder?.id??null,patientId:action.patientId,destinationId:a.dispatchPolicy!.hospitalId,report:action.report,kind:a.dispatchPolicy!.kind,status:responder?'enroute':'queued',dueAt:responder?new Date(Date.parse(s.clock)+responseMinutes*60000).toISOString():null,transportConsent:action.patientId===actorId&&action.transportConsent,createdAt:s.clock},'owner');
    if(responder){s.beliefs.push({id:crypto.randomUUID(),observerId:responder.id,proposition:action.report,confidence:0.5,source:'dispatch:'+call.id,at:s.clock,correctedBy:null});fact(s,call.id,'request-received',true,eventId,[actorId,responder.id]);}
    output(responder?'Assistance requested; a responder is en route.':'Assistance requested; awaiting an available responder.');return 0;
   }
@@ -27,7 +28,7 @@ export function extendedAction(s:State,actorId:string,pc:Data<'character'>,actio
    if(action.operation==='accept'){
     requireCondition(d.status==='queued'&&agency.memberIds.includes(actorId)&&agency.dispatchPolicy,'dispatch_authority_required');
     requireCondition(!s.entities.some(e=>e.kind==='dispatch'&&!e.archived&&e.data.responderId===actorId&&['enroute','arrived'].includes(String(e.data.status))),'responder_busy');
-    d.responderId=actorId;d.status='enroute';const responseMinutes=d.kind==='police'?lawResponseMinutes(s,d.agencyId,agency.dispatchPolicy!.responseMinutes):agency.dispatchPolicy!.responseMinutes;d.dueAt=new Date(Date.parse(s.clock)+responseMinutes*60000).toISOString();
+    d.responderId=actorId;d.status='enroute';const responseMinutes=d.kind==='police'?postureDelayMinutes(resolveLawPosture(s,d.locationId,d.agencyId),entity.id+'|accept'):agency.dispatchPolicy!.responseMinutes;d.dueAt=new Date(Date.parse(s.clock)+responseMinutes*60000).toISOString();
     s.beliefs.push({id:crypto.randomUUID(),observerId:actorId,proposition:d.report,confidence:0.5,source:'dispatch:'+entity.id,at:s.clock,correctedBy:null});
    }else if(action.operation==='close'){
     requireCondition([d.requesterId,d.responderId].includes(actorId),'dispatch_authority_required');d.status='closed';
@@ -113,7 +114,7 @@ export function extendedAction(s:State,actorId:string,pc:Data<'character'>,actio
    const file=getEntity(s,action.caseId,'case'),c=data(file,'case');
    requireCondition(c.suspectIds.includes(actorId)&&c.stage==='jail'&&c.bailAmountCents!==null,'bail_not_authorized');
    requireCondition(pc.cash>=c.bailAmountCents!,'insufficient_funds');const agency=getEntity(s,c.agencyId,'faction'),a=data(agency,'faction');
-   pc.cash-=c.bailAmountCents!;a.treasuryCents+=c.bailAmountCents!;agency.data=a as Entity['data'];c.stage='bail';file.data=c as Entity['data'];pc.restrainedBy=null;
+   pc.cash-=c.bailAmountCents!;a.treasuryCents+=c.bailAmountCents!;agency.data=a as Entity['data'];c.stage='bail';c.releasedAt=s.clock;c.suspectStatus[actorId]='released';c.history.push({at:s.clock,operation:'bail',actorId,targetId:actorId,authorized:true,knowledgeScore:c.evidenceScore,agencyScore:c.priority,reason:'authorized bail paid'});file.data=c as Entity['data'];pc.restrainedBy=null;pc.arrested=false;
    fact(s,file.id,'bail-payment',{payerId:actorId,cents:c.bailAmountCents},eventId,[actorId,c.investigatorId]);output('The authored bail payment and release are recorded.');return 5;
   }
   case 'clinical-care':case 'forensic-test':{

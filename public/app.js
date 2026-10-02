@@ -678,7 +678,7 @@ async function npcRegistry(){
  const content=$('div',{},title('NPC Registry.','VALOR / CREATOR RECORDS'),$('p',{class:'lead'},'Search durable non-player characters, inspect canonical dossiers, preview what a player can know, and handle duplicate or retired identities without rewriting history.'),filters,merge,$('div',{class:'npc-registry-layout'},results,profile));await load();frame(content);
 }
 const studioAreas=[
- {id:'people',title:'People',description:'Create characters, NPCs, relationships, reputations, favors, debts, and factions.',kinds:['character','relationship','reputation','obligation','faction']},
+ {id:'people',title:'People',description:'Create characters, NPCs, relationships, reputations, favors, debts, factions, orders, rumors, and living-city events.',kinds:['character','relationship','reputation','obligation','faction','factionOrder','rumor','factionEvent']},
  {id:'lore',title:'Lore & stories',description:'Write lore, story cards, quests, and cases.',kinds:['lore','storycard','quest','case']},
  {id:'places',title:'Places',description:'Build locations, homes, workplaces, jobs, accounts, bills, and merchant records.',kinds:['location','housing','business','job','account','transaction','receipt','bill']},
  {id:'objects',title:'Objects & media',description:'Author items, vehicles, transport services, and image records.',kinds:['item','vehicle','transportService','media']},

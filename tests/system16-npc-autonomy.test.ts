@@ -72,16 +72,18 @@ test('group rumors remain leader-sourced and do not grant omniscience',()=>{
  assert.equal(s.knowledge.length,0);
 });
 
-test('an offscreen crime can arrest an NPC only with local police capability and knowledge',()=>{
+test('an offscreen crime creates local police knowledge and dispatch without an omniscient instant arrest',()=>{
  const street=make('location','Street'),remote=make('location','Remote'),pc=make('character','Player',{playable:true,locationId:remote.id});
  const officer=make('character','Officer',{locationId:street.id}),npc=make('character','Suspect',{locationId:street.id});
- const law=make('law','Local law',{jurisdictionIds:[street.id]});
- const police=make('faction','Police',{memberIds:[officer.id],dispatchPolicy:{kind:'police',responseMinutes:5}});
+ const police=make('faction','Police',{memberIds:[officer.id],jurisdictionIds:[street.id],dispatchPolicy:{kind:'police',responseMinutes:5}}),posture=make('lawPosture','Local response',{scope:'district',locationId:street.id,reportProbability:100,officerAvailability:100,dispatchMinMinutes:5,dispatchMaxMinutes:5});
+ const law=make('law','Local law',{jurisdictionIds:[street.id],agencyIds:[police.id],permits:['arrest']});
  npc.data=validateEntity({...npc,data:{...npc.data,plans:[{id:randomUUID(),type:'crime',targetId:law.id,priority:1,cooldownMinutes:60,maxRunsPerDay:1}]}}).data;
- const s=state([street,remote,pc,officer,npc,law,police]),effects:Effect[]=[];advance(s,60,eventId,effects,pc.id);
+ const s=state([street,remote,pc,officer,npc,law,police,posture]),effects:Effect[]=[];advance(s,60,eventId,effects,pc.id);
  const updated=data(s.entities.find(entity=>entity.id===npc.id)!,'character');
- assert.equal(updated.arrested,true);
- assert.deepEqual(updated.activityTimeline.map(entry=>entry.outcome),['crime-committed','arrested']);
+ assert.equal(updated.arrested,false);
+ assert.deepEqual(updated.activityTimeline.map(entry=>entry.outcome),['crime-committed']);
+ assert.ok(s.entities.some(entity=>entity.kind==='case'&&data(entity,'case').suspectIds.includes(npc.id)));
+ assert.ok(s.entities.some(entity=>entity.kind==='dispatch'&&entity.data.kind==='police'));
  assert.ok(s.knowledge.some(record=>record.observerId===officer.id));
  assert.ok(!s.knowledge.some(record=>record.observerId===pc.id),'distant player does not gain police knowledge');
 });

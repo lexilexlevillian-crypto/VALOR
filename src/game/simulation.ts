@@ -5,6 +5,7 @@ import type {Data,Entity,State} from './model.ts';
 import {fact,observe,remember} from './epistemics.ts';
 import {matchesCondition} from './conditions.ts';
 import {advanceLifecycle,startNpcJourney,finishNpcJourney} from './lifecycle.ts';
+import {recordCrime} from './law.ts';
 import {authoredCompatibility} from './compatibility.ts';
 import {campaignRelationshipSafety,expireConsentRequests,isRomanceIntent,openConsentRequest,respondToConsentRequest,romanceEligibility} from './romance.ts';
 import {acceptsCommunication,communicationDelayMinutes,conversationThread,phonePowered,recipientPhone} from './phone.ts';
@@ -197,7 +198,7 @@ function advanceStep(s:State,minutes:number,eventId:string,effects:Effect[],play
    for(const item of s.entities.filter(e=>e.kind==='item'&&!e.archived&&e.id!==remains.id&&itemPossessor(s,e)===character.id)){item.data.possessorId=null;item.data.locationId=null;item.data.containerId=remains.id;item.data.equipped=false;item.data.wearState='stowed';propertyIds.push(item.id);}
    for(const vehicle of s.entities.filter(entity=>entity.kind==='vehicle'&&!entity.archived&&(entity.data.occupants as string[]).includes(character.id)))vehicle.data.occupants=(vehicle.data.occupants as string[]).filter(id=>id!==character.id);
    for(const combat of s.entities.filter(entity=>entity.kind==='combat'&&!entity.archived&&(entity.data.participants as string[]).includes(character.id)))combat.data.active=false;
-   const scene=add(s,'evidence','Death scene: '+character.name,{description:'Persistent death-scene record linked to remains and immediate witnesses.',locationId:d.locationId,objectId:remains.id,sourceEventId:eventId,discoveredBy:witnesses},'knowledge'),continuation=s.settings.campaign?.saveBehavior.postDeath??'load-or-branch',record=add(s,'deathRecord','Death of '+character.name,{characterId:character.id,occurredAt:s.clock,locationId:d.locationId,sourceEventId:eventId,causeInjuryIds,witnessIds:witnesses,remainsId:remains.id,propertyIds,evidenceIds:[scene.id],identified:false,continuation},'knowledge');d.deathRecordId=record.id;fact(s,character.id,'death',{at:s.clock,deathRecordId:record.id,remainsId:remains.id},eventId,witnesses,{evidenceIds:[scene.id]});emit(effects,character.name+' has died. Ordinary actions for this canonical character are now closed.',witnesses,'death',character.id);
+   const scene=add(s,'evidence','Death scene: '+character.name,{description:'Persistent death-scene record linked to remains and immediate witnesses.',medium:'trace',evidenceType:'other',locationId:d.locationId,sourceLocationId:d.locationId,sourceAt:s.clock,objectId:remains.id,personIds:[character.id],sourceEventId:eventId,discoveredBy:witnesses},'knowledge'),continuation=s.settings.campaign?.saveBehavior.postDeath??'load-or-branch',record=add(s,'deathRecord','Death of '+character.name,{characterId:character.id,occurredAt:s.clock,locationId:d.locationId,sourceEventId:eventId,causeInjuryIds,witnessIds:witnesses,remainsId:remains.id,propertyIds,evidenceIds:[scene.id],identified:false,continuation},'knowledge');d.deathRecordId=record.id;fact(s,character.id,'death',{at:s.clock,deathRecordId:record.id,remainsId:remains.id},eventId,witnesses,{evidenceIds:[scene.id]});emit(effects,character.name+' has died. Ordinary actions for this canonical character are now closed.',witnesses,'death',character.id);
   }else if(d.blood<unconsciousBlood||incapacitated)d.condition='unconscious';else if(d.condition==='unconscious')d.condition='conscious';
   if(!d.playable&&priorCondition!==d.condition){if(d.condition==='dead')recordNpcActivity(s,character,d,eventId,'killed','health',wounds[0]?.id??null,'Died from simulated injuries.');else if(d.condition==='unconscious')recordNpcActivity(s,character,d,eventId,'injured','health',wounds[0]?.id??null,'Became unconscious from simulated injuries.');}
   character.data=d as Entity['data'];
@@ -342,10 +343,8 @@ function advanceStep(s:State,minutes:number,eventId:string,effects:Effect[],play
     if(performed&&d.locationId===target.id){activityOutcome=target.id===d.homeId?'traveled-home':'traveled';activitySummary=target.id===d.homeId?'Traveled home through a supported route.':'Traveled through a supported route.';}
    }
    if(plan.type==='crime'&&target.kind==='law'&&d.locationId){
-    const law=data(target,'law');if(law.jurisdictionIds.includes(d.locationId)){const witnesses=atLocation(s,d.locationId).map(e=>e.id);fact(s,npc.id,'alleged-act',{lawId:target.id},eventId,witnesses);performed=true;activityOutcome='crime-committed';activitySummary='Committed an authored offense under applicable law.';
-     const police=s.entities.filter(entity=>entity.kind==='faction'&&!entity.archived).find(entity=>{const faction=data(entity,'faction');return faction.dispatchPolicy?.kind==='police'&&faction.memberIds.some(memberId=>memberId!==npc.id&&witnesses.includes(memberId));});
-     if(police){d.arrested=true;fact(s,npc.id,'arrested',{lawId:target.id,agencyId:police.id},eventId,witnesses);secondaryOutcome='arrested';secondarySummary='Arrested by a present, witnessing police-capable faction.';}
-     emit(effects,'A witnessed incident involving '+npc.name+' is recorded.',observers,'npc.crime',npc.id);
+    const law=data(target,'law');if(law.jurisdictionIds.includes(d.locationId)){const recorded=recordCrime(s,{offenderIds:[npc.id],lawId:target.id,locationId:d.locationId,eventId,severity:25,name:target.name+' incident'});performed=true;activityOutcome='crime-committed';activitySummary='Committed an authored offense under applicable law.';
+     emit(effects,recorded.filed.length?'A witnessed incident involving '+npc.name+' was reported; response follows dispatch and case state.':'A witnessed incident involving '+npc.name+' is known only to its direct witnesses.',observers,'npc.crime',npc.id);
     }
    }
    if(plan.type==='care'&&target.kind==='injury'&&s.settings.rules){

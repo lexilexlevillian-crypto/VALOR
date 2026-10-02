@@ -37,7 +37,7 @@ export function splitStack(s:State,item:Entity,quantity:number,eventId:string,ac
  const copy=structuredClone(item);copy.id=randomUUID();copy.revision=1;copy.data={...copy.data,quantity,eventHistory:[]} as Entity['data'];const created=validateEntity(copy);recordItemEvent(s,created,eventId,'split',actorId,{fromId:item.id,quantity,note:'Created from stack '+item.id+'.'});s.entities.push(created);return created;
 }
 
-export function evidenceForItem(s:State,itemId:string){return s.entities.filter(entity=>entity.kind==='evidence'&&!entity.archived&&entity.data.objectId===itemId).map(entity=>{const d=data(entity,'evidence');return {id:entity.id,name:entity.name,caseId:d.caseId,sourceEventId:d.sourceEventId,custodianId:d.custodianId,contaminated:d.contaminated,destroyed:d.destroyed,custody:d.custody};});}
+export function evidenceForItem(s:State,itemId:string){return s.entities.filter(entity=>entity.kind==='evidence'&&!entity.archived&&(entity.data.objectId===itemId||(entity.data.objectIds as string[]|undefined)?.includes(itemId))).map(entity=>{const d=data(entity,'evidence');return {id:entity.id,name:entity.name,medium:d.medium,evidenceType:d.evidenceType,caseId:d.caseId,caseIds:d.caseIds,sourceEventId:d.sourceEventId,sourceLocationId:d.sourceLocationId,sourceAt:d.sourceAt,custodianId:d.custodianId,condition:d.condition,contaminated:d.contaminated,destroyed:d.destroyed,custody:d.custody};});}
 
 export function inventoryView(s:State,characterId:string,options:{sort?:'name'|'category'|'condition'|'quantity';category?:string;equipped?:boolean}={}){
  getEntity(s,characterId,'character');let items=s.entities.filter(entity=>entity.kind==='item'&&!entity.archived&&carriedBy(s,entity,characterId));

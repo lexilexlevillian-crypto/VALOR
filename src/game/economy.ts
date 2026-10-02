@@ -2,6 +2,7 @@ import {randomUUID} from 'node:crypto';
 import {data,getEntity,validateEntity} from './model.ts';
 import type {Data,Entity,State} from './model.ts';
 import {carriedBy} from './items.ts';
+import {heatValue,raiseHeat} from './investigation.ts';
 
 export type PaymentMethod='cash'|'bank'|'card'|'account';
 const requireCondition=(ok:unknown,code:string)=>{if(!ok)throw new Error(code);};
@@ -57,7 +58,7 @@ export function merchantAccess(s:State,business:Entity,characterId:string,operat
  if(b.contraband||['fence','contraband'].includes(b.category)){
   requireCondition(!b.availableLocationIds.length||!!character.locationId&&b.availableLocationIds.includes(character.locationId),'contraband_not_locally_available');
   const trust=b.factionId?data(getEntity(s,b.factionId,'faction'),'faction').reputation[characterId]??0:0;requireCondition(trust>=b.requiredTrust,'contraband_trust_required');
-  const heat=Number(character.heat[b.factionId??business.id]??0);requireCondition(heat<=b.heatLimit,'contraband_heat_too_high');character.heat[b.factionId??business.id]=Math.min(100,heat+b.heatPerTransaction);getEntity(s,characterId,'character').data=character as Entity['data'];
+  const watcherId=b.factionId??business.id,heat=heatValue(s,characterId,watcherId,character.locationId);requireCondition(heat<=b.heatLimit,'contraband_heat_too_high');if(b.heatPerTransaction>0)raiseHeat(s,{subjectId:characterId,watcherId,locationId:character.locationId,reason:'contraband transaction',confidence:b.heatPerTransaction,resources:b.risk,sourceId:business.id});
  }
 }
 
