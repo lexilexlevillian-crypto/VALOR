@@ -32,7 +32,7 @@ export function chroniclePresentation(before:State,after:State,observerId:string
  const oldLocation=typeof oldSelf?.data.locationId==='string'?beforeById.get(oldSelf.data.locationId)?.name:null;
  if(oldLocation!==scene.locationName)add('time','Location changed',`${oldLocation??'Unknown'} → ${scene.locationName??'Unknown'}`);
 
- const owned=(rows:Entity[],id:string)=>rows.filter(entity=>entity.kind==='item'&&(entity.data.ownerId===id||typeof entity.data.containerId==='string'&&rows.some(container=>container.id===entity.data.containerId&&container.data.ownerId===id)));
+ const owned=(rows:Entity[],id:string)=>rows.filter(entity=>entity.kind==='item'&&((entity.data.possessorId??entity.data.ownerId)===id||typeof entity.data.containerId==='string'&&rows.some(container=>container.id===entity.data.containerId&&(container.data.possessorId??container.data.ownerId)===id)));
  const oldItems=owned(beforeView.entities,observerId),newItems=owned(afterView.entities,observerId),oldItemIds=new Set(oldItems.map(item=>item.id)),newItemIds=new Set(newItems.map(item=>item.id));
  const acquired=newItems.filter(item=>!oldItemIds.has(item.id)),lost=oldItems.filter(item=>!newItemIds.has(item.id));
  if(acquired.length)add('items','Items acquired',names(acquired));

@@ -5,10 +5,12 @@ import {add,emit,isOpen} from './simulation.ts';
 import type {Effect} from './simulation.ts';
 import {vehicleOperational} from './vehicle.ts';
 import {lawResponseMinutes} from './policy.ts';
+import {acceptsCommunication,communicationDelayMinutes,contactFor,conversationThread,phonePowered,recipientPhone,requirePhone,touchContact} from './phone.ts';
+import {carriedBy} from './items.ts';
 const requireCondition=(ok:unknown,code:string)=>{if(!ok)throw new Error(code);};
 export function extendedAction(s:State,actorId:string,pc:Data<'character'>,action:Action,eventId:string,effects:Effect[]):number{
  const output=(text:string)=>emit(effects,text,[actorId],action.type,actorId);
- const phone=(id:string)=>{const item=getEntity(s,id,'item'),p=data(item,'item');requireCondition(p.category==='phone'&&p.ownerId===actorId&&!p.locked&&p.battery>0,'phone_unavailable');return item;};
+ const phone=(id:string)=>requirePhone(s,id,actorId);
  switch(action.type){
   case 'request-assistance':{
    phone(action.phoneId);requireCondition(pc.locationId,'location_required');
@@ -45,46 +47,56 @@ export function extendedAction(s:State,actorId:string,pc:Data<'character'>,actio
    const deceased=getEntity(s,e.characterId,'character'),recipient=getEntity(s,e.beneficiaryId,'character');requireCondition(deceased.data.condition==='dead'&&recipient.data.condition!=='dead'&&recipient.id!==deceased.id,'estate_not_available');
    const beneficiary=recipient.id===actorId?pc:data(recipient,'character');beneficiary.cash+=Number(deceased.data.cash);beneficiary.bank+=Number(deceased.data.bank);deceased.data.cash=0;deceased.data.bank=0;
    const remains=new Set(s.entities.filter(x=>x.kind==='item'&&x.data.deceasedId===deceased.id).map(x=>x.id));
-   for(const item of s.entities.filter(x=>x.kind==='item'&&!x.archived&&(x.data.ownerId===deceased.id||remains.has(String(x.data.containerId))))){item.data.ownerId=recipient.id;item.data.locationId=null;item.data.containerId=null;item.data.equipped=false;}
+   for(const item of s.entities.filter(x=>x.kind==='item'&&!x.archived&&(x.data.ownerId===deceased.id||remains.has(String(x.data.containerId))))){item.data.ownerId=recipient.id;item.data.possessorId=recipient.id;item.data.locationId=null;item.data.containerId=null;item.data.equipped=false;item.data.wearState='stowed';}
    for(const vehicle of s.entities.filter(x=>x.kind==='vehicle'&&!x.archived&&x.data.ownerId===deceased.id))vehicle.data.ownerId=recipient.id;
    if(recipient.id!==actorId)recipient.data=beneficiary as Entity['data'];e.settledAt=s.clock;entity.data=e as Entity['data'];fact(s,entity.id,'estate-settled',true,eventId,[actorId,recipient.id]);output('The authorized estate transfer is recorded.');return 0;
   }
   case 'read-message':{
    phone(action.phoneId);const message=getEntity(s,action.messageId,'message'),m=data(message,'message');
-   requireCondition(m.toId===actorId&&m.status!=='queued'&&visible(s,message,actorId),'message_unavailable');
-   m.read=true;m.status='read';message.data=m as Entity['data'];output('Message marked as read.');return 0;
+   requireCondition(m.recipientPhoneId===action.phoneId&&m.toId===actorId&&!['queued','sent','failed'].includes(m.status)&&visible(s,message,actorId),'message_unavailable');
+   m.read=true;m.status='read';m.readAt=s.clock;message.data=m as Entity['data'];output('Message marked as read.');return 0;
   }
   case 'phone-call':{
-   const device=phone(action.phoneId),p=data(device,'item'),recipient=getEntity(s,action.toId,'character');
-   requireCondition(p.contacts.some(c=>c.characterId===recipient.id),'contact_unknown');
-   const available=s.entities.some(e=>e.kind==='item'&&!e.archived&&e.data.category==='phone'&&e.data.ownerId===recipient.id&&Number(e.data.battery)>0);
-   const busy=s.entities.some(e=>e.kind==='message'&&!e.archived&&['ringing','active'].includes(String(e.data.callState))&&[e.data.fromId,e.data.toId].some(id=>id===actorId||id===recipient.id));
+   const device=phone(action.phoneId),p=data(device,'item'),contact=contactFor(device,action.toId,action.number);requireCondition(action.number||contact,'contact_unknown');requireCondition(!contact?.blocked&&(!contact||contact.permissions.calls),'contact_blocked');
+   const number=action.number||contact?.number||'',recipient=action.toId?getEntity(s,action.toId,'character'):null,receiver=recipientPhone(s,recipient?.id??null,number,'call'),recipientId=recipient?.id??(receiver?String(receiver.data.ownerId):null);
+   const busy=s.entities.some(e=>e.kind==='message'&&!e.archived&&['ringing','active'].includes(String(e.data.callState))&&[e.data.fromId,e.data.toId].some(id=>id===actorId||id===recipientId));
    requireCondition(!busy,'line_busy');
-   const call=add(s,'message','Phone call',{fromId:actorId,toId:recipient.id,phoneId:device.id,medium:'call',body:'',at:s.clock,status:available?'delivered':'queued',callState:available?'ringing':'missed'},'owner');
-   fact(s,call.id,'call-started',{fromId:actorId,toId:recipient.id},eventId,available?[actorId,recipient.id]:[actorId]);
-   device.data.battery=Math.max(0,p.battery-1);output(available?'The phone rings; no reply has been supplied.':'The call was not connected.');return 0;
+   const accepted=receiver&&acceptsCommunication(receiver,actorId,'call'),failure=!receiver&&!recipientId?'wrong-number':!receiver?'recipient-unavailable':!accepted?'blocked':'',call=add(s,'message','Phone call',{fromId:actorId,toId:recipientId,phoneId:device.id,recipientPhoneId:receiver?.id??null,fromNumber:p.phoneNumber,toNumber:number,participants:[actorId,...(recipientId?[recipientId]:[])],threadId:conversationThread(s,actorId,recipientId,number),medium:'call',body:'',at:s.clock,sentAt:s.clock,deliveredAt:accepted?s.clock:null,receivedAt:accepted?s.clock:null,status:accepted?'delivered':'failed',callState:accepted?'ringing':'missed',endedAt:accepted?null:s.clock,sourceEventId:eventId,failureReason:failure},'owner');
+   fact(s,call.id,'call-started',{fromId:actorId,toId:recipientId},eventId,recipientId&&accepted?[actorId,recipientId]:[actorId]);touchContact(device,recipientId,number,s.clock);
+   if(p.batteryRequired)p.battery=Math.max(0,p.battery-1);device.data=p as Entity['data'];output(accepted?'The phone rings; no reply has been supplied.':'The call was not connected.');return 0;
   }
   case 'call-response':{
    phone(action.phoneId);const call=getEntity(s,action.messageId,'message'),m=data(call,'message');
    requireCondition(m.medium==='call'&&[m.fromId,m.toId].includes(actorId),'call_unavailable');
+   requireCondition(action.phoneId===(actorId===m.fromId?m.phoneId:m.recipientPhoneId),'call_phone_mismatch');
    if(action.response==='end'){requireCondition(m.callState==='active'||m.callState==='ringing','call_not_active');m.callState='ended';m.endedAt=s.clock;}
    else{requireCondition(m.toId===actorId&&m.callState==='ringing','call_not_ringing');m.callState=action.response==='answer'?'active':'declined';if(m.callState==='active')m.answeredAt=s.clock;else m.endedAt=s.clock;}
-   call.data=m as Entity['data'];fact(s,call.id,'call-status',m.callState,eventId,[m.fromId,m.toId]);output('Call status: '+m.callState+'.');return 0;
+   call.data=m as Entity['data'];fact(s,call.id,'call-status',m.callState,eventId,m.toId?[m.fromId,m.toId]:[m.fromId]);output('Call status: '+m.callState+'.');return 0;
   }
   case 'call-speak':{
    const device=phone(action.phoneId),call=getEntity(s,action.messageId,'message'),m=data(call,'message');
    requireCondition(m.callState==='active'&&[m.fromId,m.toId].includes(actorId),'call_not_active');
-   const recipient=m.fromId===actorId?m.toId:m.fromId;
-   requireCondition(s.entities.some(e=>e.kind==='item'&&!e.archived&&e.data.category==='phone'&&e.data.ownerId===recipient&&Number(e.data.battery)>0),'recipient_disconnected');
+   const recipient=m.fromId===actorId?m.toId:m.fromId;requireCondition(recipient,'call_participant_unavailable');if(!recipient)throw new Error('call_participant_unavailable');
+   const remotePhoneId=m.fromId===actorId?m.recipientPhoneId:m.phoneId;requireCondition(Boolean(remotePhoneId&&phonePowered(getEntity(s,remotePhoneId,'item'),true)),'recipient_disconnected');
    const utterance=getEntity(s,actorId,'character').name+': '+action.text;
    requireCondition(m.body.length+utterance.length+1<=16000,'call_transcript_limit');m.body+=(m.body?'\n':'')+utterance;call.data=m as Entity['data'];
-   device.data.battery=Math.max(0,Number(device.data.battery)-1);fact(s,call.id,'call-utterance',{speakerId:actorId,text:action.text},eventId,[actorId,recipient]);
+   if(device.data.batteryRequired)device.data.battery=Math.max(0,Number(device.data.battery)-1);fact(s,call.id,'call-utterance',{speakerId:actorId,text:action.text},eventId,[actorId,recipient]);
    emit(effects,utterance,[actorId,recipient],'player.dialogue',actorId);return 1;
+  }
+  case 'leave-voicemail':{
+   const device=phone(action.phoneId),p=data(device,'item'),call=getEntity(s,action.callId,'message'),prior=data(call,'message'),toId=prior.toId;requireCondition(prior.fromId===actorId&&['missed','declined','ended'].includes(String(prior.callState))&&toId,'voicemail_unavailable');if(!toId)throw new Error('voicemail_unavailable');
+   const receiver=recipientPhone(s,toId,prior.toNumber,'voicemail');requireCondition(receiver&&data(receiver,'item').phoneApps.voicemail,'voicemail_unavailable');if(!receiver)throw new Error('voicemail_unavailable');const delay=communicationDelayMinutes(s,device,receiver),message=add(s,'message','Voicemail',{fromId:actorId,toId,phoneId:device.id,recipientPhoneId:receiver.id,fromNumber:p.phoneNumber,toNumber:prior.toNumber,participants:[actorId,toId],threadId:prior.threadId,medium:'voicemail',body:action.text,at:s.clock,sentAt:s.clock,availableAt:new Date(Date.parse(s.clock)+delay*60000).toISOString(),status:'sent',sourceEventId:eventId,replyToId:call.id},'owner');
+   fact(s,message.id,'communication',{fromId:actorId,toId,medium:'voicemail'},eventId,[actorId]);if(p.batteryRequired)p.battery=Math.max(0,p.battery-1);device.data=p as Entity['data'];output('Voicemail queued for delivery.');return 0;
+  }
+  case 'delete-message':{
+   phone(action.phoneId);const message=getEntity(s,action.messageId,'message'),m=data(message,'message');requireCondition([m.phoneId,m.recipientPhoneId].includes(action.phoneId)&&(action.operation==='restore'||visible(s,message,actorId)),'message_unavailable');
+   if(action.operation==='restore'){m.deletedByIds=m.deletedByIds.filter(id=>id!==actorId);m.hiddenFromIds=m.hiddenFromIds.filter(id=>id!==actorId);}else if(action.operation==='delete'){if(!m.deletedByIds.includes(actorId))m.deletedByIds.push(actorId);}else if(!m.hiddenFromIds.includes(actorId))m.hiddenFromIds.push(actorId);
+   message.data=m as Entity['data'];output(action.operation==='restore'?'Message restored.':'Message hidden from this phone view.');return 0;
   }
   case 'vehicle-access':{
    const vehicle=getEntity(s,action.vehicleId,'vehicle'),v=data(vehicle,'vehicle');
    requireCondition(v.locationId===pc.locationId&&pc.locationId&&visible(s,vehicle,actorId),'vehicle_not_present');
-   const access=v.ownerId===actorId||!!v.keyId&&s.entities.some(e=>e.id===v.keyId&&!e.archived&&e.data.ownerId===actorId);
+   const access=v.ownerId===actorId||!!v.keyId&&s.entities.some(e=>e.id===v.keyId&&!e.archived&&e.kind==='item'&&carriedBy(s,e,actorId));
    if(action.operation==='leave'){requireCondition(v.occupants.includes(actorId),'not_in_vehicle');v.occupants=v.occupants.filter(id=>id!==actorId);}
    else{requireCondition(access,'vehicle_access_denied');
     if(action.operation==='enter'){requireCondition(!v.locked&&vehicleOperational(v),'vehicle_unavailable');requireCondition(!v.occupants.includes(actorId)&&v.occupants.length<v.capacity,'vehicle_capacity');requireCondition(!s.entities.some(e=>e.kind==='vehicle'&&e.id!==vehicle.id&&(e.data.occupants as string[]).includes(actorId)),'already_in_vehicle');v.occupants.push(actorId);}
@@ -95,7 +107,7 @@ export function extendedAction(s:State,actorId:string,pc:Data<'character'>,actio
   case 'cook':{
    const recipe=getEntity(s,action.recipeId,'recipe'),r=data(recipe,'recipe');requireCondition(visible(s,recipe,actorId),'recipe_unknown');
    requireCondition(!r.locationId||r.locationId===pc.locationId,'recipe_location_required');
-   const ingredients=r.inputs.map(input=>{const item=getEntity(s,input.itemId,'item'),d=data(item,'item');requireCondition(d.ownerId===actorId&&d.quantity>=input.quantity,'recipe_ingredients_required');return {item,input,d};});
+   const ingredients=r.inputs.map(input=>{const item=getEntity(s,input.itemId,'item'),d=data(item,'item');requireCondition(carriedBy(s,item,actorId)&&d.quantity>=input.quantity,'recipe_ingredients_required');return {item,input,d};});
    for(const {item,input,d}of ingredients)item.data.quantity=d.quantity-input.quantity;
    const cooked=add(s,'item',r.outputName,{category:r.outputCategory,ownerId:actorId,quantity:r.outputQuantity,dose:r.outputDose,weight:r.outputWeight,provenance:eventId},'owner');
    fact(s,cooked.id,'prepared',{recipeId:recipe.id,inputs:r.inputs},eventId,[actorId]);output(r.outputName+' prepared from the authored ingredients.');return r.minutes;
@@ -106,7 +118,7 @@ export function extendedAction(s:State,actorId:string,pc:Data<'character'>,actio
    const rule=s.settings.dailyLife!;
    requireCondition((place!.data.tags as string[]).includes(action.operation==='wash'?'washing-facilities':'laundry-facilities'),'facilities_required');
    if(action.operation==='wash')pc.hygiene=Math.min(100,pc.hygiene+rule.hygieneGain);
-   else{const item=getEntity(s,action.itemId??'','item');requireCondition(item.data.ownerId===actorId&&item.data.category==='clothing','clothing_required');item.data.dirty=Math.max(0,Number(item.data.dirty??0)-rule.hygieneGain);}
+   else{const item=getEntity(s,action.itemId??'','item');requireCondition(carriedBy(s,item,actorId)&&item.data.category==='clothing','clothing_required');item.data.dirty=Math.max(0,Number(item.data.dirty??0)-rule.hygieneGain);}
    output('The selected routine is completed.');return rule.minutes;
   }
   case 'pay-bail':{

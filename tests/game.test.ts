@@ -107,9 +107,10 @@ test('directional relationship state never assigns player feelings and requires 
   assert.equal(relation.data.fromId,f.npc);assert.equal(relation.data.toId,f.pc);
   (await f.game.configure(f.creator,f.timeline.id,(await f.revision()),settingsSchema.parse({romance:true,intimacy:'fade-to-black'}),key()));
   (await assert.rejects(async ()=>(await f.turn({type:'social',targetId:f.npc,intent:'date',consent:false})),/explicit_consent/));
-  (await assert.rejects(async ()=>(await f.turn({type:'social',targetId:f.npc,intent:'date',consent:true})),/reciprocal_consent/));
-  (await f.edit(relation.id,{pending:'date'}));
-  (await f.turn({type:'social',targetId:f.npc,intent:'date',consent:true}));
+  (await assert.rejects(async ()=>(await f.turn({type:'social',targetId:f.npc,intent:'date',consent:true})),/current_consent_request_required/));
+  const requestId=randomUUID(),clock=(await f.game.load(f.timeline.id)).clock;
+  (await f.edit(relation.id,{consentRequests:[{id:requestId,intent:'date',initiatorId:f.npc,recipientId:f.pc,requestedAt:clock,expiresAt:new Date(Date.parse(clock)+30*60000).toISOString(),locationId:f.location,status:'pending',contentMode:'fade-to-black',voluntary:true}]}));
+  (await f.turn({type:'social',targetId:f.npc,intent:'date',response:'accept',consentRequestId:requestId,consent:true}));
   s=(await f.game.load(f.timeline.id));assert.deepEqual(s.entities.find(e=>e.id===relation.id)!.data.labels,['date']);
   const view=(await f.game.view(f.player,f.timeline.id,f.pc));assert.ok(!('affection'in view.entities.find(e=>e.id===relation.id)!.data));
  }finally{await f.close();}

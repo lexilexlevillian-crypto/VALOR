@@ -1,9 +1,12 @@
+import {randomUUID} from 'node:crypto';
 import {data,getEntity} from './model.ts';
 import type {Data,Entity,State} from './model.ts';
 import {fact} from './epistemics.ts';
 import {emit} from './simulation.ts';
 import type {Effect} from './simulation.ts';
 import {matchesCondition} from './conditions.ts';
+import {recordRelationshipHistory,recordReputation} from './social.ts';
+import {itemPossessor} from './items.ts';
 type Outcome=Data<'transition'>['outcomes'][number];
 const set=(e:Entity,d:unknown)=>{e.data=d as Entity['data'];};
 export function applyOutcomes(s:State,outcomes:Outcome[],eventId:string,effects:Effect[]){
@@ -12,20 +15,23 @@ export function applyOutcomes(s:State,outcomes:Outcome[],eventId:string,effects:
   if(o.type==='reveal')fact(s,o.subjectId,'authored-revelation',true,eventId,[o.characterId]);
   if(o.type==='notice')emit(effects,o.text,[o.characterId],'authored.notice',o.characterId);
   if(o.type==='housing')getEntity(s,o.housingId,'housing').data.access=o.access;
-  if(o.type==='reputation'){const entity=getEntity(s,o.factionId,'faction'),f=data(entity,'faction');f.reputation[o.characterId]=Math.max(-100,Math.min(100,(f.reputation[o.characterId]??0)+o.delta));set(entity,f);}
+  if(o.type==='reputation')recordReputation(s,o.factionId,o.characterId,o.delta,eventId,'Authored consequence');
+  if(o.type==='obligation'){const entity=getEntity(s,o.obligationId,'obligation'),obligation=data(entity,'obligation');obligation.status=o.status;if(['fulfilled','forgiven','defaulted'].includes(o.status))obligation.settledAt=s.clock;obligation.history.push({at:s.clock,eventId,status:o.status,reason:'Authored consequence',disclosure:obligation.disclosure,knownByIds:obligation.knownByIds});set(entity,obligation);}
   if(o.type==='relationship'){
    const entity=getEntity(s,o.relationshipId,'relationship'),r=data(entity,'relationship');
    // Authored events may end a relationship, but cannot manufacture a player's assent.
    if(o.operation==='add'&&[r.fromId,r.toId].some(id=>getEntity(s,id,'character').data.playable))throw new Error('player_relationship_consent_required');
    r.labels=o.operation==='add'?[...new Set([...r.labels,o.label])]:r.labels.filter(x=>x!==o.label);
-   r.history.push({at:s.clock,eventId,label:'Authored consequence: '+o.operation+' '+o.label});set(entity,r);
+   if(o.operation==='add')r.labelRecords.push({id:randomUUID(),label:o.label,category:'other',disclosure:r.disclosure,knownByIds:r.knownByIds,status:'active',sourceEventId:eventId,at:s.clock,endedAt:null});
+   else for(const label of r.labelRecords)if(label.label===o.label&&label.status==='active'){label.status='ended';label.endedAt=s.clock;}
+   set(entity,r);recordRelationshipHistory(s,entity,eventId,'Authored consequence: '+o.operation+' '+o.label,'label');
   }
  }
 }
 export function startNpcJourney(s:State,entity:Entity,d:Data<'character'>,destinationId:string,at:number,activity:string){
  if(d.playable||d.condition!=='conscious'||d.journey||!d.locationId||d.locationId===destinationId)return false;
  const origin=getEntity(s,d.locationId,'location'),route=data(origin,'location').exits.find(e=>e.to===destinationId&&e.modes.includes('walk'));
- if(!route||d.cash<route.fare||route.locked&&!s.entities.some(e=>e.id===route.keyId&&!e.archived&&e.data.ownerId===entity.id))return false;
+ if(!route||d.cash<route.fare||route.locked&&!s.entities.some(e=>e.id===route.keyId&&!e.archived&&e.kind==='item'&&itemPossessor(s,e)===entity.id))return false;
  const arrival=route.interruption?.locationId??destinationId;
  // Weather-conditional encounters apply only when their authored condition matches.
  const interrupt=route.interruption&&(!route.interruption.whenWeather||route.interruption.whenWeather===s.settings.weather);

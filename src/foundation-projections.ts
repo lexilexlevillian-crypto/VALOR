@@ -1,4 +1,5 @@
 import {observerView} from './game/epistemics.ts';
+import {phoneView} from './game/phone.ts';
 import type {State} from './game/model.ts';
 
 type ChronicleEntry={
@@ -9,12 +10,12 @@ type ChronicleEntry={
 // Rebuildable, observer-scoped read models. Canonical authority remains in State
 // and immutable history; callers never need to maintain client-owned truth.
 export function buildFoundationProjections(state:State,observerId:string,chronicle:ChronicleEntry[]){
- const view=observerView(state,observerId),entities=view.entities;
+ const view=observerView(state,observerId),phone=phoneView(state,observerId),entities=view.entities;
  const byId=new Map(entities.map(entity=>[entity.id,entity]));
  const ownCharacter=byId.get(observerId);
  const ownedItems=entities.filter(entity=>entity.kind==='item'&&(
-  entity.data.ownerId===observerId||
-  typeof entity.data.containerId==='string'&&byId.get(entity.data.containerId)?.data.ownerId===observerId
+  (entity.data.possessorId??entity.data.ownerId)===observerId||
+  typeof entity.data.containerId==='string'&&(byId.get(entity.data.containerId)?.data.possessorId??byId.get(entity.data.containerId)?.data.ownerId)===observerId
  ));
  const phones=ownedItems.filter(entity=>entity.data.category==='phone');
  const messages=entities.filter(entity=>entity.kind==='message'&&(entity.data.fromId===observerId||entity.data.toId===observerId));
@@ -40,12 +41,7 @@ export function buildFoundationProjections(state:State,observerId:string,chronic
    }))
   },
   phoneInbox:{
-   phones:phones.map(phone=>({id:phone.id,name:phone.name,contacts:phone.data.contacts??[]})),
-   messages:messages.map(message=>({
-    id:message.id,fromId:message.data.fromId,toId:message.data.toId,phoneId:message.data.phoneId,
-    body:message.data.body,medium:message.data.medium??'sms',status:message.data.status??'delivered',
-    at:message.data.at
-   })).sort((a,b)=>String(a.at).localeCompare(String(b.at)))
+   schemaVersion:2,phones:phone.phones,messages:phone.messages,socialFeed:phone.socialFeed,map:phone.map
   },
   inventory:{
    ownerId:observerId,cash:ownCharacter?.data.cash??null,

@@ -6,8 +6,12 @@ import {fact,observe,remember} from './epistemics.ts';
 import {matchesCondition} from './conditions.ts';
 import {advanceLifecycle,startNpcJourney,finishNpcJourney} from './lifecycle.ts';
 import {authoredCompatibility} from './compatibility.ts';
+import {campaignRelationshipSafety,expireConsentRequests,isRomanceIntent,openConsentRequest,respondToConsentRequest,romanceEligibility} from './romance.ts';
+import {acceptsCommunication,communicationDelayMinutes,conversationThread,phonePowered,recipientPhone} from './phone.ts';
 import {injuryRate,needsRate} from './policy.ts';
 import {resolveTraitEffects,socialPresentationDescriptors} from './traits.ts';
+import {applyRelationshipMovement,decayReputations,recordRelationshipHistory,relationshipBehaviorSignal} from './social.ts';
+import {carriedBy,itemPossessor} from './items.ts';
 export type Effect={id:string;text:string;observers:string[];type:string;subjectId:string};
 export const simulationTiers={
  active:{
@@ -30,9 +34,9 @@ export const simulationTiers={
  }
 } as const;
 export type SimulationTier=keyof typeof simulationTiers;
-const deterministicUuid=(seed:string)=>{
+const deterministicUuid=(seed:string):ReturnType<typeof randomUUID>=>{
  const hex=createHash('sha256').update(seed).digest('hex').slice(0,32);
- return hex.slice(0,8)+'-'+hex.slice(8,12)+'-4'+hex.slice(13,16)+'-8'+hex.slice(17,20)+'-'+hex.slice(20);
+ return (hex.slice(0,8)+'-'+hex.slice(8,12)+'-4'+hex.slice(13,16)+'-8'+hex.slice(17,20)+'-'+hex.slice(20)) as ReturnType<typeof randomUUID>;
 };
 export function npcSimulationTier(s:State,npcId:string,playerId:string,effects:Effect[]=[]):{tier:SimulationTier;reason:string}{
  const npc=s.entities.find(entity=>entity.id===npcId&&entity.kind==='character'&&!entity.archived),player=s.entities.find(entity=>entity.id===playerId&&entity.kind==='character'&&!entity.archived);
@@ -116,15 +120,21 @@ function advanceStep(s:State,minutes:number,eventId:string,effects:Effect[],play
   if(previousLocation!==d.locationId)fact(s,npc.id,'location',d.locationId,eventId,atLocation(s,d.locationId).map(e=>e.id));
  }
  s.clock=new Date(end).toISOString();
+ decayReputations(s);
+ for(const relation of s.entities.filter(entity=>entity.kind==='relationship'&&!entity.archived))expireConsentRequests(s,relation);
  const weather=s.settings.weatherSchedule.filter(w=>Date.parse(w.at)<=end).sort((a,b)=>a.at.localeCompare(b.at)).at(-1);
  if(weather)s.settings.weather=weather.weather;
  for(const entity of s.entities.filter(e=>e.kind==='message'&&!e.archived&&e.data.callState==='ringing')){
-  if(end-Date.parse(String(entity.data.at))>=60000){entity.data.callState='missed';entity.data.endedAt=s.clock;}
+  if(end-Date.parse(String(entity.data.at))>=s.settings.communications.ringSeconds*1000){entity.data.callState='missed';entity.data.endedAt=s.clock;}
  }
- for(const entity of s.entities.filter(e=>e.kind==='message'&&!e.archived&&e.data.status==='queued')){
+ for(const entity of s.entities.filter(e=>e.kind==='message'&&!e.archived&&['queued','sent'].includes(String(e.data.status)))){
   const message=data(entity,'message');
-  if(s.entities.some(e=>e.kind==='item'&&!e.archived&&e.data.category==='phone'&&e.data.ownerId===message.toId&&Number(e.data.battery)>0)){
-   message.status='delivered';entity.data=message as Entity['data'];
+  if(!message.toId)continue;const receiver=message.recipientPhoneId?s.entities.find(candidate=>candidate.id===message.recipientPhoneId&&!candidate.archived)??null:recipientPhone(s,message.toId,message.toNumber,message.medium);
+  if(receiver&&receiver.kind==='item'){
+   if(!acceptsCommunication(receiver,message.fromId,message.medium)){message.status='failed';message.failureReason='blocked';entity.data=message as Entity['data'];continue;}
+   message.recipientPhoneId=receiver.id;if(!message.availableAt)message.availableAt=new Date(Date.parse(message.sentAt??message.at)+communicationDelayMinutes(s,getEntity(s,message.phoneId,'item'),receiver)*60000).toISOString();message.status='sent';
+   if(Date.parse(message.availableAt)>end){entity.data=message as Entity['data'];continue;}
+   message.status='delivered';message.deliveredAt=s.clock;message.receivedAt=s.clock;entity.data=message as Entity['data'];
    for(const f of s.facts.filter(f=>f.subjectId===entity.id&&f.predicate==='communication'))observe(s,message.toId,f.id,'delivered:'+entity.id);
    if(message.body)s.beliefs.push({id:randomUUID(),observerId:message.toId,proposition:message.body,confidence:0.5,source:'message:'+entity.id,at:s.clock,correctedBy:null});
   }
@@ -155,7 +165,7 @@ function advanceStep(s:State,minutes:number,eventId:string,effects:Effect[],play
   }
   if(d.blood<=0){d.condition='dead';const observers=atLocation(s,d.locationId).map(e=>e.id);fact(s,character.id,'death',{at:s.clock},eventId,observers);emit(effects,character.name+' has died.',observers,'death',character.id);
    const remains=add(s,'item','Remains of '+character.name,{category:'container',locationId:d.locationId,capacity:100000,provenance:eventId,deceasedId:character.id},'campaign');
-   for(const item of s.entities.filter(e=>e.kind==='item'&&!e.archived&&e.data.ownerId===character.id)){item.data.ownerId=null;item.data.containerId=remains.id;item.data.equipped=false;}
+   for(const item of s.entities.filter(e=>e.kind==='item'&&!e.archived&&itemPossessor(s,e)===character.id)){item.data.possessorId=null;item.data.locationId=null;item.data.containerId=remains.id;item.data.equipped=false;item.data.wearState='stowed';}
   }else if(d.blood<20)d.condition='unconscious';
   if(!d.playable&&priorCondition!==d.condition){if(d.condition==='dead')recordNpcActivity(s,character,d,eventId,'killed','health',wounds[0]?.id??null,'Died from simulated injuries.');else if(d.condition==='unconscious')recordNpcActivity(s,character,d,eventId,'injured','health',wounds[0]?.id??null,'Became unconscious from simulated injuries.');}
   character.data=d as Entity['data'];
@@ -206,9 +216,9 @@ function advanceStep(s:State,minutes:number,eventId:string,effects:Effect[],play
   if(f.cohesion<=f.groupPolicy.conflictThreshold){
    const member=present[0]!,leaderData=data(leader,'character'),memberData=data(member,'character');
    let relation=s.entities.find(candidate=>candidate.kind==='relationship'&&!candidate.archived&&candidate.data.fromId===leader.id&&candidate.data.toId===member.id);
-   if(!relation)relation=add(s,'relationship',leader.name+' → '+member.name,{fromId:leader.id,toId:member.id,secret:true},'knowledge');
+   if(!relation)relation=add(s,'relationship',leader.name+' → '+member.name,{fromId:leader.id,toId:member.id,secret:true,disclosure:'secret',knownByIds:[leader.id]},'knowledge');
    const relationship=data(relation,'relationship');
-   if(!relationship.history.some(entry=>entry.label==='faction argument'&&entry.at.slice(0,10)===s.clock.slice(0,10))){relationship.resentment=Math.min(100,relationship.resentment+5);relationship.history.push({at:s.clock,eventId,label:'faction argument'});relation.data=relationship as Entity['data'];recordNpcActivity(s,leader,leaderData,eventId,'argument-occurred','faction',entity.id,'Argued during low-cohesion faction contact.');recordNpcActivity(s,member,memberData,eventId,'argument-occurred','faction',entity.id,'Argued during low-cohesion faction contact.');}
+   if(!relationship.history.some(entry=>entry.label==='faction argument'&&entry.at.slice(0,10)===s.clock.slice(0,10))){applyRelationshipMovement(s,relation,eventId,'faction argument',{resentment:25},leader.id,[entity.id]);recordNpcActivity(s,leader,leaderData,eventId,'argument-occurred','faction',entity.id,'Argued during low-cohesion faction contact.');recordNpcActivity(s,member,memberData,eventId,'argument-occurred','faction',entity.id,'Argued during low-cohesion faction contact.');}
   }
   f.lastGroupAt=new Date(previous+steps*f.groupPolicy.intervalMinutes*60000).toISOString();entity.data=f as Entity['data'];
   emit(effects,'Authored group contact: '+entity.name,[],'npc.group',entity.id);
@@ -216,7 +226,7 @@ function advanceStep(s:State,minutes:number,eventId:string,effects:Effect[],play
  for(const r of s.entities.filter(e=>e.kind==='relationship'&&!e.archived)){
   const d=data(r,'relationship'),from=getEntity(s,d.fromId,'character'),to=getEntity(s,d.toId,'character');
   if(from.data.playable||to.data.playable||from.data.locationId!==to.data.locationId||!from.data.locationId||from.data.condition!=='conscious'||to.data.condition!=='conscious')continue;
-  if(!d.history.some(h=>h.label==='routine contact'&&h.at.slice(0,10)===s.clock.slice(0,10))){d.familiarity=Math.min(100,d.familiarity+(1-d.inertia));d.history.push({at:s.clock,eventId,label:'routine contact'});r.data=d as Entity['data'];}
+  if(!d.history.some(h=>h.label==='routine contact'&&h.at.slice(0,10)===s.clock.slice(0,10)))recordRelationshipHistory(s,r,eventId,'routine contact','routine',d.fromId,'private');
  }
  // Bounded deterministic planning; all voluntary actions belong to NPCs.
  let initiatives=0;
@@ -225,7 +235,7 @@ function advanceStep(s:State,minutes:number,eventId:string,effects:Effect[],play
   const d=data(npc,'character');if(d.condition!=='conscious')continue;
   const classification=npcSimulationTier(s,npc.id,playerId,effects),tier=classification.tier;d.simulationTier=tier;d.simulationTierReason=classification.reason;
   const minInterval=simulationTiers[tier].updateFrequencyMinutes;
-  const plans=[...d.plans].filter(p=>p.enabled).map(plan=>{const resolution=resolveTraitEffects(s,npc.id,'ai-priority',{planType:plan.type,context:plan.type});return {plan,resolution,priority:plan.priority+resolution.applied.reduce((sum,effect)=>sum+effect.value,0)};}).sort((a,b)=>b.priority-a.priority||a.plan.id.localeCompare(b.plan.id));
+  const plans=[...d.plans].filter(p=>p.enabled).map(plan=>{const resolution=resolveTraitEffects(s,npc.id,'ai-priority',{planType:plan.type,context:plan.type}),target=s.entities.find(entity=>entity.id===plan.targetId&&!entity.archived),socialTarget=target?.kind==='character'?target.id:target?.kind==='relationship'&&target.data.fromId===npc.id?String(target.data.toId):null;return {plan,resolution,priority:plan.priority+resolution.applied.reduce((sum,effect)=>sum+effect.value,0)+(socialTarget?relationshipBehaviorSignal(s,npc.id,socialTarget,plan.type):0)};}).sort((a,b)=>b.priority-a.priority||a.plan.id.localeCompare(b.plan.id));
   for(const candidate of plans){const plan=candidate.plan;
    if(d.preferences[plan.type]==='off')continue;
    if(!plan.conditions.every(c=>matchesCondition(s,c)))continue;
@@ -239,22 +249,21 @@ function advanceStep(s:State,minutes:number,eventId:string,effects:Effect[],play
    if(!plan.constraints.every(c=>matchesCondition(s,c))){fail('blocked');if(plan.fallback==='next-plan')continue;break;}
    const target=s.entities.find(e=>e.id===plan.targetId&&!e.archived);if(!target){fail('blocked');if(plan.fallback==='next-plan')continue;break;}
    const observers=atLocation(s,d.locationId).filter(e=>e.data.playable).map(e=>e.id);
-   let performed=false,activityOutcome:Data<'character'>['activityTimeline'][number]['outcome']|null=null,activitySummary='';
+   let performed=false,activityOutcome:Data<'character'>['activityTimeline'][number]['outcome']|null=null,activitySummary='',secondaryOutcome:Data<'character'>['activityTimeline'][number]['outcome']|null=null,secondarySummary='';
    if(plan.type==='message'&&target.kind==='character'&&plan.text){
-    const device=s.entities.find(e=>e.kind==='item'&&!e.archived&&e.data.ownerId===npc.id&&e.data.category==='phone'&&!e.data.locked&&Number(e.data.battery)>0&&(e.data.contacts as {characterId:string}[]).some(c=>c.characterId===target.id));
-    if(device){const delivered=s.entities.some(e=>e.kind==='item'&&!e.archived&&e.data.ownerId===target.id&&e.data.category==='phone'&&Number(e.data.battery)>0);
-     const message=add(s,'message','Message from '+npc.name,{fromId:npc.id,toId:target.id,phoneId:device.id,medium:'sms',body:plan.text,at:s.clock,status:delivered?'delivered':'queued'},'owner');
-     device.data.battery=Number(device.data.battery)-1;fact(s,message.id,'communication',{fromId:npc.id,toId:target.id,medium:'sms'},eventId,delivered?[npc.id,target.id]:[npc.id]);
-     if(delivered){s.beliefs.push({id:randomUUID(),observerId:target.id,proposition:plan.text,confidence:0.5,source:'message:'+message.id,at:s.clock,correctedBy:null});emit(effects,npc.name+': '+plan.text,[target.id],'npc.message',message.id);}performed=true;activityOutcome='message-sent';activitySummary='Sent a supported phone message to '+target.name+'.';
+    const device=s.entities.find(e=>e.kind==='item'&&!e.archived&&carriedBy(s,e,npc.id)&&phonePowered(e)&&(e.data.contacts as {characterId:string|null;blocked?:boolean}[]).some(c=>c.characterId===target.id&&!c.blocked));
+    if(device){const receiver=recipientPhone(s,target.id,'','sms'),delay=communicationDelayMinutes(s,device,receiver);
+     const message=add(s,'message','Message from '+npc.name,{fromId:npc.id,toId:target.id,phoneId:device.id,recipientPhoneId:receiver?.id??null,fromNumber:String(device.data.phoneNumber??''),toNumber:String(receiver?.data.phoneNumber??''),participants:[npc.id,target.id],threadId:conversationThread(s,npc.id,target.id,String(receiver?.data.phoneNumber??'')),medium:'sms',body:plan.text,at:s.clock,sentAt:s.clock,availableAt:new Date(Date.parse(s.clock)+delay*60000).toISOString(),status:receiver?'sent':'queued',sourceEventId:eventId},'owner');
+     if(device.data.batteryRequired)device.data.battery=Math.max(0,Number(device.data.battery)-1);fact(s,message.id,'communication',{fromId:npc.id,toId:target.id,medium:'sms'},eventId,[npc.id]);performed=true;activityOutcome='message-sent';activitySummary='Queued a supported phone message to '+target.name+'.';
     }
    }
    if(plan.type==='call'&&target.kind==='character'){
-    const device=s.entities.find(e=>e.kind==='item'&&!e.archived&&e.data.ownerId===npc.id&&e.data.category==='phone'&&!e.data.locked&&Number(e.data.battery)>0&&(e.data.contacts as {characterId:string}[]).some(c=>c.characterId===target.id));
-    const recipientPhone=s.entities.find(e=>e.kind==='item'&&!e.archived&&e.data.ownerId===target.id&&e.data.category==='phone'&&Number(e.data.battery)>0);
-    if(device&&recipientPhone){const call=add(s,'message','Call from '+npc.name,{fromId:npc.id,toId:target.id,phoneId:device.id,medium:'call',body:plan.text,at:s.clock,status:'delivered',callState:'ended',answeredAt:s.clock,endedAt:s.clock},'owner');device.data.battery=Math.max(0,Number(device.data.battery)-1);fact(s,call.id,'communication',{fromId:npc.id,toId:target.id,medium:'call'},eventId,[npc.id,target.id]);if(plan.text)s.beliefs.push({id:randomUUID(),observerId:target.id,proposition:plan.text,confidence:0.5,source:'call:'+call.id,at:s.clock,correctedBy:null});performed=true;activityOutcome='called-friend';activitySummary='Called '+target.name+' using an available contact and phone.';}
+    const device=s.entities.find(e=>e.kind==='item'&&!e.archived&&carriedBy(s,e,npc.id)&&phonePowered(e)&&(e.data.contacts as {characterId:string|null;blocked?:boolean}[]).some(c=>c.characterId===target.id&&!c.blocked));
+    const receiver=recipientPhone(s,target.id,'','call');
+    if(device){const accepted=receiver&&acceptsCommunication(receiver,npc.id,'call'),call=add(s,'message','Call from '+npc.name,{fromId:npc.id,toId:target.id,phoneId:device.id,recipientPhoneId:receiver?.id??null,fromNumber:String(device.data.phoneNumber??''),toNumber:String(receiver?.data.phoneNumber??''),participants:[npc.id,target.id],threadId:conversationThread(s,npc.id,target.id,String(receiver?.data.phoneNumber??'')),medium:'call',body:'',at:s.clock,sentAt:s.clock,deliveredAt:accepted?s.clock:null,receivedAt:accepted?s.clock:null,status:accepted?'delivered':'failed',callState:accepted?'ringing':'missed',endedAt:accepted?null:s.clock,sourceEventId:eventId,failureReason:accepted?'':'recipient-unavailable'},'owner');if(device.data.batteryRequired)device.data.battery=Math.max(0,Number(device.data.battery)-1);fact(s,call.id,'call-started',{fromId:npc.id,toId:target.id},eventId,accepted?[npc.id,target.id]:[npc.id]);if(accepted)emit(effects,npc.name+' is calling. No answer has been supplied.',target.data.playable?[target.id]:observers,'npc.call',call.id);performed=true;activityOutcome='called-friend';activitySummary='Placed an authored call without supplying the recipient response.';}
    }
    if(plan.type==='breakup'&&target.kind==='relationship'&&target.data.fromId===npc.id){
-    const r=data(target,'relationship');if(r.labels.some(label=>['date','commit','cohabit','marry','intimacy'].includes(label))){r.labels=r.labels.filter(label=>!['date','commit','cohabit','marry','intimacy'].includes(label));r.pending='';r.history.push({at:s.clock,eventId,label:'NPC ended relationship'});target.data=r as Entity['data'];
+    const r=data(target,'relationship');if(r.labels.some(label=>['date','commit','cohabit','marry','intimacy'].includes(label))){r.labels=r.labels.filter(label=>!['date','commit','cohabit','marry','intimacy'].includes(label));for(const label of r.labelRecords)if(label.category==='romantic'&&label.status==='active'){label.status='ended';label.endedAt=s.clock;}r.pending='';target.data=r as Entity['data'];recordRelationshipHistory(s,target,eventId,'NPC ended relationship','label',npc.id,'private');
      const recipient=getEntity(s,r.toId,'character');if(recipient.data.locationId===d.locationId&&d.locationId){fact(s,target.id,'relationship-ended',true,eventId,[npc.id,recipient.id]);emit(effects,npc.name+' ends the relationship.',[recipient.id],'npc.relationship',npc.id);}performed=true;activityOutcome='relationship-changed';activitySummary='Ended an authored relationship.';
     }
    }
@@ -266,24 +275,26 @@ function advanceStep(s:State,minutes:number,eventId:string,effects:Effect[],play
    }
    if(plan.type==='socialize'&&target.kind==='character'&&target.data.locationId===d.locationId&&target.id!==npc.id){
     let relation=s.entities.find(e=>e.kind==='relationship'&&!e.archived&&e.data.fromId===npc.id&&e.data.toId===target.id);
-    const first=!relation;if(!relation)relation=add(s,'relationship',npc.name+' → '+target.name,{fromId:npc.id,toId:target.id,secret:true},'knowledge');
-    const r=data(relation,'relationship'),argument=r.resentment>=50||r.fear>=50||r.jealousy>=50;r.familiarity=Math.min(100,r.familiarity+due*(1-r.inertia));r.history.push({at:s.clock,eventId,label:argument?'NPC argument':'NPC initiated conversation'});relation.data=r as Entity['data'];
-    if(first)for(const descriptor of socialPresentationDescriptors(s,target.id,'socialize')){r.history.push({at:s.clock,eventId,label:'First impression: '+descriptor.descriptor});traitTrace(d,[{...descriptor,type:'first-impression',value:0}],target.id,'contextual descriptor observed',s.clock);}
+    const first=!relation;if(!relation)relation=add(s,'relationship',npc.name+' → '+target.name,{fromId:npc.id,toId:target.id,secret:false,disclosure:'private',knownByIds:[npc.id,target.id]},'knowledge');
+    const r=data(relation,'relationship'),argument=r.resentment>=50||r.fear>=50||r.jealousy>=50;recordRelationshipHistory(s,relation,eventId,argument?'NPC argument':'NPC initiated conversation',argument?'meaningful':'routine',npc.id,'private');if(argument)applyRelationshipMovement(s,relation,eventId,'argument',{resentment:25},npc.id,[target.id]);
+    if(first)for(const descriptor of socialPresentationDescriptors(s,target.id,'socialize')){recordRelationshipHistory(s,relation,eventId,'First impression: '+descriptor.descriptor,'system',npc.id,'private');traitTrace(d,[{...descriptor,type:'first-impression',value:0}],target.id,'contextual descriptor observed',s.clock);}
     emit(effects,npc.name+(argument?' has an argument.':' begins a conversation.'),observers,'npc.social',npc.id);performed=true;activityOutcome=argument?'argument-occurred':'socialized';activitySummary=argument?'An existing relationship conflict produced an argument.':'Socialized with '+target.name+'.';
    }
-   if(plan.type==='offer'&&target.kind==='relationship'&&target.data.fromId===npc.id){
-    const r=data(target,'relationship'),recipient=getEntity(s,r.toId,'character'),intent=r.tags.find(t=>['date','commit','cohabit','marry','reconcile','intimacy'].includes(t));
-    const adult=(dob:unknown)=>typeof dob==='string'&&(end-Date.parse(dob))/31557600000>=18;
-    if(intent&&s.settings.romance&&adult(d.dob)&&adult(recipient.data.dob)&&recipient.data.locationId===d.locationId&&!r.pending&&!r.boundaries.includes(intent)&&!d.boundaries.includes(intent)&&!(recipient.data.boundaries as string[]).includes(intent)&&d.preferences.romance!=='off'&&(recipient.data.preferences as Record<string,string>).romance!=='off'&&authoredCompatibility(s,npc.id,recipient.id)>=d.compatibility.minimum&&(intent!=='intimacy'||s.settings.intimacy==='fade-to-black')){
-     r.pending=intent;target.data=r as Entity['data'];
-     const reciprocal=s.entities.find(e=>e.kind==='relationship'&&!e.archived&&e.data.fromId===recipient.id&&e.data.toId===npc.id);
-     if(!recipient.data.playable&&reciprocal?.data.pending===intent&&!(reciprocal.data.boundaries as string[]).includes(intent)){
-      const reverse=data(reciprocal,'relationship');r.labels=[...new Set([...r.labels,intent])];reverse.labels=[...new Set([...reverse.labels,intent])];r.pending='';reverse.pending='';
-      r.history.push({at:s.clock,eventId,label:'Mutually accepted '+intent});reverse.history.push({at:s.clock,eventId,label:'Mutually accepted '+intent});
-      target.data=r as Entity['data'];reciprocal.data=reverse as Entity['data'];
-      fact(s,target.id,'relationship-changed',intent,eventId,[npc.id,recipient.id]);
-     }else emit(effects,npc.name+' offers '+intent+'. A response is yours to choose.',[recipient.id],'npc.offer',npc.id);
-     performed=true;activityOutcome='relationship-changed';activitySummary='Made an authored relationship offer.';
+   if(plan.type==='offer'&&target.kind==='relationship'){
+    const r=data(target,'relationship'),intent=r.tags.find(isRomanceIntent),safety=campaignRelationshipSafety(s);
+    if(intent&&safety.allowNpcInitiative&&d.contentFilters.allowNpcInitiative){
+     if(r.fromId===npc.id){
+      const recipient=getEntity(s,r.toId,'character'),recipientData=data(recipient,'character'),pending=r.consentRequests.some(request=>request.status==='pending'&&request.intent===intent&&request.initiatorId===npc.id&&request.recipientId===recipient.id),eligibility=romanceEligibility(s,npc.id,recipient.id,intent);
+      if(!pending&&recipientData.contentFilters.allowNpcInitiative&&eligibility.allowed&&authoredCompatibility(s,npc.id,recipient.id)>=d.compatibility.minimum){
+       openConsentRequest(s,target,intent,npc.id,recipient.id,deterministicUuid(eventId+'|consent|'+target.id+'|'+intent+'|'+s.clock));
+       emit(effects,npc.name+' presents a '+intent+' advance. The recipient chooses whether to respond.',recipient.data.playable?[recipient.id]:observers,'npc.offer',npc.id);performed=true;activityOutcome='relationship-changed';activitySummary='Presented one authored advance and waited for a response.';
+      }
+     }else if(r.toId===npc.id){
+      const request=r.consentRequests.find(candidate=>candidate.status==='pending'&&candidate.recipientId===npc.id&&candidate.intent===intent),initiator=request?getEntity(s,request.initiatorId,'character'):null,eligibility=request?romanceEligibility(s,request.initiatorId,npc.id,intent):{allowed:false};
+      if(request&&initiator&&eligibility.allowed&&authoredCompatibility(s,npc.id,initiator.id)>=d.compatibility.minimum){
+       respondToConsentRequest(s,target,request.id,npc.id,intent,eventId,'accept',true);const accepted=data(target,'relationship');accepted.labels=[...new Set([...accepted.labels,intent])];if(intent==='exclusive')accepted.exclusivityStatus='exclusive';if(!accepted.labelRecords.some(label=>label.label===intent&&label.status==='active'))accepted.labelRecords.push({id:deterministicUuid(eventId+'|label|'+target.id+'|'+intent+'|'+s.clock),label:intent,category:'romantic',disclosure:accepted.disclosure,knownByIds:[initiator.id,npc.id],status:'active',sourceEventId:eventId,at:s.clock,endedAt:null});target.data=accepted as Entity['data'];recordRelationshipHistory(s,target,eventId,'NPC accepted '+intent,'label',npc.id,'private');fact(s,target.id,'relationship-changed',intent,eventId,[initiator.id,npc.id]);emit(effects,npc.name+' accepts the '+intent+' advance.',initiator.data.playable?[initiator.id]:observers,'npc.offer-response',npc.id);performed=true;activityOutcome='relationship-changed';activitySummary='Voluntarily accepted a current contextual advance.';
+      }
+     }
     }
    }
    if(plan.type==='share'&&target.kind==='character'&&target.data.locationId===d.locationId&&plan.auxiliaryId){
@@ -297,16 +308,20 @@ function advanceStep(s:State,minutes:number,eventId:string,effects:Effect[],play
     if(performed&&d.locationId===target.id){activityOutcome=target.id===d.homeId?'traveled-home':'traveled';activitySummary=target.id===d.homeId?'Traveled home through a supported route.':'Traveled through a supported route.';}
    }
    if(plan.type==='crime'&&target.kind==='law'&&d.locationId){
-    const law=data(target,'law');if(law.jurisdictionIds.includes(d.locationId)){const witnesses=atLocation(s,d.locationId).map(e=>e.id);fact(s,npc.id,'alleged-act',{lawId:target.id},eventId,witnesses);performed=true;activityOutcome='crime-committed';activitySummary='Committed an authored offense under applicable law.';emit(effects,'A witnessed incident involving '+npc.name+' is recorded.',observers,'npc.crime',npc.id);}
+    const law=data(target,'law');if(law.jurisdictionIds.includes(d.locationId)){const witnesses=atLocation(s,d.locationId).map(e=>e.id);fact(s,npc.id,'alleged-act',{lawId:target.id},eventId,witnesses);performed=true;activityOutcome='crime-committed';activitySummary='Committed an authored offense under applicable law.';
+     const police=s.entities.filter(entity=>entity.kind==='faction'&&!entity.archived).find(entity=>{const faction=data(entity,'faction');return faction.dispatchPolicy?.kind==='police'&&faction.memberIds.some(memberId=>memberId!==npc.id&&witnesses.includes(memberId));});
+     if(police){d.arrested=true;fact(s,npc.id,'arrested',{lawId:target.id,agencyId:police.id},eventId,witnesses);secondaryOutcome='arrested';secondarySummary='Arrested by a present, witnessing police-capable faction.';}
+     emit(effects,'A witnessed incident involving '+npc.name+' is recorded.',observers,'npc.crime',npc.id);
+    }
    }
    if(plan.type==='care'&&target.kind==='injury'&&s.settings.rules){
     const injury=data(target,'injury'),patient=getEntity(s,injury.characterId,'character'),medicine=plan.auxiliaryId?s.entities.find(e=>e.id===plan.auxiliaryId):null;
-    if(!injury.treated&&patient.data.condition!=='dead'&&patient.data.locationId===d.locationId&&medicine?.kind==='item'&&medicine.data.ownerId===npc.id&&medicine.data.category==='medicine'&&Number(medicine.data.quantity)>0&&due*interval>=s.settings.rules.treatmentMinutes){
+    if(!injury.treated&&patient.data.condition!=='dead'&&patient.data.locationId===d.locationId&&medicine?.kind==='item'&&carriedBy(s,medicine,npc.id)&&medicine.data.category==='medicine'&&Number(medicine.data.quantity)>0&&due*interval>=s.settings.rules.treatmentMinutes){
      medicine.data.quantity=Number(medicine.data.quantity)-1;injury.treated=true;injury.bleeding=0;target.data=injury as Entity['data'];performed=true;activityOutcome='care-provided';activitySummary='Provided care with available medicine and capability.';emit(effects,npc.name+' provides first aid.',observers,'npc.care',npc.id);
     }
    }
    if(plan.type==='scene'&&target.kind==='quest'&&target.data.status==='active'&&tier==='active'&&(target.data.characterId===playerId||!target.data.characterId)){emit(effects,npc.name+' initiates: '+(plan.text||target.name),observers,'npc.scene',npc.id);performed=true;activityOutcome='scene-initiated';activitySummary='Initiated an authored active-quest scene at the player location.';}
-   if(performed){plan.lastRun=new Date(previous+due*interval*60000).toISOString();plan.runsToday++;plan.failedAttempts=0;plan.lastOutcome='performed';initiatives++;traitTrace(d,candidate.resolution.applied,plan.type,'plan selected at effective priority '+candidate.priority,s.clock);remember(s,npc.id,'Pursued goal: '+plan.type,eventId,0.4);if(activityOutcome)recordNpcActivity(s,npc,d,eventId,activityOutcome,'goal',target.id,activitySummary);break;}
+   if(performed){plan.lastRun=new Date(previous+due*interval*60000).toISOString();plan.runsToday++;plan.failedAttempts=0;plan.lastOutcome='performed';initiatives++;traitTrace(d,candidate.resolution.applied,plan.type,'plan selected at effective priority '+candidate.priority,s.clock);remember(s,npc.id,'Pursued goal: '+plan.type,eventId,0.4);if(activityOutcome)recordNpcActivity(s,npc,d,eventId,activityOutcome,'goal',target.id,activitySummary);if(secondaryOutcome)recordNpcActivity(s,npc,d,eventId,secondaryOutcome,'justice',target.id,secondarySummary);break;}
    fail('blocked');if(plan.fallback==='next-plan')continue;break;
   }
   npc.data=d as Entity['data'];

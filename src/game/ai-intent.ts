@@ -19,7 +19,7 @@ export function intentContext(s:State,characterId:string,text:string):IntentCont
  for(const e of view.entities){
   if(e.kind==='location'&&e.id!==self.data.locationId)choices.push({label:'Walk to '+e.name,action:{type:'travel',destinationId:e.id,mode:'walk',vehicleId:null}});
   if(e.kind==='recipe')choices.push({label:'Prepare '+e.name,action:{type:'cook',recipeId:e.id}});
-  if(e.kind==='item'){if(e.data.ownerId===characterId){if(['food','drink','medicine','substance'].includes(String(e.data.category)))choices.push({label:'Consume one '+e.name,action:{type:'consume',itemId:e.id}});choices.push({label:(e.data.equipped?'Unequip ':'Equip ')+e.name,action:{type:'equip',itemId:e.id,equipped:!e.data.equipped}});}else if(!e.data.ownerId)choices.push({label:'Take '+e.name,action:{type:'take',itemId:e.id}});}
+  if(e.kind==='item'){if((e.data.possessorId??e.data.ownerId)===characterId){if(['food','drink','medicine','substance'].includes(String(e.data.category)))choices.push({label:'Consume one '+e.name,action:{type:'consume',itemId:e.id}});choices.push({label:(e.data.equipped?'Unequip ':'Equip ')+e.name,action:{type:'equip',itemId:e.id,equipped:!e.data.equipped}});}else if(!e.data.possessorId&&!e.data.ownerId)choices.push({label:'Take '+e.name,action:{type:'take',itemId:e.id}});}
  }
  const context:IntentContext={version:'intent-v1',text,candidates:[]};
  for(const choice of choices.slice(0,100)){context.candidates.push({id:String(context.candidates.length),...choice});if(Buffer.byteLength(JSON.stringify(context))>s.settings.contextTokens-512){context.candidates.pop();break;}}

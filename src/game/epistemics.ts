@@ -3,10 +3,12 @@ import {randomUUID} from 'node:crypto';
 import {data,getEntity} from './model.ts';
 import type {Entity,State} from './model.ts';
 import {calendarView} from './calendar.ts';
+import {carriedBy,itemPossessor} from './items.ts';
 import {cosine,embedText} from './embedding.ts';
 const unique=(values:string[]=[])=>([...new Set(values)].sort());
 const within=(now:number,from?:string|null,until?:string|null)=>!(from&&Date.parse(from)>now)&&!(until&&Date.parse(until)<=now);
 const audienceAllows=(s:State,observerId:string,audience:string[]=[])=>{if(!audience.length||audience.includes('campaign')||audience.includes(observerId))return true;const observer=data(getEntity(s,observerId,'character'),'character');return observer.factionIds.some(id=>audience.includes(id));};
+const socialAllows=(disclosure:string|undefined,knownByIds:string[]|undefined,observerId:string,participants:string[]=[])=>disclosure==='public'||Boolean(knownByIds?.includes(observerId))||(['private','disputed'].includes(disclosure??'private')&&participants.includes(observerId));
 export type PropositionOptions={objectId?:string|null;qualifiers?:Record<string,unknown>;source?:string;truthStatus?:'verified'|'asserted'|'disputed'|'false'|'superseded';audience?:string[];confidence?:number;observedAt?:string|null;learnedAt?:string|null;validFrom?:string|null;validUntil?:string|null;eventIds?:string[];evidenceIds?:string[];tags?:string[]};
 export function observe(s:State,observerId:string,factId:string,source:string,options:{confidence?:number;observedAt?:string|null;expiresAt?:string|null;evidenceIds?:string[]}={}) {
  getEntity(s,observerId,'character');const proposition=s.facts.find(f=>f.id===factId);if(!proposition)throw new Error('fact_unavailable');if(!audienceAllows(s,observerId,proposition.audience))throw new Error('fact_audience_denied');
@@ -37,19 +39,22 @@ export function visible(s:State,e:Entity,observerId:string):boolean{
  if(e.kind==='dispatch')return e.data.requesterId===observerId||e.data.responderId===observerId||e.data.patientId===observerId;
  if(e.kind==='estate')return e.data.executorId===observerId||e.data.beneficiaryId===observerId;
  if(e.kind==='judgment')return e.data.characterId===observerId&&!!e.data.appliedAt;
- if(e.kind==='message'){const d=data(e,'message');return d.fromId===observerId||d.toId===observerId&&d.status!=='queued';}
- if(e.kind==='relationship'){const d=data(e,'relationship');return !d.secret&&(d.fromId===observerId||d.toId===observerId);}
+ if(e.kind==='message'){const d=data(e,'message');if(d.deletedByIds.includes(observerId)||d.hiddenFromIds.includes(observerId))return false;const access=(phoneId:string|null,participantId:string|null)=>{if(!phoneId)return false;const phone=s.entities.find(candidate=>candidate.id===phoneId&&candidate.kind==='item'&&!candidate.archived);if(!phone)return false;const item=data(phone,'item'),physical=carriedBy(s,phone,observerId)||item.authorizedUserIds.includes(observerId);return item.category==='phone'&&item.phoneState==='active'&&item.condition>0&&!item.locked&&(!item.batteryRequired||item.battery>0)&&physical&&(participantId===observerId||item.authorizedUserIds.includes(observerId)||item.stolen);};return access(d.phoneId,d.fromId)||access(d.recipientPhoneId,d.toId)&&!['draft','queued','sent','failed'].includes(d.status);}
+ if(e.kind==='socialPost'){const post=data(e,'socialPost');if(post.deleted||post.hiddenFromIds.includes(observerId)||post.source==='simulation'&&!post.validated)return false;const author=data(getEntity(s,post.authorId,'character'),'character'),hasFeed=s.entities.some(candidate=>{if(candidate.kind!=='item'||candidate.archived)return false;const item=data(candidate,'item');return item.category==='phone'&&item.phoneState==='active'&&item.condition>0&&!item.locked&&(!item.batteryRequired||item.battery>0)&&(carriedBy(s,candidate,observerId)||item.authorizedUserIds.includes(observerId))&&item.phoneApps.social;});if(!hasFeed)return false;if(post.authorId===observerId)return true;if(post.privacy==='public')return true;if(post.privacy==='friends')return author.socialConnections.friendIds.includes(observerId);if(post.privacy==='followers')return author.socialConnections.followerIds.includes(observerId);if(post.privacy==='custom')return post.allowedViewerIds.includes(observerId);return false;}
+ if(e.kind==='relationship'){const d=data(e,'relationship'),disclosure=d.secret?'secret':d.disclosure;return socialAllows(disclosure,d.knownByIds,observerId,[d.fromId,d.toId]);}
+ if(e.kind==='reputation'||e.kind==='obligation')return false;
  if(e.kind==='injury')return e.data.characterId===observerId;
  if(e.kind==='case')return e.data.investigatorId===observerId||(e.data.suspectIds as string[]).includes(observerId)&&['jail','bail','charged','trial','sentenced','probation','parole'].includes(String(e.data.stage));
  if(e.kind==='evidence')return (e.data.discoveredBy as string[]).includes(observerId);
  if(e.kind==='watcher')return false;
  if(e.kind==='character')return e.data.locationId===observer.locationId&&observer.locationId!==null||knows(s,observerId,e.id);
  if(e.kind==='item'){
-  if(e.data.ownerId===observerId)return true;
-  if(e.data.concealed)return false;
+  if(e.data.category==='phone'&&(e.data.authorizedUserIds as string[]??[]).includes(observerId))return true;
+  if(carriedBy(s,e,observerId))return true;
+  if(e.data.concealed&&!(e.data.discoveredByIds as string[]??[]).includes(observerId))return false;
   if(e.data.containerId){const container=s.entities.find(c=>c.id===e.data.containerId&&!c.archived);if(container?.kind==='vehicle'&&(container.data.locationId!==observer.locationId||container.data.ownerId!==observerId&&!s.entities.some(key=>key.id===container.data.keyId&&!key.archived&&key.data.ownerId===observerId)))return false;return !!container&&!container.data.locked&&visible(s,container,observerId);}
   if(e.data.locationId===observer.locationId&&observer.locationId!==null)return true;
-  return s.entities.some(b=>!b.archived&&b.data.locationId===observer.locationId&&observer.locationId!==null&&b.id===e.data.ownerId&&(b.kind==='business'&&(b.data.stock as string[]).includes(e.id)||b.kind==='character'&&e.data.equipped&&visible(s,b,observerId)));
+  const possessor=itemPossessor(s,e);return s.entities.some(b=>!b.archived&&b.data.locationId===observer.locationId&&observer.locationId!==null&&b.id===(possessor??e.data.ownerId)&&(b.kind==='business'&&(b.data.stock as string[]).includes(e.id)||b.kind==='character'&&e.data.equipped&&visible(s,b,observerId)));
  }
  if(e.visibility==='knowledge')return knows(s,observerId,e.id);
  if(e.visibility==='owner')return e.data.ownerId===observerId||e.data.characterId===observerId||e.data.employeeId===observerId||e.data.tenantId===observerId;
@@ -60,7 +65,8 @@ export function project(s:State,e:Entity,observerId:string):Entity {
  if(e.kind==='media')delete copy.data.body;
  copy.data.mediaIds=((e.data.mediaIds??[]) as string[]).filter(id=>{const media=s.entities.find(e=>e.id===id&&e.kind==='media');return media&&visible(s,media,observerId);});
  if(e.kind==='case'&&e.data.investigatorId!==observerId){copy.name='Case notice';copy.data={stage:e.data.stage!,bailAmountCents:e.data.bailAmountCents??null};return copy;}
- const own=e.id===observerId||e.data.ownerId===observerId;
+ const own=e.id===observerId||e.kind==='item'&&carriedBy(s,e,observerId)||e.data.ownerId===observerId||e.kind==='item'&&e.data.category==='phone'&&(e.data.authorizedUserIds as string[]??[]).includes(observerId);
+ if(e.kind==='item'&&!own){delete copy.data.secretContents;delete copy.data.provenanceRecords;delete copy.data.eventHistory;}
  if(e.kind==='character'&&!own){
   const d=data(e,'character'),actor=data(getEntity(s,observerId),'character');
   const learned=knows(s,observerId,e.id),permitted=(field:string)=>{const policy=d.profileVisibility[field];return policy==='campaign'||policy==='owner'&&own||policy==='knowledge'&&learned;};
@@ -73,8 +79,15 @@ export function project(s:State,e:Entity,observerId:string):Entity {
   copy.data=presentation as Entity['data'];
  }else{
   for(const k of ['secrets','instructions','aiBehavior','hiddenSolution','embedding','pending','preferences','goals','fears','heat','forensicFindings'])delete copy.data[k];
-  if(e.kind==='relationship'){for(const k of ['attraction','desire','affection','trust','respect','attachment','familiarity','jealousy','resentment','fear','loyalty','dependency'])delete copy.data[k];}
-  if(!own)for(const k of ['cash','contacts','serial','registration','stock','suspectIds','custody','schedule','lastSimulated','mood','goals','fears','notes','familyBackground','cultureContext','beliefsContext'])delete copy.data[k];
+  if(e.kind==='relationship'){
+   const relation=data(e,'relationship'),participants=[relation.fromId,relation.toId];
+   for(const k of ['attraction','desire','affection','trust','respect','attachment','familiarity','jealousy','resentment','fear','loyalty','dependency','boundaries','inertia','cooldownMinutes','movementThreshold','lastMeaningfulAt','knownByIds','pending','secret'])delete copy.data[k];
+   copy.data.labelRecords=relation.labelRecords.filter(label=>socialAllows(label.disclosure,label.knownByIds,observerId,participants));
+   copy.data.labels=relation.labelRecords.length?(copy.data.labelRecords as typeof relation.labelRecords).filter(label=>label.status==='active').map(label=>label.label):relation.labels;
+   copy.data.history=relation.history.filter(entry=>socialAllows(entry.disclosure??'private',entry.knownByIds,observerId,participants)).map(entry=>({at:entry.at,eventId:entry.eventId,label:entry.label,kind:entry.kind??'system',reason:entry.reason??entry.label,disclosure:entry.disclosure??'private'}));
+   copy.data.consentRequests=relation.consentRequests.filter(request=>request.initiatorId===observerId||request.recipientId===observerId).map(request=>({id:request.id,intent:request.intent,initiatorId:request.initiatorId,recipientId:request.recipientId,requestedAt:request.requestedAt,expiresAt:request.expiresAt,status:request.status,respondedAt:request.respondedAt,contentMode:request.contentMode,voluntary:true}));
+  }
+  if(!own)for(const k of ['cash','contacts','serial','registration','stock','suspectIds','custody','schedule','lastSimulated','mood','goals','fears','notes','familyBackground','cultureContext','beliefsContext','authorizedUserIds'])delete copy.data[k];
   if(e.kind==='faction')for(const k of ['memberIds','reputation','treasuryCents','groupPolicy','lastGroupAt','dispatchPolicy'])delete copy.data[k];
   if(e.kind==='quest')delete copy.data.branches;
   if(e.kind==='character'&&!s.settings.reproductiveHealth)delete copy.data.reproductive;

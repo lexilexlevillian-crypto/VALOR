@@ -13,11 +13,12 @@ const lawEnforcement=z.strictObject({profileId:id.nullable(),posture:z.enum(['au
 const technology=z.strictObject({era:z.string().trim().min(1).max(80),features:z.record(z.string().max(80),z.boolean()),serviceVariability:z.enum(['fixed','authored','variable'])});
 const saveBehavior=z.strictObject({autosave:z.enum(['safe-commit','manual-only','off']),branchOnDeath:z.boolean(),maxManualSaves:z.number().int().min(1).max(10000)});
 const uiDefaults=z.strictObject({density:z.enum(['compact','comfortable','spacious']),startView:z.string().trim().min(1).max(80),mapMode:z.enum(['list','graphical','hybrid'])});
+export const relationshipSafetySchema=z.strictObject({minimumRomanceAge:z.number().int().min(18).max(100),minimumIntimacyAge:z.number().int().min(18).max(100),consentWindowMinutes:z.number().int().min(1).max(1440),intoxicationBlocksConsentAt:z.number().min(1).max(100),allowNpcInitiative:z.boolean()}).default({minimumRomanceAge:18,minimumIntimacyAge:18,consentWindowMinutes:30,intoxicationBlocksConsentAt:50,allowNpcInitiative:true});
 
 export const campaignConfigSchema=z.strictObject({
  startAt:z.iso.datetime(),timezone:z.string().trim().min(1).max(100),calendar,
  enabledSystems:z.record(slug,z.boolean()),difficulty:z.string().trim().min(1).max(80),
- contentRating:z.enum(['general','mature']),matureContent:z.enum(['off','implicit','fade-to-black','allowed-description']),
+ contentRating:z.enum(['general','mature']),matureContent:z.enum(['off','implicit','fade-to-black','allowed-description']),relationshipSafety:relationshipSafetySchema,
  needsIntensity:z.enum(['off','light','grounded','intense']),injuryIntensity:z.enum(['restrained','grounded','intense']),
  lawEnforcement,technology,travelAbstraction:z.enum(['exact','route','abstract']),saveBehavior,uiDefaults
 });
@@ -26,10 +27,11 @@ const partialLaw=lawEnforcement.partial();
 const partialTechnology=technology.partial();
 const partialSave=saveBehavior.partial();
 const partialUi=uiDefaults.partial();
+const partialRelationshipSafety=relationshipSafetySchema.removeDefault().partial();
 export const campaignConfigOverridesSchema=z.strictObject({
  startAt:z.iso.datetime().optional(),timezone:z.string().trim().min(1).max(100).optional(),calendar:partialCalendar.optional(),
  enabledSystems:z.record(slug,z.boolean()).optional(),difficulty:z.string().trim().min(1).max(80).optional(),
- contentRating:z.enum(['general','mature']).optional(),matureContent:z.enum(['off','implicit','fade-to-black','allowed-description']).optional(),
+ contentRating:z.enum(['general','mature']).optional(),matureContent:z.enum(['off','implicit','fade-to-black','allowed-description']).optional(),relationshipSafety:partialRelationshipSafety.optional(),
  needsIntensity:z.enum(['off','light','grounded','intense']).optional(),injuryIntensity:z.enum(['restrained','grounded','intense']).optional(),
  lawEnforcement:partialLaw.optional(),technology:partialTechnology.optional(),travelAbstraction:z.enum(['exact','route','abstract']).optional(),
  saveBehavior:partialSave.optional(),uiDefaults:partialUi.optional()
@@ -65,7 +67,7 @@ export function parseStoredCampaignConfig(row:{defaults_json:string;overrides_js
 export function defaultCampaignConfig(startAt:string,timezone:string):CampaignConfig{
  return campaignConfigSchema.parse({
   startAt,timezone,calendar:{id:'gregorian',daysPerWeek:7,firstDayOfWeek:0,months:[]},enabledSystems:{},difficulty:'grounded',
-  contentRating:'mature',matureContent:'fade-to-black',needsIntensity:'off',injuryIntensity:'grounded',
+  contentRating:'mature',matureContent:'fade-to-black',relationshipSafety:{minimumRomanceAge:18,minimumIntimacyAge:18,consentWindowMinutes:30,intoxicationBlocksConsentAt:50,allowNpcInitiative:true},needsIntensity:'off',injuryIntensity:'grounded',
   lawEnforcement:{profileId:null,posture:'authored',variance:{}},technology:{era:'authored',features:{},serviceVariability:'authored'},
   travelAbstraction:'route',saveBehavior:{autosave:'safe-commit',branchOnDeath:true,maxManualSaves:100},
   uiDefaults:{density:'compact',startView:'chronicle',mapMode:'list'}

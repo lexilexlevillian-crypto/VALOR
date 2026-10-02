@@ -168,17 +168,18 @@ test('NPC messages respect contact ownership and conditions without supplying pl
  const f=await setup();try{
   await f.add('item','NPC phone',{category:'phone',ownerId:f.npc,contacts:[{characterId:f.pc,label:'Known player'}]});await f.add('item','Player phone',{category:'phone',ownerId:f.pc});
   await f.edit(f.npc,{plans:[{id:key(),type:'message',targetId:f.pc,text:'Creator-authored NPC words.',cooldownMinutes:15,conditions:[{kind:'location',subjectId:f.npc,targetId:f.room}]}]});await f.configure({deterministicCatchup:true});
-  await f.turn({type:'wait',minutes:30});const state=await f.state(),messages=state.entities.filter(e=>e.kind==='message');assert.equal(messages.length,2);assert.ok(messages.every(m=>m.data.fromId===f.npc&&m.data.body==='Creator-authored NPC words.'));assert.equal(state.beliefs.filter(b=>b.observerId===f.pc).length,2);
+  await f.turn({type:'wait',minutes:30});let state=await f.state(),messages=state.entities.filter(e=>e.kind==='message');assert.equal(messages.length,2);assert.deepEqual(messages.map(message=>message.data.status).sort(),['delivered','sent']);assert.ok(messages.every(m=>m.data.fromId===f.npc&&m.data.body==='Creator-authored NPC words.'));assert.equal(state.beliefs.filter(b=>b.observerId===f.pc).length,1);
+  await f.turn({type:'wait',minutes:1});state=await f.state();assert.ok(state.entities.filter(e=>e.kind==='message').every(message=>message.data.status==='delivered'));assert.equal(state.beliefs.filter(b=>b.observerId===f.pc).length,2);
   await f.edit(f.npc,{preferences:{message:'off'}});await f.turn({type:'wait',minutes:30});assert.equal((await f.state()).entities.filter(e=>e.kind==='message').length,2);
  }finally{await f.close();}
 });
 test('expanded relationship choices require reciprocal adult consent and apply authored housing consequences',async()=>{
  const f=await setup();try{
   await f.edit(f.pc,{dob:'1980-01-01'});await f.edit(f.npc,{dob:'1980-01-01'});await f.configure({romance:true});
-  const relationship=await f.add('relationship','Marriage offer',{fromId:f.npc,toId:f.pc,pending:'marry'}),housing=await f.add('housing','Authored shared home',{locationId:f.room,landlordId:f.npc,tenantId:f.pc,rentCents:100,dueAt:'2012-07-01T00:00:00Z',periodDays:30,access:false});
+  const requestId=randomUUID(),clock=(await f.state()).clock,relationship=await f.add('relationship','Marriage offer',{fromId:f.npc,toId:f.pc,consentRequests:[{id:requestId,intent:'marry',initiatorId:f.npc,recipientId:f.pc,requestedAt:clock,expiresAt:new Date(Date.parse(clock)+30*60000).toISOString(),locationId:f.room,status:'pending',contentMode:'fade-to-black',voluntary:true}]}),housing=await f.add('housing','Authored shared home',{locationId:f.room,landlordId:f.npc,tenantId:f.pc,rentCents:100,dueAt:'2012-07-01T00:00:00Z',periodDays:30,access:false});
   await f.add('socialRule','Authored housing consequence',{relationshipId:relationship,label:'marry',outcomes:[{type:'housing',housingId:housing,access:true}]});
   await assert.rejects(()=>f.turn({type:'social',targetId:f.npc,intent:'marry',consent:false}),/explicit_consent_required/);
-  const prior=data((await f.state()).entities.find(e=>e.id===f.pc)!,'character');await f.turn({type:'social',targetId:f.npc,intent:'marry',consent:true});const state=await f.state();assert.ok((state.entities.find(e=>e.id===relationship)!.data.labels as string[]).includes('marry'));assert.equal(state.entities.find(e=>e.id===housing)!.data.access,true);assert.equal(state.entities.find(e=>e.id===f.pc)!.data.mood,prior.mood);
+  const prior=data((await f.state()).entities.find(e=>e.id===f.pc)!,'character');await f.turn({type:'social',targetId:f.npc,intent:'marry',response:'accept',consentRequestId:requestId,consent:true});const state=await f.state();assert.ok((state.entities.find(e=>e.id===relationship)!.data.labels as string[]).includes('marry'));assert.equal(state.entities.find(e=>e.id===housing)!.data.access,true);assert.equal(state.entities.find(e=>e.id===f.pc)!.data.mood,prior.mood);
  }finally{await f.close();}
 });
 test('tactical movement obeys authored distance and consumes the combat turn',async()=>{

@@ -1,8 +1,8 @@
 import type {Action,State} from './model.ts';
 // These are generic mechanics, never named setting records or identity-derived rules.
 export const actionSystems:Record<string,string>={
- travel:'travel',chase:'travel',combat:'combat',attack:'combat',defend:'combat',grapple:'combat',restrain:'combat',disarm:'combat',shove:'combat',flee:'combat',reload:'combat',cover:'combat','tactical-move':'combat',
- message:'communications','add-contact':'communications','phone-call':'communications','read-message':'communications','call-response':'communications','call-speak':'communications',conversation:'communications',
+ travel:'travel',chase:'travel',combat:'combat',attack:'combat',defend:'combat',grapple:'combat',restrain:'combat',disarm:'combat',shove:'combat',flee:'combat',reload:'combat','load-magazine':'combat','clear-malfunction':'combat','maintain-weapon':'combat','attach-weapon':'combat',cover:'combat','tactical-move':'combat',
+ message:'communications','add-contact':'communications','share-number':'communications','contact-control':'communications','delete-message':'communications','leave-voicemail':'communications','phone-call':'communications','read-message':'communications','call-response':'communications','call-speak':'communications',conversation:'communications',
  crime:'law',report:'law','report-belief':'law',collect:'law',custody:'law',case:'law','pay-bail':'law',
  buy:'economy',sell:'economy',bank:'economy',work:'economy','pay-rent':'economy',train:'training',check:'checks',treat:'health','clinical-care':'health','forensic-test':'health',social:'relationships',cook:'needs',hygiene:'needs','request-assistance':'dispatch','dispatch-response':'dispatch','settle-estate':'estates'
 };
@@ -15,7 +15,7 @@ export function enforceActionPolicy(s:State,action:Action){
  const system=actionSystems[action.type];if(!enabled(s,action.type)||system&&!enabled(s,system))throw new Error('system_disabled');
  if('phoneId'in action&&!technology(s,'phone'))throw new Error('phone_disabled');
  if(action.type==='message'&&!technology(s,action.medium))throw new Error('technology_disabled');
- if(['phone-call','call-response','call-speak'].includes(action.type)&&!technology(s,'calls'))throw new Error('technology_disabled');
+ if(['phone-call','call-response','call-speak','leave-voicemail'].includes(action.type)&&!technology(s,'calls'))throw new Error('technology_disabled');
  if(action.type==='travel'&&!technology(s,action.mode))throw new Error('technology_disabled');
  if(action.type==='social'&&action.intent==='intimacy'&&(p.contentRating==='general'||p.matureContent==='off'))throw new Error('mature_content_disabled');
 }

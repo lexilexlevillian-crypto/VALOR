@@ -8,8 +8,14 @@ const cents=z.number().int().min(0).max(100000000000), score=z.number().min(-100
 const tags=z.array(z.string().max(80)).max(100).default([]);
 export const attributes=['Strength','Agility','Endurance','Intellect','Perception','Presence','Will'] as const;
 export const planTypes=['work','socialize','offer','share','travel','crime','care','message','call','breakup','scene'] as const;
+export const romanceIntents=['flirt','date','confess','commit','exclusive','cohabit','marry','reconcile','intimacy','confront-jealousy'] as const;
+export const matureContentModes=['off','implicit','fade-to-black','allowed-description'] as const;
 export const simulationTierNames=['active','relevant','distant'] as const;
 export const npcActivityOutcomes=['worked-shift','traveled','traveled-home','called-friend','argument-occurred','missed-appointment','socialized','shared-information','message-sent','crime-committed','care-provided','relationship-changed','scene-initiated','injured','arrested','killed'] as const;
+export const relationshipMetrics=['attraction','affection','trust','respect','attachment','familiarity','desire','jealousy','resentment','fear','loyalty','dependency'] as const;
+export const socialDisclosures=['public','private','secret','disputed'] as const;
+export const phoneServices=['none','poor','fair','good'] as const;
+export const contactSources=['exchange','discovery','document','known-contact','creator'] as const;
 export const needTypes=['hunger','thirst','fatigue','hygiene'] as const;
 export const characterSectionKinds=['identity','appearance','background','stats','skills','traits','health','inventory','relationships','affiliations','knowledge','notes','custom'] as const;
 export const characterFieldClasses=['biographical','current','subjective'] as const;
@@ -32,7 +38,8 @@ const outcome=z.discriminatedUnion('type',[
  z.strictObject({type:z.literal('notice'),characterId:id,text:short}),
  z.strictObject({type:z.literal('reputation'),factionId:id,characterId:id,delta:score}),
  z.strictObject({type:z.literal('housing'),housingId:id,access:z.boolean()}),
- z.strictObject({type:z.literal('relationship'),relationshipId:id,label:short,operation:z.enum(['add','remove'])})
+ z.strictObject({type:z.literal('relationship'),relationshipId:id,label:short,operation:z.enum(['add','remove'])}),
+ z.strictObject({type:z.literal('obligation'),obligationId:id,status:z.enum(['open','fulfilled','forgiven','defaulted','disputed'])})
 ]);
 const outcomeBands=z.strictObject({
  criticalMargin:openNumber.default(10),successAtCostMargin:openNumber.default(2),
@@ -49,11 +56,17 @@ const rules=z.strictObject({
  outcomeMode:z.enum(['legacy-binary','configured-bands']).default('legacy-binary'),
  outcomeBands:outcomeBands.default({criticalMargin:10,successAtCostMargin:2,partialFailureMargin:-2,failureInformationMargin:-10})
 });
+const weaponRules=z.strictObject({
+ chamberMode:z.enum(['abstracted','modeled']).default('abstracted'),
+ malfunctionBasePercent:z.number().min(0).max(100).default(0),conditionMalfunctionFactor:z.number().min(0).max(10).default(0),
+ conditionLossPerShot:z.number().min(0).max(100).default(0),armorConditionLossPerHit:z.number().min(0).max(100).default(5),
+ ballisticsFormula:z.enum(['damage-minus-conditioned-protection','authored-result']).default('damage-minus-conditioned-protection')
+});
 export const settingsSchema=z.strictObject({
  campaign:campaignConfigSchema.nullable().default(null),
  residencePlans:z.record(z.string().max(160),z.strictObject({floors:z.number().int().min(3).max(60),unitsPerFloor:z.number().int().min(2).max(40)})).default({}),
  needs:z.boolean().default(false),fuel:z.boolean().default(false),weather:z.enum(['clear','rain','overcast','snow','fog']).default('clear'),narrationMode:z.enum(['grounded','anchored-prose']).default('grounded'),
- romance:z.boolean().default(false),intimacy:z.enum(['off','fade-to-black']).default('off'),
+ romance:z.boolean().default(false),intimacy:z.enum(matureContentModes).default('off'),
  intensity:z.enum(['restrained','grounded']).default('restrained'),difficulty:z.enum(['custom','narrative']).default('custom'),
  rules:rules.nullable().default(null),tokenBudget:z.number().int().min(0).max(1000000).default(0),userTokenBudget:z.number().int().min(0).max(1000000).default(0),
  contextTokens:z.number().int().min(256).max(16000).default(2000),timezone:z.string().default('America/New_York'),
@@ -67,7 +80,9 @@ export const settingsSchema=z.strictObject({
  healthRules:z.strictObject({infectionPerDay:unit,untreatedSeverityPerDay:unit,withdrawalPerDay:unit,soberingPerHour:unit}).nullable().default(null),
  calendar:z.strictObject({hemisphere:z.enum(['north','south']),sunriseHour:z.number().int().min(0).max(23),sunsetHour:z.number().int().min(0).max(23)}).nullable().default(null),
  reproductiveHealth:z.boolean().default(false),npcRouteTravel:z.boolean().default(false),deterministicCatchup:z.boolean().default(false),
- tactics:z.strictObject({movementMeters:z.number().min(0.1).max(1000),failedChaseVehicleDamage:unit}).nullable().default(null)
+ tactics:z.strictObject({movementMeters:z.number().min(0.1).max(1000),failedChaseVehicleDamage:unit}).nullable().default(null),
+ weapons:weaponRules.default({chamberMode:'abstracted',malfunctionBasePercent:0,conditionMalfunctionFactor:0,conditionLossPerShot:0,armorConditionLossPerHit:5,ballisticsFormula:'damage-minus-conditioned-protection'})
+ ,communications:z.strictObject({smsDelayMinutes:z.number().int().min(1).max(60),poorServiceDelayMinutes:z.number().int().min(1).max(240),ringSeconds:z.number().int().min(15).max(300),smsCharacterLimit:z.number().int().min(1).max(1000),mmsAttachmentLimit:z.number().int().min(0).max(10)}).default({smsDelayMinutes:1,poorServiceDelayMinutes:5,ringSeconds:60,smsCharacterLimit:160,mmsAttachmentLimit:3})
 });
 const workDays=['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'] as const;
 const rating=z.number().min(0).max(10);
@@ -79,7 +94,7 @@ const occupationProfile=z.strictObject({id,businessId:ref,placeOfWork:short.defa
 const trainingRecord=z.strictObject({id,skillId:ref,attribute:z.enum(attributes).nullable().default(null),trainerId:ref,source:short.default(''),startedAt:z.iso.datetime(),minutesInvested:z.number().int().min(0).max(1000000).default(0),requiredMinutes:z.number().int().min(1).max(1000000),
  practiceMinutes:z.number().int().min(0).max(1000000).default(0),requiredPracticeMinutes:z.number().int().min(0).max(1000000).default(0),costPaidCents:cents.default(0),requiredCostCents:cents.default(0),milestoneReached:z.boolean().default(false),status:z.enum(['active','completed','blocked']).default('active'),completedAt:z.iso.datetime().nullable().default(null),notes:text.default('')}).refine(v=>Boolean(v.skillId)!==Boolean(v.attribute),'training_target_required');
 const npcActivity=z.strictObject({id,at:z.iso.datetime(),tier:z.enum(simulationTierNames),outcome:z.enum(npcActivityOutcomes),source:z.enum(['schedule','goal','health','justice','relationship','faction','event']),sourceEntityId:ref,summary:short,eventId:short});
-const character=z.strictObject({...common,characterSchemaVersion:z.number().int().positive().default(6),playable:z.boolean().default(false),controllerUserId:ref,
+const character=z.strictObject({...common,characterSchemaVersion:z.number().int().positive().default(8),playable:z.boolean().default(false),controllerUserId:ref,
  registryStatus:z.enum(npcRegistryStatuses).default('active'),lastActiveAt:z.iso.datetime().nullable().default(null),arrested:z.boolean().default(false),retirementNarrative:text.default(''),mergedIntoId:ref,mergeRecordId:ref,
  profileVisibility:z.record(z.string(),visibility).default(legacyProfileVisibility),portraitMediaId:ref,
  legalName:short.default(''),aliases:tags,dob:z.iso.date().nullable().default(null),ageYears:z.number().int().min(0).max(200).nullable().default(null),sex:short.default(''),gender:short.default(''),pronouns:short.default(''),
@@ -92,7 +107,7 @@ const character=z.strictObject({...common,characterSchemaVersion:z.number().int(
  voice:text.default(''),instructions:text.default(''),aiBehavior:text.default(''),secrets:text.default(''),notes:text.default(''),needsContext:text.default(''),
  attributes:z.record(z.enum(attributes),openNumber).default({Strength:0,Agility:0,Endurance:0,Intellect:0,Perception:0,Presence:0,Will:0}),
  skills:z.record(z.string(),openNumber).default({}),traits:z.array(id).default([]),
- locationId:ref,homeId:ref,factionIds:z.array(id).default([]),cash:cents.default(0),bank:cents.default(0),
+ locationId:ref,homeId:ref,factionIds:z.array(id).default([]),socialConnections:z.strictObject({friendIds:z.array(id).max(1000),followingIds:z.array(id).max(1000),followerIds:z.array(id).max(1000)}).default({friendIds:[],followingIds:[],followerIds:[]}),cash:cents.default(0),bank:cents.default(0),
  condition:z.enum(['conscious','unconscious','dead']).default('conscious'),blood:unit.default(100),fatigue:unit.default(0),
  hunger:unit.default(0),thirst:unit.default(0),hygiene:unit.default(100),intoxication:unit.default(0),
  restrainedBy:ref,goals:tags,fears:tags,mood:short.default(''),activity:short.default(''),heat:z.record(z.string(),unit).default({}),
@@ -103,7 +118,7 @@ const character=z.strictObject({...common,characterSchemaVersion:z.number().int(
    priority:z.number().int().default(0),cooldownMinutes:z.number().int().min(15).max(10080).default(60),
    lastRun:z.iso.datetime().nullable().default(null),enabled:z.boolean().default(true),text:short.default(''),conditions:z.array(condition).max(32).default([]),constraints:z.array(condition).max(32).default([]),expiresAt:z.iso.datetime().nullable().default(null),fallback:z.enum(['skip','retry','disable','next-plan']).default('skip'),maxRunsPerDay:z.number().int().min(1).max(1440).default(4),runDate:z.iso.date().nullable().default(null),runsToday:z.number().int().min(0).max(1440).default(0),failedAttempts:z.number().int().min(0).max(1000000).default(0),lastOutcome:z.enum(['performed','blocked','expired']).nullable().default(null)})).max(100).default([]),
  traitEffectTrace:z.array(z.strictObject({at:z.iso.datetime(),traitId:id,effectId:id,type:z.enum(['schedule-priority','ai-priority','need-rate','first-impression']),target:short,value:openNumber,decision:short})).max(500).default([]),
- preferences:z.record(z.string(),short).default({}),compatibility:z.strictObject({traitWeights:z.record(id,score).default({}),requiredTraits:z.array(id).max(100).default([]),minimum:score.default(-100)}).default({traitWeights:{},requiredTraits:[],minimum:-100}),boundaries:tags,
+ preferences:z.record(z.string(),short).default({}),contentFilters:z.strictObject({romance:z.enum(['enabled','off']),matureContent:z.enum(['campaign',...matureContentModes]),blockedIntents:z.array(z.enum(romanceIntents)).max(romanceIntents.length),allowNpcInitiative:z.boolean()}).default({romance:'enabled',matureContent:'campaign',blockedIntents:[],allowNpcInitiative:true}),compatibility:z.strictObject({traitWeights:z.record(id,score).default({}),requiredTraits:z.array(id).max(100).default([]),minimum:score.default(-100)}).default({traitWeights:{},requiredTraits:[],minimum:-100}),boundaries:tags,
  journey:z.strictObject({originId:id,destinationId:id,arrivesAt:z.iso.datetime(),activity:short}).nullable().default(null),
  reproductive:z.strictObject({enabled:z.boolean(),cycleStart:z.iso.datetime().nullable().default(null),cycleDays:z.number().int().min(1).max(400),bleedingDays:z.number().int().min(0).max(100),pregnancyStartedAt:z.iso.datetime().nullable().default(null),pregnancyDays:z.number().int().min(1).max(500),phase:z.enum(['inactive','cycle','menstruation','pregnancy','due']).default('inactive')}).nullable().default(null)
 });
@@ -113,14 +128,26 @@ const location=z.strictObject({...common,parentId:ref,category:z.enum(['city','d
  hours:z.strictObject({opens:z.number().int().min(0).max(23),closes:z.number().int().min(0).max(24)}).nullable().default(null),
  discoverable:z.boolean().default(false),ownerId:ref,cover:unit.default(0),weatherExposed:z.boolean().default(false),closedDates:z.array(z.iso.date()).max(500).default([])
 });
-const item=z.strictObject({...common,category:z.enum(['object','clothing','weapon','firearm','ammo','medicine','food','drink','substance','key','document','container','phone','armor']).default('object'),
- ownerId:ref,locationId:ref,containerId:ref,quantity:z.number().int().min(0).max(100000).default(1),
+const phoneContact=z.strictObject({characterId:ref,label:name,savedName:short.default(''),number:short.default(''),alias:short.default(''),source:z.enum(contactSources).default('creator'),sourceEntityId:ref,consentPrivacy:z.enum(['shared','discovered','private','unknown','revoked']).default('unknown'),relationshipId:ref,createdAt:z.iso.datetime().nullable().default(null),lastInteractionAt:z.iso.datetime().nullable().default(null),blocked:z.boolean().default(false),favorite:z.boolean().default(false),permissions:z.strictObject({calls:z.boolean(),sms:z.boolean(),mms:z.boolean(),email:z.boolean(),social:z.boolean()}).default({calls:true,sms:true,mms:true,email:true,social:false})});
+const itemCategories=['object','clothing','jewelry','wallet','id','key','cash','card','document','food','drink','medicine','drug','substance','tool','container','camera','computer','storage-media','phone','weapon','firearm','magazine','ammo','armor'] as const;
+const itemType=z.strictObject({...common,itemTypeSchemaVersion:z.literal(1).default(1),category:z.enum(itemCategories).default('object'),
+ dimensions:z.strictObject({lengthCm:z.number().min(0).max(100000).default(0),widthCm:z.number().min(0).max(100000).default(0),heightCm:z.number().min(0).max(100000).default(0),weightKg:z.number().min(0).max(100000).default(0)}).default({lengthCm:0,widthCm:0,heightCm:0,weightKg:0}),
+ legal:z.strictObject({classification:z.enum(['unrestricted','restricted','prohibited']).default('unrestricted'),carry:z.enum(['unrestricted','open-only','concealed-permit','permit','prohibited']).default('unrestricted'),permitTags:tags,notes:text.default('')}).default({classification:'unrestricted',carry:'unrestricted',permitTags:[],notes:''}),
+ defaultCondition:unit.default(100),stackability:z.strictObject({mode:z.enum(['unique','stackable']).default('unique'),maxStack:z.number().int().min(1).max(100000).default(1)}).default({mode:'unique',maxStack:1}),
+ instanceSchema:z.record(z.string(),z.enum(['string','number','boolean','entity-id','date','datetime'])).default({}),capacity:z.strictObject({weightKg:z.number().min(0).max(100000).default(0),volumeLiters:z.number().min(0).max(100000).default(0)}).default({weightKg:0,volumeLiters:0}),wearableSlots:tags
+});
+const itemEvent=z.strictObject({at:z.iso.datetime(),eventId:ref,action:z.enum(['created','acquired','transferred','stolen','stored','retrieved','split','discarded','equipped','worn','concealed','discovered','modified','damaged','repaired','loaded','unloaded','shot','empty-click','malfunction','maintained','disarmed','recovered']),actorId:ref,fromId:ref,toId:ref,locationId:ref,containerId:ref,quantity:z.number().int().min(0).max(100000).default(1),note:short.default('')});
+const item=z.strictObject({...common,itemSchemaVersion:z.number().int().positive().default(4),typeId:ref,category:z.enum(itemCategories).default('object'),
+ ownerId:ref,possessorId:ref,locationId:ref,containerId:ref,quantity:z.number().int().min(0).max(100000).default(1),
  weight:z.number().min(0).max(100000).default(0),capacity:z.number().min(0).max(100000).default(0),
- condition:unit.default(100),concealed:z.boolean().default(false),equipped:z.boolean().default(false),
+ condition:unit.default(100),concealed:z.boolean().default(false),concealment:unit.default(0),discoveredByIds:z.array(id).max(10000).default([]),equipped:z.boolean().default(false),wearState:z.enum(['stowed','held','equipped','worn']).default('stowed'),
  stolen:z.boolean().default(false),price:cents.default(0),serial:short.default(''),caliber:short.default(''),
  magazine:z.number().int().min(0).max(1000).default(0),loaded:z.number().int().min(0).max(1000).default(0),
- proficiency:short.default(''),coverage:tags,battery:unit.default(100),locked:z.boolean().default(false),
- contacts:z.array(z.strictObject({characterId:id,label:name})).default([]),dose:unit.default(0),provenance:text.default(''),dirty:unit.default(0),
+ weaponSchemaVersion:z.number().int().positive().default(1),weaponFamily:short.default(''),ammoType:short.default(''),compatibleAmmoTypes:tags,magazineFamily:short.default(''),compatibleMagazineFamilies:tags,installedMagazineId:ref,
+ chamberState:z.enum(['not-modeled','empty','loaded']).default('not-modeled'),chamberAmmoType:short.default(''),malfunction:z.enum(['none','misfire','failure-to-feed','jammed','broken']).default('none'),lastMaintainedAt:z.iso.datetime().nullable().default(null),shotsSinceMaintenance:z.number().int().min(0).max(10000000).default(0),attachmentIds:z.array(id).max(50).default([]),carryState:z.enum(['stored','holstered','slung','held']).default('stored'),concealmentContextId:ref,
+ proficiency:short.default(''),coverage:tags,protectionClass:short.default(''),battery:unit.default(100),locked:z.boolean().default(false),
+ phoneSchemaVersion:z.number().int().positive().default(2),phoneNumber:short.default(''),phoneType:z.enum(['mobile','landline']).default('mobile'),phoneState:z.enum(['active','lost','dead']).default('active'),service:z.enum(phoneServices).default('good'),batteryRequired:z.boolean().default(true),authorizedUserIds:z.array(id).max(20).default([]),phoneApps:z.strictObject({contacts:z.boolean(),messages:z.boolean(),calls:z.boolean(),voicemail:z.boolean(),camera:z.boolean(),photos:z.boolean(),email:z.boolean(),gps:z.boolean(),social:z.boolean()}).default({contacts:true,messages:true,calls:true,voicemail:true,camera:true,photos:true,email:true,gps:true,social:true}),
+ contacts:z.array(phoneContact).max(5000).default([]),dose:unit.default(0),provenance:text.default(''),provenanceRecords:z.array(z.strictObject({at:z.iso.datetime(),source:short,eventId:ref,ownerId:ref,note:text.default('')})).max(2000).default([]),markings:tags,modifications:z.array(z.strictObject({id,name,description:text.default(''),sourceEventId:ref})).max(500).default([]),secretContents:text.default(''),instanceData:z.record(z.string(),z.json()).default({}),eventHistory:z.array(itemEvent).max(5000).default([]),dirty:unit.default(0),
  protection:unit.default(1),rangeMeters:z.number().min(0).max(5000).nullable().default(null),deceasedId:ref
 });
 const vehicle=z.strictObject({...common,ownerId:ref,locationId:ref,keyId:ref,plate:short.default(''),registration:text.default(''),
@@ -128,11 +155,19 @@ const vehicle=z.strictObject({...common,ownerId:ref,locationId:ref,keyId:ref,pla
  capacity:z.number().int().min(1).max(100).default(5),occupants:z.array(id).default([]),stolen:z.boolean().default(false),locked:z.boolean().default(true),
  trunkCapacity:z.number().min(0).max(100000).default(0),components:z.record(z.string(),unit).default({})
 });
-const relation=z.strictObject({...common,fromId:id,toId:id,labels:tags,attraction:score.default(0),affection:score.default(0),trust:score.default(0),
+const relationshipHistory=z.strictObject({at:z.iso.datetime(),eventId:id,label:short,kind:z.enum(['meaningful','label','boundary','routine','system']).optional(),reason:text.optional(),changes:z.partialRecord(z.enum(relationshipMetrics),score).optional(),actorId:ref.optional(),relatedEntityIds:z.array(id).max(100).optional(),disclosure:z.enum(socialDisclosures).optional(),knownByIds:z.array(id).max(100).optional()});
+const relationshipLabel=z.strictObject({id,label:short,category:z.enum(['family','friend','enemy','rival','romantic','lover','affair','unrequited','poly','toxic','ex','social-circle','affiliation','professional','other']).default('other'),disclosure:z.enum(socialDisclosures).default('private'),knownByIds:z.array(id).max(100).default([]),status:z.enum(['active','ended']).default('active'),sourceEventId:ref,at:z.iso.datetime(),endedAt:z.iso.datetime().nullable().default(null)});
+const consentRequest=z.strictObject({id,intent:z.enum(romanceIntents),initiatorId:id,recipientId:id,requestedAt:z.iso.datetime(),expiresAt:z.iso.datetime(),locationId:ref,status:z.enum(['pending','accepted','declined','withdrawn','expired']),respondedAt:z.iso.datetime().nullable().default(null),responseEventId:ref,contentMode:z.enum(matureContentModes),voluntary:z.literal(true).default(true)}).refine(value=>value.initiatorId!==value.recipientId,'consent_self_reference');
+const relation=z.strictObject({...common,relationshipSchemaVersion:z.number().int().positive().default(2),fromId:id,toId:id,labels:tags,labelRecords:z.array(relationshipLabel).max(200).default([]),attraction:score.default(0),affection:score.default(0),trust:score.default(0),
  respect:score.default(0),attachment:score.default(0),familiarity:score.default(0),desire:score.default(0),jealousy:score.default(0),
  resentment:score.default(0),fear:score.default(0),loyalty:score.default(0),dependency:score.default(0),inertia:z.number().min(0).max(1).default(0.8),
- boundaries:tags,history:z.array(z.strictObject({at:z.iso.datetime(),eventId:id,label:short})).default([]),secret:z.boolean().default(true),pending:short.default('')
-});
+ boundaries:tags,history:z.array(relationshipHistory).max(2000).default([]),secret:z.boolean().default(true),disclosure:z.enum(socialDisclosures).default('secret'),knownByIds:z.array(id).max(100).default([]),pending:short.default(''),consentRequests:z.array(consentRequest).max(200).default([]),relationshipStyle:z.enum(['unspecified','monogamous','open','polyamorous']).default('unspecified'),exclusivityStatus:z.enum(['none','proposed','exclusive','disputed']).default('none'),
+ cooldownMinutes:z.number().int().min(15).max(10080).default(60),movementThreshold:z.number().min(0.1).max(100).default(1),lastMeaningfulAt:z.iso.datetime().nullable().default(null)
+}).refine(value=>value.fromId!==value.toId,'relationship_self_reference');
+const reputationSource=z.strictObject({id,eventId:id,delta:score,reason:short,at:z.iso.datetime(),decayPerDay:z.number().min(0).max(100).default(0),expiresAt:z.iso.datetime().nullable().default(null),disclosure:z.enum(socialDisclosures).default('private'),knownByIds:z.array(id).max(100).default([]),contextEntityIds:z.array(id).max(100).default([])});
+const reputation=z.strictObject({...common,subjectId:id,audience:z.strictObject({type:z.enum(['neighborhood','gang','employer','police','family','public','custom']),entityId:ref,label:short}),baseScore:score.default(0),score,sourceEvents:z.array(reputationSource).max(1000).default([]),calculatedAt:z.iso.datetime().nullable().default(null)});
+const obligationHistory=z.strictObject({at:z.iso.datetime(),eventId:id,status:z.enum(['open','fulfilled','forgiven','defaulted','disputed']),reason:short,disclosure:z.enum(socialDisclosures).default('private'),knownByIds:z.array(id).max(100).default([])});
+const obligation=z.strictObject({...common,creditorId:id,debtorId:id,kind:z.enum(['favor','debt']),terms:text,dueCondition:text,stakes:text,status:z.enum(['open','fulfilled','forgiven','defaulted','disputed']).default('open'),disclosure:z.enum(socialDisclosures).default('private'),knownByIds:z.array(id).max(100).default([]),sourceEventId:ref,createdAt:z.iso.datetime(),dueAt:z.iso.datetime().nullable().default(null),settledAt:z.iso.datetime().nullable().default(null),contextEntityIds:z.array(id).max(100).default([]),history:z.array(obligationHistory).max(1000).default([])}).refine(value=>value.creditorId!==value.debtorId,'obligation_self_reference');
 const injury=z.strictObject({...common,characterId:id,bodyPart:name,category:z.enum(['cut','gunshot','burn','blunt','fracture','internal','infection','illness','overdose','scar','disability']),
  severity:unit,bleeding:unit.default(0),pain:unit.default(0),treated:z.boolean().default(false),permanent:z.boolean().default(false),
  startedAt:z.iso.datetime(),recoveryDays:z.number().min(0).max(10000).default(0),substance:short.default(''),infection:unit.default(0),modifiers:z.partialRecord(z.enum(attributes),score).default({})
@@ -211,8 +246,9 @@ const watcher=z.strictObject({...common,trigger:z.enum(['time','location','item'
  conditionMode:z.enum(['all','any']).default('all'),conflictGroup:short.default(''),
  conditions:z.array(condition).max(32).default([]),
  expiresAt:z.iso.datetime().nullable().default(null),priority:z.number().int().default(0),once:z.boolean().default(true),fired:z.boolean().default(false)});
-const message=z.strictObject({...common,fromId:id,toId:id,phoneId:id,medium:z.enum(['sms','mms','call','voicemail','email']).default('sms'),body:text,at:z.iso.datetime(),read:z.boolean().default(false),status:z.enum(['queued','delivered','read']).default('queued'),
+const message=z.strictObject({...common,messageSchemaVersion:z.number().int().positive().default(2),threadId:short.default(''),fromId:id,toId:ref,phoneId:id,recipientPhoneId:ref,fromNumber:short.default(''),toNumber:short.default(''),participants:z.array(id).max(20).default([]),medium:z.enum(['sms','mms','call','voicemail','email']).default('sms'),body:text,at:z.iso.datetime(),sentAt:z.iso.datetime().nullable().default(null),availableAt:z.iso.datetime().nullable().default(null),deliveredAt:z.iso.datetime().nullable().default(null),receivedAt:z.iso.datetime().nullable().default(null),readAt:z.iso.datetime().nullable().default(null),read:z.boolean().default(false),status:z.enum(['draft','queued','sent','delivered','received','read','failed']).default('queued'),attachments:z.array(id).max(10).default([]),deletedByIds:z.array(id).max(20).default([]),hiddenFromIds:z.array(id).max(20).default([]),sourceEventId:ref,replyToId:ref,failureReason:short.default(''),
  callState:z.enum(['ringing','active','declined','missed','ended']).nullable().default(null),answeredAt:z.iso.datetime().nullable().default(null),endedAt:z.iso.datetime().nullable().default(null)});
+const socialPost=z.strictObject({...common,authorId:id,platform:name,body:text,at:z.iso.datetime(),source:z.enum(['creator','simulation']),validated:z.boolean(),sourceEventId:ref,privacy:z.enum(['public','friends','followers','custom','private']).default('public'),allowedViewerIds:z.array(id).max(10000).default([]),attachments:z.array(id).max(10).default([]),deleted:z.boolean().default(false),hiddenFromIds:z.array(id).max(1000).default([])});
 const recipe=z.strictObject({...common,minutes:z.number().int().min(1).max(1440),locationId:ref,
  inputs:z.array(z.strictObject({itemId:id,quantity:z.number().int().min(1).max(10000)})).min(1).max(50),
  outputName:name,outputCategory:z.enum(['food','drink']),outputQuantity:z.number().int().min(1).max(10000),outputDose:unit,outputWeight:z.number().min(0).max(1000)});
@@ -228,7 +264,7 @@ const media=z.strictObject({...common,ownerId:ref,mime:z.enum(['image/png','imag
 const combat=z.strictObject({...common,participants:z.array(id).min(2),turnIndex:z.number().int().min(0).default(0),round:z.number().int().min(1).default(1),
  active:z.boolean().default(true),cover:z.record(z.string(),unit).default({}),defenses:z.record(z.string(),z.enum(['dodge','block','parry'])).default({}),log:tags,
  positions:z.record(z.string(),z.number().min(0).max(10000)).default({}),blockedLines:z.array(z.strictObject({fromId:id,toId:id})).max(500).default([])});
-export const dataSchemas={character,location,item,vehicle,relationship:relation,injury,lore,storycard:lore,trait:catalog,traitTemplate,skill:catalog,checkDefinition,faction,business,job,housing,evidence,case:caseSchema,law,quest,watcher,message,combat,recipe,service,transition,production,dispatch,judgment,estate,socialRule,media};
+export const dataSchemas={character,location,itemType,item,vehicle,relationship:relation,reputation,obligation,injury,lore,storycard:lore,trait:catalog,traitTemplate,skill:catalog,checkDefinition,faction,business,job,housing,evidence,case:caseSchema,law,quest,watcher,message,socialPost,combat,recipe,service,transition,production,dispatch,judgment,estate,socialRule,media};
 export type Kind=keyof typeof dataSchemas;
 export const kinds=Object.keys(dataSchemas) as [Kind,...Kind[]];
 export const entitySchema=z.strictObject({id,kind:z.enum(kinds),name,visibility, data:z.record(z.string(),z.json()),revision:z.number().int().positive().default(1),archived:z.boolean().default(false)});
@@ -275,7 +311,7 @@ export function data<K extends Kind>(entity:Entity,kind:K):Data<K>{
 export function validateEntity(raw:unknown):Entity{
  const e=entitySchema.parse(raw);e.data=dataSchemas[e.kind].parse(e.data) as Entity['data'];
  if(e.kind==='media'){const m=data(e,'media');mediaBytes(m.mime,m.body);}
- if(e.kind==='item'){const d=data(e,'item');if(d.loaded>d.magazine)throw new Error('ammo_capacity');if(d.ownerId && (d.locationId||d.containerId))throw new Error('ambiguous_item_location');if(d.locationId&&d.containerId)throw new Error('ambiguous_item_location');}
+ if(e.kind==='item'){const d=data(e,'item');if(d.loaded>d.magazine)throw new Error('ammo_capacity');if(d.possessorId&&(d.locationId||d.containerId)||d.locationId&&d.containerId)throw new Error('ambiguous_item_location');if(['phone','key','weapon','firearm','magazine','document','camera','computer','storage-media','vehicle'].includes(d.category)&&d.quantity!==1)throw new Error('unique_item_quantity');if(d.category==='firearm'&&d.chamberState==='loaded'&&!d.chamberAmmoType&&d.ammoType)d.chamberAmmoType=d.ammoType;if(d.category!=='firearm'&&d.installedMagazineId)throw new Error('magazine_install_target');if(['firearm','weapon'].includes(d.category)&&d.concealed&&!d.concealmentContextId)throw new Error('concealment_context_required');e.data=d as Entity['data'];}
  validateCustomSections(e.data.sections as CustomSection[]);
  return e;
 }
@@ -285,9 +321,13 @@ export const actionSchema=z.discriminatedUnion('type',[
  z.strictObject({type:z.literal('settle-estate'),estateId:id}),
  z.strictObject({type:z.literal('tactical-move'),position:z.number().min(0).max(10000)}),
  z.strictObject({type:z.literal('read-message'),messageId:id,phoneId:id}),
- z.strictObject({type:z.literal('phone-call'),phoneId:id,toId:id}),
+ z.strictObject({type:z.literal('phone-call'),phoneId:id,toId:ref,number:short.optional()}).refine(value=>Boolean(value.toId)!==Boolean(value.number),'phone_destination_required'),
  z.strictObject({type:z.literal('call-response'),messageId:id,phoneId:id,response:z.enum(['answer','decline','end'])}),
  z.strictObject({type:z.literal('call-speak'),messageId:id,phoneId:id,text:short}),
+ z.strictObject({type:z.literal('leave-voicemail'),phoneId:id,callId:id,text:short}),
+ z.strictObject({type:z.literal('delete-message'),phoneId:id,messageId:id,operation:z.enum(['delete','hide','restore'])}),
+ z.strictObject({type:z.literal('contact-control'),phoneId:id,contactId:id,operation:z.enum(['block','unblock','favorite','unfavorite','delete'])}),
+ z.strictObject({type:z.literal('share-number'),phoneId:id,toId:id}),
  z.strictObject({type:z.literal('vehicle-access'),vehicleId:id,operation:z.enum(['unlock','lock','enter','leave'])}),
  z.strictObject({type:z.literal('cook'),recipeId:id}),
  z.strictObject({type:z.literal('hygiene'),operation:z.enum(['wash','laundry']),itemId:ref}),
@@ -301,15 +341,20 @@ export const actionSchema=z.discriminatedUnion('type',[
  z.strictObject({type:z.literal('steal'),itemId:id,targetId:id}),
  z.strictObject({type:z.literal('cover')}),
  z.strictObject({type:z.literal('equip'),itemId:id,equipped:z.boolean()}),
- z.strictObject({type:z.literal('reload'),weaponId:id,ammoId:id}),z.strictObject({type:z.literal('consume'),itemId:id}),
+ z.strictObject({type:z.literal('reload'),weaponId:id,ammoId:id.optional(),magazineId:id.optional()}).refine(value=>Boolean(value.ammoId)!==Boolean(value.magazineId),'reload_source_required'),
+ z.strictObject({type:z.literal('load-magazine'),magazineId:id,ammoId:id,quantity:z.number().int().min(1).max(1000).optional()}),
+ z.strictObject({type:z.literal('clear-malfunction'),weaponId:id}),z.strictObject({type:z.literal('maintain-weapon'),weaponId:id,maintenanceItemId:id.optional()}),
+ z.strictObject({type:z.literal('attach-weapon'),weaponId:id,attachmentId:id,attached:z.boolean()}),z.strictObject({type:z.literal('consume'),itemId:id}),
  z.strictObject({type:z.literal('treat'),injuryId:id,medicineId:id}),
- z.strictObject({type:z.literal('message'),phoneId:id,toId:id,text:short,medium:z.enum(['sms','mms','call','voicemail','email']).default('sms')}),
- z.strictObject({type:z.literal('add-contact'),phoneId:id,contactId:id,label:name}),
+ z.strictObject({type:z.literal('message'),phoneId:id,toId:ref,number:short.optional(),text:short,medium:z.enum(['sms','mms','email']).default('sms'),attachments:z.array(id).max(10).optional()}).refine(value=>Boolean(value.toId)!==Boolean(value.number),'phone_destination_required'),
+ z.strictObject({type:z.literal('add-contact'),phoneId:id,contactId:id,label:name,alias:short.optional(),factId:id.optional()}),
  z.strictObject({type:z.literal('conversation'),targetId:id,text:short}),
  z.strictObject({type:z.literal('buy'),businessId:id,itemId:id,payment:z.enum(['cash','bank']).optional()}),z.strictObject({type:z.literal('sell'),businessId:id,itemId:id}),
  z.strictObject({type:z.literal('bank'),businessId:id,operation:z.enum(['deposit','withdraw']),cents:cents.refine(n=>n>0)}),
  z.strictObject({type:z.literal('work'),jobId:id}),z.strictObject({type:z.literal('pay-rent'),housingId:id}),
- z.strictObject({type:z.literal('social'),targetId:id,intent:z.enum(['greet','trust','flirt','date','commit','cohabit','marry','reconcile','breakup','intimacy','decline']),consent:z.boolean().default(false)}),
+ z.strictObject({type:z.literal('social'),targetId:id,intent:z.enum(['greet','trust',...romanceIntents,'breakup','decline']),response:z.enum(['propose','accept','decline','withdraw']).optional(),consentRequestId:id.nullable().optional(),consent:z.boolean().default(false)}),
+ z.strictObject({type:z.literal('content-filter'),romance:z.enum(['enabled','off']),matureContent:z.enum(['campaign',...matureContentModes]),blockedIntents:z.array(z.enum(romanceIntents)).max(romanceIntents.length),allowNpcInitiative:z.boolean()}),
+ z.strictObject({type:z.literal('safety-exit'),targetId:ref}),
  z.strictObject({type:z.literal('share'),targetId:id,factId:id}),
  z.strictObject({type:z.literal('check'),attribute:z.enum(attributes),skillId:ref,checkId:ref,context:short.default('')}),z.strictObject({type:z.literal('train'),skillId:ref,attribute:z.enum(attributes).nullable().default(null),trainerId:ref,source:short.default(''),mode:z.enum(['instruction','practice']).default('instruction'),minutes:z.number().int().min(15).max(1440),milestoneReached:z.boolean().default(false)}).refine(v=>Boolean(v.skillId)!==Boolean(v.attribute),'training_target_required'),
  z.strictObject({type:z.literal('combat'),targetId:id}),
@@ -320,10 +365,15 @@ export const actionSchema=z.discriminatedUnion('type',[
  z.strictObject({type:z.literal('surrender')}),z.strictObject({type:z.literal('flee'),destinationId:id}),
  z.strictObject({type:z.literal('chase'),targetId:id,destinationId:id,vehicleId:ref}),
  z.strictObject({type:z.literal('custody'),evidenceId:id,toId:id,reason:short}),
- z.strictObject({type:z.literal('conceal'),itemId:id,concealed:z.boolean()}),
+ z.strictObject({type:z.literal('conceal'),itemId:id,concealed:z.boolean(),contextId:id.optional()}),
  z.strictObject({type:z.literal('store'),itemId:id,containerId:id}),
  z.strictObject({type:z.literal('retrieve'),itemId:id,containerId:id}),
- z.strictObject({type:z.literal('search')}),z.strictObject({type:z.literal('crime'),lawId:id,targetId:ref}),
+ z.strictObject({type:z.literal('examine-item'),itemId:id}),
+ z.strictObject({type:z.literal('split-stack'),itemId:id,quantity:z.number().int().min(1).max(99999)}),
+ z.strictObject({type:z.literal('transfer-item'),itemId:id,toId:id,quantity:z.number().int().min(1).max(100000).optional(),transferOwnership:z.boolean().optional()}),
+ z.strictObject({type:z.literal('discard-item'),itemId:id,quantity:z.number().int().min(1).max(100000).optional()}),
+ z.strictObject({type:z.literal('wear-item'),itemId:id,worn:z.boolean()}),
+ z.strictObject({type:z.literal('search'),targetId:id.optional(),method:z.enum(['visual','pat-down','thorough','forensic']).optional(),minutes:z.number().int().min(1).max(120).optional(),acceptRisk:z.boolean().optional()}),z.strictObject({type:z.literal('crime'),lawId:id,targetId:ref}),
  z.strictObject({type:z.literal('report'),factId:id,agencyId:id,investigatorId:id}),
  z.strictObject({type:z.literal('report-belief'),beliefId:id,agencyId:id,investigatorId:id,targetId:id}),
  z.strictObject({type:z.literal('collect'),evidenceId:id,caseId:id}),
@@ -344,8 +394,8 @@ export type Memory={id:string;observerId:string;text:string;interpretation?:stri
 export type State={canon?:CanonSource|null;clock:string;settings:Settings;entities:Entity[];facts:Fact[];knowledge:Knowledge[];beliefs:Belief[];memories:Memory[];eventIds?:string[]};
 export const getEntity=(s:State,id:string,kind?:Kind)=>{const e=s.entities.find(e=>e.id===id&&!e.archived);if(!e||kind&&e.kind!==kind)throw new Error('entity_unavailable');return e;};
 export function refs(e:Entity):string[]{
- const result:string[]=[];const walk=(v:unknown,key='')=>{if(!v)return;if(typeof v==='string'&&((key.endsWith('Id')&&!['controllerUserId','sourceEventId','eventId','effectId','parentId','mergeRecordId'].includes(key))||['parentId','to'].includes(key)&&e.kind==='location'))result.push(v);
- else if(Array.isArray(v)){if(['traits','traitIds','skillIds','requiredTraitIds','excludedTraitIds','factionIds','peopleIds','placeIds','relationshipIds','occupants','links','prerequisites','opposes','jurisdictionIds','memberIds','stock','suspectIds','evidenceIds','warrantLocationIds','lawIds','participants','mediaIds'].includes(key))result.push(...v as string[]);else v.forEach(x=>walk(x,key));}
+ const result:string[]=[];const walk=(v:unknown,key='')=>{if(!v)return;if(typeof v==='string'&&((key.endsWith('Id')&&!['controllerUserId','sourceEventId','responseEventId','eventId','effectId','parentId','mergeRecordId','threadId'].includes(key))||['parentId','to'].includes(key)&&e.kind==='location'))result.push(v);
+ else if(Array.isArray(v)){if(['traits','traitIds','skillIds','requiredTraitIds','excludedTraitIds','factionIds','peopleIds','placeIds','relationshipIds','occupants','links','prerequisites','opposes','jurisdictionIds','memberIds','stock','suspectIds','evidenceIds','warrantLocationIds','lawIds','participants','mediaIds','knownByIds','contextEntityIds','relatedEntityIds'].includes(key))result.push(...v as string[]);else v.forEach(x=>walk(x,key));}
  else if(typeof v==='object')for(const[k,x]of Object.entries(v))if(!['sections','history','custody'].includes(k))walk(x,k);};walk(e.data);
  if(e.kind==='character'){const c=data(e,'character');result.push(...Object.keys(c.skills),...c.compatibility.requiredTraits,...Object.keys(c.compatibility.traitWeights));}
  return [...new Set(result)].filter(x=>x!==e.id);
@@ -368,12 +418,30 @@ export function validateState(s:State){
  for(const k of s.knowledge)if(!s.facts.some(f=>f.id===k.factId)||!ids.has(k.observerId))throw new Error('invalid_knowledge_reference');
  const byId=new Map(s.entities.map(e=>[e.id,e]));
  const target=(value:unknown,kinds:Kind[])=>{if(value!==null&&value!==undefined){const e=byId.get(String(value));if(!e||!kinds.includes(e.kind))throw new Error('reference_kind_mismatch');}};
- const common:Record<string,Kind[]>={locationId:['location'],homeId:['location'],originLocationId:['location'],skillId:['skill'],trainerId:['character'],characterId:['character'],investigatorId:['character'],employeeId:['character'],tenantId:['character'],leaderId:['character'],employerId:['business'],businessId:['business'],medicineId:['item'],agencyId:['faction'],caseId:['case'],phoneId:['item'],keyId:['item'],containerId:['item','vehicle'],questId:['quest'],outputId:['item'],responderId:['character'],requesterId:['character'],patientId:['character'],executorId:['character'],beneficiaryId:['character'],relationshipId:['relationship'],destinationId:['location'],portraitMediaId:['media'],mergedIntoId:['character']};
- const arrays:Record<string,Kind[]>={traits:['trait'],requiredTraits:['trait'],requiredTraitIds:['trait'],excludedTraitIds:['trait'],factionIds:['faction'],occupants:['character'],jurisdictionIds:['location'],memberIds:['character'],stock:['item'],suspectIds:['character'],evidenceIds:['evidence'],warrantLocationIds:['location'],lawIds:['law'],participants:['character'],mediaIds:['media']};
+ const common:Record<string,Kind[]>={locationId:['location'],homeId:['location'],originLocationId:['location'],skillId:['skill'],trainerId:['character'],characterId:['character'],possessorId:['character'],investigatorId:['character'],employeeId:['character'],tenantId:['character'],leaderId:['character'],employerId:['business'],businessId:['business'],medicineId:['item'],typeId:['itemType'],agencyId:['faction'],caseId:['case'],phoneId:['item'],recipientPhoneId:['item'],keyId:['item'],containerId:['item','vehicle'],questId:['quest'],outputId:['item'],responderId:['character'],requesterId:['character'],patientId:['character'],executorId:['character'],beneficiaryId:['character'],relationshipId:['relationship'],destinationId:['location'],portraitMediaId:['media'],mergedIntoId:['character'],authorId:['character'],replyToId:['message'],installedMagazineId:['item'],concealmentContextId:['item','character']};
+ const arrays:Record<string,Kind[]>={traits:['trait'],requiredTraits:['trait'],requiredTraitIds:['trait'],excludedTraitIds:['trait'],factionIds:['faction'],occupants:['character'],jurisdictionIds:['location'],memberIds:['character'],stock:['item'],suspectIds:['character'],evidenceIds:['evidence'],warrantLocationIds:['location'],lawIds:['law'],participants:['character'],participantIds:['character'],authorizedUserIds:['character'],discoveredByIds:['character'],friendIds:['character'],followingIds:['character'],followerIds:['character'],allowedViewerIds:['character'],mediaIds:['media'],attachments:['media'],attachmentIds:['item']};
  for(const e of s.entities){
   for(const [key,kinds]of Object.entries(common))target(e.data[key],kinds);
   for(const [key,kinds]of Object.entries(arrays))for(const value of (e.data[key]??[]) as unknown[])target(value,kinds);
   if(['relationship','message'].includes(e.kind)){target(e.data.fromId,['character']);target(e.data.toId,['character']);}
+  if(e.kind==='item'&&e.data.category==='phone')for(const contact of data(e,'item').contacts){target(contact.characterId,['character']);target(contact.relationshipId,['relationship']);}
+  if(e.kind==='item'){
+   const item=data(e,'item');
+   if(item.installedMagazineId){const magazine=data(getEntity(s,item.installedMagazineId,'item'),'item');if(item.category!=='firearm'||magazine.category!=='magazine')throw new Error('magazine_install_target');if(!item.caliber||!magazine.caliber||item.caliber!==magazine.caliber)throw new Error('incompatible_magazine');if(item.compatibleMagazineFamilies.length&&(!magazine.magazineFamily||!item.compatibleMagazineFamilies.includes(magazine.magazineFamily)))throw new Error('incompatible_magazine');}
+   if(item.concealmentContextId){const context=getEntity(s,item.concealmentContextId);if(context.kind==='item'&&!['clothing','container','armor'].includes(data(context,'item').category))throw new Error('invalid_concealment_context');}
+   if(item.typeId){const definition=data(getEntity(s,item.typeId,'itemType'),'itemType');if(item.category!==definition.category)throw new Error('item_type_category_mismatch');if(definition.stackability.mode==='unique'&&item.quantity!==1||item.quantity>definition.stackability.maxStack)throw new Error('item_stackability');
+    for(const [field,kind] of Object.entries(definition.instanceSchema)){if(!(field in item.instanceData))throw new Error('item_instance_schema');const value=item.instanceData[field],valid=kind==='string'?typeof value==='string':kind==='number'?typeof value==='number'&&Number.isFinite(value):kind==='boolean'?typeof value==='boolean':kind==='entity-id'?typeof value==='string'&&ids.has(value):kind==='date'?typeof value==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(value):typeof value==='string'&&!Number.isNaN(Date.parse(value));if(!valid)throw new Error('item_instance_schema');}
+   }
+  }
+  if(e.kind==='relationship'){
+   const relationship=data(e,'relationship');for(const observerId of relationship.knownByIds)target(observerId,['character']);for(const label of relationship.labelRecords)for(const observerId of label.knownByIds)target(observerId,['character']);for(const entry of relationship.history)for(const observerId of entry.knownByIds??[])target(observerId,['character']);for(const request of relationship.consentRequests){target(request.initiatorId,['character']);target(request.recipientId,['character']);target(request.locationId,['location']);if(![relationship.fromId,relationship.toId].includes(request.initiatorId)||![relationship.fromId,relationship.toId].includes(request.recipientId))throw new Error('consent_participant_mismatch');}
+  }
+  if(e.kind==='reputation'){
+   const reputation=data(e,'reputation');target(reputation.subjectId,['character']);const allowed:Record<typeof reputation.audience.type,Kind[]>={neighborhood:['location'],gang:['faction'],employer:['business'],police:['faction'],family:['faction'],public:[],custom:['location','faction','business','character']};if(reputation.audience.type==='public'){if(reputation.audience.entityId)throw new Error('public_reputation_has_audience_entity');}else target(reputation.audience.entityId,allowed[reputation.audience.type]);for(const source of reputation.sourceEvents)for(const observerId of source.knownByIds)target(observerId,['character']);
+  }
+  if(e.kind==='obligation'){
+   const obligation=data(e,'obligation');target(obligation.creditorId,['character']);target(obligation.debtorId,['character']);for(const observerId of obligation.knownByIds)target(observerId,['character']);for(const entry of obligation.history)for(const observerId of entry.knownByIds)target(observerId,['character']);
+  }
   if(e.kind==='location'){target(e.data.parentId,['location']);for(const exit of data(e,'location').exits){target(exit.to,['location']);target(exit.keyId,['item']);if(exit.interruption){target(exit.interruption.locationId,['location']);target(exit.interruption.questId,['quest']);if(exit.interruption.afterMinutes>exit.minutes)throw new Error('interruption_after_arrival');}}}
   if(e.kind==='character'){
    const character=data(e,'character'),aligned=(value:number,min:number,step:number)=>Math.abs((value-min)/step-Math.round((value-min)/step))<1e-9;
@@ -398,7 +466,7 @@ export function validateState(s:State){
   if(e.kind==='character'){const c=data(e,'character');if(c.journey){target(c.journey.originId,['location']);target(c.journey.destinationId,['location']);}if(c.reproductive&&c.reproductive.bleedingDays>c.reproductive.cycleDays)throw new Error('invalid_cycle');}
   if(e.kind==='faction')target(data(e,'faction').dispatchPolicy?.hospitalId,['location']);
   if(e.kind==='production'){const p=data(e,'production');if(new Set(p.inputs.map(i=>i.itemId)).size!==p.inputs.length||p.inputs.some(i=>i.itemId===p.outputId))throw new Error('invalid_production_inputs');for(const i of p.inputs)target(i.itemId,['item']);}
-  if(e.kind==='transition'||e.kind==='socialRule')for(const o of data(e,e.kind).outcomes){if(o.type==='quest')target(o.questId,['quest']);if(o.type==='housing')target(o.housingId,['housing']);if(o.type==='relationship')target(o.relationshipId,['relationship']);if(o.type==='reputation')target(o.factionId,['faction']);if('characterId'in o)target(o.characterId,['character']);}
+  if(e.kind==='transition'||e.kind==='socialRule')for(const o of data(e,e.kind).outcomes){if(o.type==='quest')target(o.questId,['quest']);if(o.type==='housing')target(o.housingId,['housing']);if(o.type==='relationship')target(o.relationshipId,['relationship']);if(o.type==='reputation')target(o.factionId,['faction']);if(o.type==='obligation')target(o.obligationId,['obligation']);if('characterId'in o)target(o.characterId,['character']);}
   if(e.kind==='recipe'){const recipe=data(e,'recipe');if(new Set(recipe.inputs.map(i=>i.itemId)).size!==recipe.inputs.length)throw new Error('duplicate_recipe_input');for(const input of recipe.inputs)target(input.itemId,['item']);}
   if(e.kind==='combat'){const c=data(e,'combat');for(const key of Object.keys(c.positions))if(!c.participants.includes(key))throw new Error('position_not_participant');for(const line of c.blockedLines)if(!c.participants.includes(line.fromId)||!c.participants.includes(line.toId))throw new Error('line_not_participant');}
  }

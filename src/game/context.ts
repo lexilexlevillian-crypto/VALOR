@@ -72,7 +72,7 @@ export function buildContextManifest(s:State,observerId:string,query:string,opti
  add({id:'rules',priority:contextPriorities[0],rank:1,category:'rules',text:'Server rules: '+JSON.stringify({clock:s.clock,needs:s.settings.needs,fuel:s.settings.fuel,weather:s.settings.weather,romance:s.settings.romance,intimacy:s.settings.intimacy,intensity:s.settings.intensity,rulesConfigured:s.settings.rules!==null}),source:'server-settings',score:100,requiredForClarity:true});
  add({id:'observer:'+observerId,priority:contextPriorities[0],rank:1,category:'state',text:'Observer '+getEntity(s,observerId,'character').name+': '+JSON.stringify({locationId:observer.locationId,condition:observer.condition,mood:observer.mood,activity:observer.activity,goals:observer.goals}),source:'validated-state',score:100,requiredForClarity:true});
  if(location)add({id:'location:'+location.id,priority:contextPriorities[0],rank:1,category:'state',text:'Current location '+location.name+': '+String(location.data.description??''),source:'validated-state',score:100,requiredForClarity:true,claimKey:observerId+':location'});
- for(const entity of view.entities.filter(entity=>entity.id!==observerId&&(entity.data.locationId===observer.locationId||entity.data.ownerId===observerId)).slice(0,100))add({id:'scene:'+entity.id,priority:contextPriorities[0],rank:1,category:'state',text:entity.kind+' '+entity.name+': '+JSON.stringify(entity.kind==='item'?{quantity:entity.data.quantity,condition:entity.data.condition,equipped:entity.data.equipped}:{condition:entity.data.condition,activity:entity.data.activity}),source:'validated-state',score:50+relevance(entity.name,queryTerms),requiredForClarity:false});
+ for(const entity of view.entities.filter(entity=>entity.id!==observerId&&(entity.data.locationId===observer.locationId||(entity.data.possessorId??entity.data.ownerId)===observerId)).slice(0,100))add({id:'scene:'+entity.id,priority:contextPriorities[0],rank:1,category:'state',text:entity.kind+' '+entity.name+': '+JSON.stringify(entity.kind==='item'?{quantity:entity.data.quantity,condition:entity.data.condition,equipped:entity.data.equipped}:{condition:entity.data.condition,activity:entity.data.activity}),source:'validated-state',score:50+relevance(entity.name,queryTerms),requiredForClarity:false});
  for(const effect of options.currentEvents??[])if(effect.observers.includes(observerId))add({id:effect.id,priority:contextPriorities[1],rank:2,category:'event',text:effect.text,source:'server-event:'+effect.type,score:90+relevance(effect.text,queryTerms),requiredForClarity:true});
  for(const turn of options.recentConversation?.slice(-4)??[]){const questions=(turn.narration.match(/[^?]{3,}\?/g)??[]).slice(-2).join(' '),text=[turn.input?'Player: '+turn.input:'',questions?'Open questions: '+questions:''].filter(Boolean).join('\n');if(text)add({id:'conversation:'+turn.id,priority:contextPriorities[1],rank:2,category:'conversation',text,source:'chronicle',score:40+relevance(text,queryTerms),requiredForClarity:false});}
  for(const fact of view.facts){const text=fact.predicate+': '+JSON.stringify(fact.objectId??fact.value)+' (truth status '+(fact.truthStatus??'verified')+'; confidence '+(fact.confidence??1)+')',score=relevance(text,queryTerms);add({id:fact.id,priority:contextPriorities[2],rank:3,category:'fact',text,source:'fact:'+(fact.source??fact.eventId)+':'+fact.eventId,score:30+score,requiredForClarity:score>0,claimKey:fact.subjectId+':'+fact.predicate});}
@@ -111,7 +111,19 @@ export function checkCharacterDrift(s:State,evidence:CharacterDriftEvidence){
  return {accepted:flags.length===0,decision:flags.some(flag=>['knowledge','trait','goal'].includes(flag.kind))?'retry' as const:flags.length?'developer-review' as const:'accept' as const,flags,response:evidence.text};
 }
 
-export function reviewNarrativeOutput(text:string,controls:NarrativeControls,repetition:RepetitionTracker,requiredPhrases:string[]=[]){
- const flags:Array<{kind:string;value:string}>=[...repetition.review(text,requiredPhrases)];for(const excluded of controls.safety.excludedContent)if(normalize(text).includes(normalize(excluded)))flags.push({kind:'safety',value:excluded});
+export function reviewMechanicalClaims(text:string,effects:Effect[]=[]){
+ const emitted=new Set(effects.map(effect=>effect.type)),claims:Array<{pattern:RegExp;eventTypes:string[];value:string}>=[
+  {pattern:/\b(?:fires?|fired|gunfire|discharg(?:e|ed|es)|shot (?:rings|rang|strikes|misses))\b/i,eventTypes:['weapon.shot'],value:'shot'},
+  {pattern:/\breload(?:s|ed|ing)?\b|\b(?:loads?|loaded|loading) (?:a |the )?(?:gun|firearm|pistol|rifle|weapon|magazine)\b/i,eventTypes:['weapon.reload'],value:'reload'},
+  {pattern:/\b(?:empty[- ]?)?click(?:s|ed)?\b/i,eventTypes:['weapon.empty-click'],value:'empty-click'},
+  {pattern:/\b(?:spent )?casings?\b/i,eventTypes:['weapon.shot'],value:'casing'},
+  {pattern:/\bdisarm(?:s|ed|ing)?\b/i,eventTypes:['weapon.disarmed'],value:'disarmed-weapon'},
+  {pattern:/\brecover(?:s|ed|ing)?\b.{0,40}\b(?:gun|weapon|firearm|pistol|rifle)\b|\b(?:gun|weapon|firearm|pistol|rifle)\b.{0,40}\brecover(?:s|ed|ing)?\b/i,eventTypes:['weapon.recovered'],value:'recovered-weapon'}
+ ];
+ return claims.filter(claim=>claim.pattern.test(text)&&!claim.eventTypes.some(type=>emitted.has(type))).map(claim=>({kind:'unsupported-mechanical-claim',value:claim.value}));
+}
+
+export function reviewNarrativeOutput(text:string,controls:NarrativeControls,repetition:RepetitionTracker,requiredPhrases:string[]=[],effects:Effect[]=[]){
+ const flags:Array<{kind:string;value:string}>=[...repetition.review(text,requiredPhrases),...reviewMechanicalClaims(text,effects)];for(const excluded of controls.safety.excludedContent)if(normalize(text).includes(normalize(excluded)))flags.push({kind:'safety',value:excluded});
  return {accepted:flags.length===0,decision:flags.length?'retry' as const:'accept' as const,flags};
 }

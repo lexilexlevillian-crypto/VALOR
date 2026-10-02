@@ -7,6 +7,7 @@ import type {Actor} from '../contracts.ts';
 import {actionSchema,applyCharacterProfileTemplate,beliefSchema,characterProfileTemplateSchema,data,entitySchema,factSchema,getEntity,knowledgeSchema,memorySchema,refs,remapEntityReference,settingsSchema,validateEntity,validateState} from './model.ts';
 import type {Action,Entity,State} from './model.ts';
 import {observerView,project,retrieve,observe,fact,gossip,remember,visible} from './epistemics.ts';
+import {phoneView} from './phone.ts';
 import {resolveAction} from './actions.ts';
 import type {CheckRecord} from './actions.ts';
 import {advance,type Effect} from './simulation.ts';
@@ -31,6 +32,8 @@ import type {CanonSource} from './canon.ts';
 import {chronicleNoticeSchema,chroniclePresentation,chronicleSceneSchema} from './chronicle.ts';
 import {listNpcs,mergeNpcData,mergePayload,mergePayloadForChecksum,npcDerived,npcMergeConflicts,npcReferrers,remapNpcReferences} from './npcs.ts';
 import type {NpcFilters} from './npcs.ts';
+import {developerSocialGraph,playerRelationships,recordReputation} from './social.ts';
+import {inventoryView} from './items.ts';
 type Timeline={id:string;campaign_id:string;parent_id:string|null;parent_save_id:string|null;name:string;revision:number;clock:string;settings_json:string};
 type Mutation<T>={result:T;effects?:Effect[];draws?:number;checks?:CheckRecord[];characterId?:string;turnText?:string};
 const now=()=>new Date().toISOString();
@@ -180,7 +183,7 @@ export class Game {
   add(sources.some(e=>e.kind==='vehicle'),'vehicle');add(sources.some(e=>e.kind==='quest'),'ongoing problem');add(definition.relationshipTemplates.length>0||relations.length>0,'relationship history');
   return {characterName:definition.character.name,includes,grantCount:sources.length,relationshipCount:definition.relationshipTemplates.length+relations.length,reputationCount:definition.reputation.length,requiresSystems:definition.requiresSystems};
  }
- private materializeStart(s:State,actor:Actor,definition:StartDefinition,enforceEmpty=true){
+ private materializeStart(s:State,actor:Actor,definition:StartDefinition,enforceEmpty=true,eventId?:string){
   this.validateStartSystems(s,definition);
   if(enforceEmpty)ensure(!s.entities.some(e=>e.kind==='character'&&!e.archived&&e.data.playable),409,'timeline_already_started');
   const characterId=randomUUID();
@@ -197,7 +200,7 @@ export class Game {
    if(source.kind==='vehicle'){const d=data(clone,'vehicle');d.ownerId=characterId;d.locationId=data(character,'character').locationId;d.keyId=null;d.occupants=[];clone.data=d as Entity['data'];}
    if(source.kind==='quest'){const d=data(clone,'quest');d.characterId=characterId;clone.data=d as Entity['data'];}
    if(source.kind==='housing'){const d=data(clone,'housing');d.tenantId=characterId;clone.data=d as Entity['data'];}
-   if(source.kind==='relationship'){const d=data(clone,'relationship');d.fromId=characterId;clone.data=d as Entity['data'];}
+   if(source.kind==='relationship'){const d=data(clone,'relationship');d.fromId=characterId;d.disclosure=d.secret?'secret':'private';d.knownByIds=[...new Set([...d.knownByIds,characterId,d.toId])];clone.data=d as Entity['data'];}
    if(source.kind==='job'){const d=data(clone,'job');d.employeeId=characterId;d.lastWorked=null;clone.data=d as Entity['data'];}
    s.entities.push(validateEntity(clone));
   }
@@ -205,11 +208,13 @@ export class Game {
    getEntity(s,relation.targetId,'character');
    s.entities.push(validateEntity({id:randomUUID(),kind:'relationship',name:relation.labels[0]??'Starting relationship',visibility:'owner',data:{
     fromId:characterId,toId:relation.targetId,labels:relation.labels,attraction:relation.attraction,affection:relation.affection,
-    trust:relation.trust,respect:relation.respect,familiarity:relation.familiarity,secret:relation.secret
+    trust:relation.trust,respect:relation.respect,familiarity:relation.familiarity,secret:relation.secret,disclosure:relation.secret?'secret':'private',knownByIds:[characterId,relation.targetId],
+    labelRecords:relation.labels.map(label=>({id:randomUUID(),label,category:'other',disclosure:relation.secret?'secret':'private',knownByIds:[characterId,relation.targetId],status:'active',sourceEventId:eventId??null,at:s.clock,endedAt:null}))
    }}));
   }
   for(const reputation of definition.reputation){
-   const faction=getEntity(s,reputation.factionId,'faction'),d=data(faction,'faction');d.reputation[characterId]=reputation.score;faction.data=d as Entity['data'];
+   if(eventId)recordReputation(s,reputation.factionId,characterId,reputation.score,eventId,'Starting reputation',0,'private',[reputation.factionId]);
+   else{const faction=getEntity(s,reputation.factionId,'faction'),d=data(faction,'faction');d.reputation[characterId]=reputation.score;faction.data=d as Entity['data'];}
   }
   validateState(s);
   return character;
@@ -254,13 +259,17 @@ export class Game {
    ensure(!await this.store.get('SELECT id FROM shared_world WHERE timeline_id=?',id),409,'world_authoring_only');
    if(await this.store.get('SELECT campaign_id FROM player_lives WHERE campaign_id=?',timeline.campaign_id))ensure(!s.entities.some(e=>e.kind==='character'&&e.data.playable),409,'life_already_started');
    if(parsed.choices?.name)definition.character.name=parsed.choices.name;
-   const character=this.materializeStart(s,actor,definition);
+   const character=this.materializeStart(s,actor,definition,true,eventId);
    const effects:Effect[]=[{id:randomUUID(),text:'A new playable life is ready in the roster.',observers:[character.id],type:'start.created',subjectId:character.id}];
    return {result:{characterId:character.id,packageId:parsed.packageId??null},effects,characterId:character.id,turnText:'start.character'};
   });
  } async view(actor:Actor,id:string,characterId:string){return this.store.transaction(async()=>{const {t,access}=(await this.access(actor,id));const s=(await this.load(id));this.controlled(actor,s,characterId,access.role);
   const cursor=await this.store.get<{revision:number;cursor:string}>('SELECT revision,cursor FROM timeline_turn_cursors WHERE timeline_id=?',id);ensure(cursor&&cursor.revision===t.revision,409,'turn_cursor_desynchronized');
   return {timeline:{id:t.id,name:t.name,revision:cursor.revision,turnCursor:cursor.cursor},...observerView(s,characterId),checks:await this.checkHistory(id,characterId,false,s),turns:(await this.transcript(id)).filter(turn=>turn.character_id===characterId&&turn.user_id===actor.id).slice(-100).map(presentTranscript)};},'read');}
+ async relationships(actor:Actor,id:string,characterId:string){const {access}=await this.access(actor,id),state=await this.load(id);this.controlled(actor,state,characterId,access.role);return playerRelationships(state,characterId);}
+ async phone(actor:Actor,id:string,characterId:string){const {access}=await this.access(actor,id),state=await this.load(id);this.controlled(actor,state,characterId,access.role);return phoneView(state,characterId);}
+ async inventory(actor:Actor,id:string,characterId:string,options:{sort?:'name'|'category'|'condition'|'quantity';category?:string;equipped?:boolean}){const {access}=await this.access(actor,id),state=await this.load(id);this.controlled(actor,state,characterId,access.role);return inventoryView(state,characterId,options);}
+ async socialGraph(actor:Actor,id:string){const {access}=await this.access(actor,id,true),mode=await this.domain.userMode(actor);ensure(privileged(access.role)&&mode.mode==='developer',403,'developer_mode_required');return developerSocialGraph(await this.load(id));}
  async projections(actor:Actor,id:string,characterId:string){
   const {access}=await this.access(actor,id),state=await this.load(id);
   this.controlled(actor,state,characterId,access.role);

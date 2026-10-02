@@ -44,6 +44,10 @@ export function gameRoutes(app:FastifyInstance,game:Game,actor:(r:object)=>Actor
   return wrap(()=>game.start(actor(r),timeline(r),b,key(r.headers)));
  });
  app.get('/game/timelines/:id/view',async r=>{const query=z.strictObject({characterId:id}).parse(r.query);return wrap(async ()=>(await game.view(actor(r),timeline(r),query.characterId)));});
+ app.get('/game/timelines/:id/relationships',async r=>{const query=z.strictObject({characterId:id}).parse(r.query);return wrap(()=>game.relationships(actor(r),timeline(r),query.characterId));});
+ app.get('/game/timelines/:id/phone',async r=>{const query=z.strictObject({characterId:id}).parse(r.query);return wrap(()=>game.phone(actor(r),timeline(r),query.characterId));});
+ app.get('/game/timelines/:id/inventory',async r=>{const query=z.strictObject({characterId:id,sort:z.enum(['name','category','condition','quantity']).optional(),category:z.string().max(80).optional(),equipped:z.enum(['true','false']).transform(value=>value==='true').optional()}).parse(r.query);return wrap(()=>game.inventory(actor(r),timeline(r),query.characterId,query));});
+ app.get('/game/timelines/:id/developer/social-graph',async r=>wrap(()=>game.socialGraph(actor(r),timeline(r))));
  app.get('/game/timelines/:id/projections',async r=>{const query=z.strictObject({characterId:id}).parse(r.query);return wrap(()=>game.projections(actor(r),timeline(r),query.characterId));});
  app.get('/game/timelines/:id/creator',async r=>(await game.creator(actor(r),timeline(r))));
  app.get('/game/timelines/:id/developer/overview',async r=>(await game.creator(actor(r),timeline(r))));
