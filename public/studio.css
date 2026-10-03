@@ -201,6 +201,13 @@ body,button,input,select,textarea,#app *{font-family:var(--serif)}
 .background-effects p {margin:3px 0}
 .pool-choice small {display:block;font-size:.72em;font-weight:normal}
 .selected-choice small {display:block}
+
+/* Character attributes are intentionally visual bars without adjacent numeric fields or ranges. */
+.rating-control.rating-control--bar-only,.oc-sheet .oc-attributes .rating-control.rating-control--bar-only,.player-start .oc-attributes .rating-control.rating-control--bar-only{grid-template-columns:minmax(78px,.8fr) minmax(90px,1fr)}
+.attributes-bar-only .rating-control{grid-template-columns:minmax(78px,.8fr) minmax(90px,1fr)}
+.attributes-bar-only .rating-control input[type=number],.attributes-bar-only .rating-scale{display:none}
+.pool-points{display:inline-flex;align-items:center;min-height:28px;padding:3px 9px;border:1px solid var(--border);border-radius:999px;background:var(--raised);color:var(--text);font-weight:700}
+.pool-points.over-budget{border-color:var(--danger);color:var(--danger)}
 .field select{min-width:0;max-width:100%;width:100%}
 .residence-picker,.automatic-traits{grid-column:1/-1;min-width:0}
 .residence-picker{padding:8px;border:1px solid var(--border)}

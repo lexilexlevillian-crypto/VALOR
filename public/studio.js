@@ -24,8 +24,8 @@ const characterHelp={
  attractivenessContext:['How others may see them','Optional, context-dependent description. Do not use a universal beauty score.'],
  locationId:['Current location','Choose the place where this character starts. Create the place in Places first if it is missing.'],
  homeId:['Home','Optional. Link their home record. Leave unset if they have no authored home.'],
- cash:['Cash on hand (cents)','Enter a whole number in cents: 2500 means $25.00. Leave 0 if they start with no cash.'],
- bank:['Bank balance (cents)','Enter a whole number in cents: 10000 means $100.00. Leave 0 for no starting balance.'],
+ cash:['Cash on hand (dollars and cents)','Enter the amount in dollars and cents, such as 25.00. Leave 0.00 if they start with no cash.'],
+ bank:['Bank balance (dollars and cents)','Enter the amount in dollars and cents, such as 100.00. Leave 0.00 for no starting balance.'],
  condition:['Consciousness / life state','Usually leave conscious. Unconscious means unable to act; dead means the character has died.'],
  blood:['Blood level','0–100. Usually leave 100 for a healthy starting character. Lower values mean blood loss.'],
  fatigue:['Tiredness','0–100. 0 means rested; higher numbers mean more tired.'],
@@ -98,9 +98,10 @@ const characterHelp={
  id:['Internal reference','Generated automatically. Leave unchanged.']
 };
 export function characterFieldGuide(key,schema){
- const baseKey=key.replace(/ \d+$/,''),known=characterHelp[baseKey],label=known?.[0]??readable(key);
+ const baseKey=key.replace(/ \d+$/,''),money=['cash','bank','cents'].includes(baseKey)||/Cents$/.test(baseKey),known=characterHelp[baseKey],label=known?.[0]??(money?readable(baseKey).replace(/ cents$/i,'')+' (dollars and cents)':readable(key));
  let help=known?.[1]??(schema.enum?'Choose one of the listed options.':schema.type==='boolean'?'Turn on for yes; leave off for no.':schema.type==='array'?'Optional list. Use Add for one entry at a time; leave empty if not needed.':schema.type==='object'?'Optional details. Add only information you know; existing values are kept when closed.':schema.format==='uuid'?'Choose an existing record. Create that record first if it is missing.':schema.type==='number'||schema.type==='integer'?'Enter a number. Keep the current value if you are unsure.':'Optional. Write a short description in your own words; leave blank if not needed.');
- if(['number','integer'].includes(schema.type)&&(schema.minimum!==undefined||schema.maximum!==undefined))help+=' Allowed range: '+(schema.minimum??'no minimum')+' to '+(schema.maximum??'no maximum')+'.';
+ if(money&&!known)help='Enter the amount in dollars and cents, such as 25.50.';
+ if(['number','integer'].includes(schema.type)&&(schema.minimum!==undefined||schema.maximum!==undefined))help+=money?' Allowed range: '+(schema.minimum===undefined?'no minimum':'$'+(schema.minimum/100).toFixed(2))+' to '+(schema.maximum===undefined?'no maximum':'$'+(schema.maximum/100).toFixed(2))+'.':' Allowed range: '+(schema.minimum??'no minimum')+' to '+(schema.maximum??'no maximum')+'.';
  return {label:label+(baseKey!==key?' · entry '+key.slice(baseKey.length).trim():''),help};
 }
 export function helpTip(label,description){
@@ -111,11 +112,12 @@ export function helpTip(label,description){
 }
 export function sheetSection(title,description,...children){return el('section',{class:'sheet-section'},el('header',{class:'sheet-heading'},el('h3',{},title),helpTip(title,description)),el('div',{class:'sheet-body'},...children));}
 export function moreDetails(title,description,...children){return el('details',{class:'sheet-more'},el('summary',{},title),el('p',{class:'sheet-guidance'},description),...children);}
-export function ratingControl(label,value,onchange,{min=0,max=100,step=1,bubbles=false,hardMin=-1000000,hardMax=1000000}={}){
- const id='rating-'+crypto.randomUUID(),number=el('input',{id,type:'number',min:hardMin,max:hardMax,step:'any',value:value??0,'aria-label':label+' exact value'}),range=el('input',{type:'range',min,max,step,value:value??0,'aria-label':label+' visual scale'}),marks=el('span',{class:'rating-marks','aria-hidden':'true'},...Array.from({length:10},()=>el('i'))),meter=el('div',{class:'rating-meter'+(bubbles?' rating-bubbles':'')},marks,range),scale=el('small',{class:'rating-scale'},min+'–'+max),row=el('div',{class:'rating-control'},el('label',{for:id},readable(label)),meter,number,scale);
- number.required=true;
- const paint=()=>{const current=Number(number.value);[...marks.children].forEach((mark,i)=>mark.classList.toggle('filled',current>min+(max-min)*i/10));range.value=String(Math.max(min,Math.min(max,current)));range.setAttribute('aria-valuetext',number.value+' (visual scale '+min+' to '+max+')');};
- range.addEventListener('input',()=>{number.value=range.value;paint();onchange(Number(number.value));});number.addEventListener('input',()=>{if(number.value!==''&&number.validity.valid){paint();onchange(Number(number.value));}});paint();return row;
+export function ratingControl(label,value,onchange,{min=0,max=100,step=1,bubbles=false,hardMin=-1000000,hardMax=1000000,showNumber=true,showScale=true,maxAllowed=()=>max}={}){
+ let current=Number(value??0);const id='rating-'+crypto.randomUUID(),rangeId=id+'-bar',number=showNumber?el('input',{id,type:'number',min:hardMin,max:hardMax,step:'any',value:current,'aria-label':label+' exact value'}):null,range=el('input',{id:rangeId,type:'range',min,max,step,value:current,'aria-label':label+' visual scale'}),marks=el('span',{class:'rating-marks','aria-hidden':'true'},...Array.from({length:10},()=>el('i'))),meter=el('div',{class:'rating-meter'+(bubbles?' rating-bubbles':'')},marks,range),scale=showScale?el('small',{class:'rating-scale'},min+'–'+max):null,row=el('div',{class:'rating-control'+(!showNumber&&!showScale?' rating-control--bar-only':'')},el('label',{for:showNumber?id:rangeId},readable(label)),meter,number,scale);
+ if(number)number.required=true;
+ const paint=()=>{const allowed=Math.max(min,Math.min(max,Number(maxAllowed())));range.max=String(allowed);if(number)number.max=String(Math.min(hardMax,allowed));[...marks.children].forEach((mark,i)=>mark.classList.toggle('filled',current>min+(max-min)*i/10));range.value=String(Math.max(min,Math.min(allowed,current)));range.setAttribute('aria-valuetext',String(current));if(number)number.value=String(current);};
+ const refresh=()=>paint();row.refreshRating=refresh;range.addEventListener('pointerdown',refresh);range.addEventListener('focus',refresh);
+ range.addEventListener('input',()=>{current=Number(range.value);paint();onchange(current);paint();});if(number)number.addEventListener('input',()=>{if(number.value!==''){current=Math.max(Number(number.min),Math.min(Number(range.max),Number(number.value)));paint();onchange(current);paint();}});paint();return row;
 }
 export function ratingMap(schema,value,onchange,{label='Skills',scale={min:0,max:100,step:1},bubbles=false,allowAdd=true,choices=[]}={}){
  const current={...(value??{})},root=el('div',{class:'rating-map'}),list=el('div',{class:'rating-list'}),draw=()=>{list.replaceChildren();for(const [key,number] of Object.entries(current)){const choice=choices.find(item=>item.id===key),row=el('div',{class:'rating-entry'},ratingControl(choice?.name??key,number,n=>{current[key]=n;onchange({...current});},{...(choice?.scale??scale),bubbles}));if(allowAdd){const remove=el('button',{type:'button',class:'rating-remove','aria-label':'Remove '+(choice?.name??key)},'×');remove.addEventListener('click',()=>{delete current[key];onchange({...current});draw();});row.append(remove);}list.append(row);}};

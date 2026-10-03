@@ -13,22 +13,24 @@ function options(select,rows,value,empty='Choose…'){
 }
 export function profileControls(character,entities,onchange,settings={},lookup=async path=>{const response=await fetch(path);if(!response.ok)throw new Error('Lookup unavailable');return response.json();}){
  const appearance=el('div','','field-grid'),identity=el('div','','field-grid'),residence=el('section','','residence-picker'),automatic=el('div','','automatic-traits');automatic.setAttribute('aria-live','polite');
- const update=mutate=>{changeSelection(character,entities,()=>{mutate();syncAppearanceTraits(character,entities);},onchange);showAutomatic();};
+ let limitMessage='';
+ const update=mutate=>{const accepted=changeSelection(character,entities,()=>{mutate();syncAppearanceTraits(character,entities);},onchange);limitMessage=accepted?'':'That choice would exceed the player trait-point limit.';showAutomatic();return accepted;};
  const showAutomatic=()=>{
   automatic.replaceChildren(el('strong','Traits from height & build'));
   const names=automaticTraitNames(character);
   for(const name of names){const trait=entities.find(e=>e.kind==='trait'&&e.name===name&&!e.archived),cost=trait?.data.mode==='costed'?trait.data.cost:stockTrait(name)?.cost??0;automatic.append(el('p',name+' · '+(cost>0?'costs '+cost+' trait points':cost<0?'refunds '+(-cost)+' trait points':'no point cost')));}
   automatic.append(el('p',names.length?'Change height or build to change these traits. NPCs do not pay points.':'No automatic traits. Below 5′ 5″ gives Short; above 5′ 11″ gives Tall.','sheet-guidance'));
+  if(limitMessage)automatic.append(el('p',limitMessage,'over-budget'));
  };
  const selectField=(key,label,choices,help='')=>{
   const select=el('select');options(select,choices.map(value=>({value,label:value})),character[key]??'','Not specified');
   const custom=el('input');custom.type='text';custom.maxLength=160;custom.placeholder='Describe in your own words';custom.hidden=true;
-  select.addEventListener('change',()=>{custom.hidden=!/self-described|self-describe|Mixed \/ multiple/.test(select.value);update(()=>{character[key]=select.value;if(key==='build'&&!select.value)character.traits=(character.traits??[]).filter(id=>!entities.some(e=>e.id===id&&APPEARANCE_TRAITS.includes(e.name)&&!['Short','Tall'].includes(e.name)));});});
-  custom.addEventListener('input',()=>update(()=>{character[key]=custom.value;}));
+  select.addEventListener('change',()=>{custom.hidden=!/self-described|self-describe|Mixed \/ multiple/.test(select.value);if(!update(()=>{character[key]=select.value;if(key==='build'&&!select.value)character.traits=(character.traits??[]).filter(id=>!entities.some(e=>e.id===id&&APPEARANCE_TRAITS.includes(e.name)&&!['Short','Tall'].includes(e.name)));})){select.value=character[key]??'';custom.hidden=true;}});
+  custom.addEventListener('input',()=>{if(!update(()=>{character[key]=custom.value;}))custom.value=character[key]??'';});
   const holder=labeled(label,select,help);custom.setAttribute('aria-label',label+' · your description');holder.append(custom);return holder;
  };
  const height=el('select');options(height,HEIGHTS.map(row=>({value:String(row.cm),label:row.label})),character.heightCm==null?'':String(character.heightCm),'Not specified');
- height.addEventListener('change',()=>update(()=>{character.heightCm=height.value?Number(height.value):null;if(!height.value)character.traits=(character.traits??[]).filter(id=>!entities.some(e=>e.id===id&&['Short','Tall'].includes(e.name)));}));
+ height.addEventListener('change',()=>{if(!update(()=>{character.heightCm=height.value?Number(height.value):null;if(!height.value)character.traits=(character.traits??[]).filter(id=>!entities.some(e=>e.id===id&&['Short','Tall'].includes(e.name)));}))height.value=character.heightCm==null?'':String(character.heightCm);});
  appearance.append(labeled('Height (feet & inches)',height,'4′ 3″–8′ 0″. Short below 5′ 5″; Tall above 5′ 11″.'),
  selectField('build','Body build',BUILDS.map(row=>row.name),'Some builds add the matching trait automatically.'),
  selectField('eyes','Eye color',EYE_COLORS),selectField('complexion','Skin color',SKIN_COLORS),automatic);

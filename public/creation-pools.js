@@ -1,19 +1,22 @@
-import {ORIGINS,CREATION_BUDGETS,startingBudget,effectText,skillGrants,applyStartingGrants,traitSkillGrants,stockTrait,stockSkill,skillStatus} from './creation-rules.js';
+import {ORIGINS,startingBudget,startingRatingMaximum,effectText,skillGrants,applyStartingGrants,traitSkillGrants,stockTrait,stockSkill,skillStatus} from './creation-rules.js';
 import {APPEARANCE_TRAITS} from './profile-rules.js';
 import {ratingControl} from './studio.js';
 const el=(tag,text='',cls='')=>{const node=document.createElement(tag);node.textContent=text;if(cls)node.className=cls;return node;};
 const button=(text,action)=>{const node=el('button',text);node.type='button';node.addEventListener('click',action);return node;};
 const views=new WeakMap();
 const register=(character,render)=>{const list=views.get(character)??new Set();list.add(render);views.set(character,list);};
+export const refreshCreationControls=character=>{for(const render of views.get(character)??[])render();};
 export function changeSelection(character,entities,mutate,onchange){
- const before=skillGrants(character,entities);mutate();const after=skillGrants(character,entities);character.skills??={};
+ const snapshot=structuredClone(character),beforeBudget=startingBudget(character,entities),before=skillGrants(character,entities);mutate();const after=skillGrants(character,entities);character.skills??={};
  for(const id of new Set([...Object.keys(before),...Object.keys(after)])){
   const skill=entities.find(e=>e.id===id),scale=skill?.data.scale??{min:0,max:100,step:1};
   const paid=Math.max(0,(character.skills[id]??scale.min)-(before[id]?.value??scale.min));
   const next=Math.min(scale.max,(after[id]?.value??scale.min)+paid);
   if(!after[id]&&paid===0)delete character.skills[id];else character.skills[id]=Math.round(next*1e8)/1e8;
  }
- onchange(character);for(const render of views.get(character)??[])render();
+ const afterBudget=startingBudget(character,entities),worsened=character.playable&&['attributes','skills','traits'].some(key=>afterBudget.remaining[key]<-1e-8&&afterBudget.remaining[key]<beforeBudget.remaining[key]-1e-8);
+ if(worsened){for(const key of Object.keys(character))delete character[key];Object.assign(character,snapshot);refreshCreationControls(character);return false;}
+ onchange(character);refreshCreationControls(character);return true;
 }
 function grantLines(grants,entities){
  return grants.map(grant=>{const skill=entities.find(e=>e.id===grant.skillId),scale=skill?.data.scale??{min:0,max:100,step:1};const rating=scale.min+Math.floor((scale.max-scale.min)*grant.fraction/scale.step+1e-8)*scale.step;return (skill?.name??'Unavailable skill')+': starts at '+rating+' ('+Math.round(grant.fraction*100)+'% of its bar), free';});
@@ -44,29 +47,23 @@ export function backgroundPicker(character,entities,onchange){
 export function budgetPanel(character,entities,scale){
  applyStartingGrants(character,entities);
  const root=el('section','','starting-budget');root.setAttribute('aria-label','Starting point budgets');
- const refresh=()=>{
-  root.hidden=!character.playable;if(root.hidden)return;
-  const budget=startingBudget(character,entities,scale);
-  root.replaceChildren(el('h2','Your starting points'),el('p','Spend up to 35 attribute points, 12 skill points and 6 trait points. Negative traits refund up to 6 points. You may leave points unused. NPCs have no point budgets.'));
-  for(const key of ['attributes','skills','traits']){const remaining=budget.remaining[key],line=el('p',key[0].toUpperCase()+key.slice(1)+': '+remaining+' points left','budget-line');line.dataset.budget=key;line.classList.toggle('over-budget',remaining<0);root.append(line);}
-  root.append(el('p','Attribute cost: 10 points for a full bar. Skill cost: 5 points for a full bar, but background and trait training is FREE. Pay only for improvements above the free rating. Descriptive ratings do not spend points.','sheet-guidance'));
- };
+ const refresh=()=>{root.hidden=true;root.replaceChildren();};
  refresh();return {root,refresh};
 }
 export function selectionPool(kind,character,entities,onchange){
  applyStartingGrants(character,entities);
- const root=el('section','','selection-pool'),search=el('input'),grid=el('div','','choice-pool'),detail=el('div','','choice-detail'),selected=el('div','','selected-choices');
+ const root=el('section','','selection-pool'),points=kind==='traits'?el('small','','pool-points'):null,search=el('input'),grid=el('div','','choice-pool'),detail=el('div','','choice-detail'),selected=el('div','','selected-choices');
  search.type='search';search.placeholder='Find '+kind;search.setAttribute('aria-label','Search '+kind);detail.setAttribute('aria-live','polite');
  const choices=entities.filter(row=>row.kind===(kind==='traits'?'trait':'skill')&&!row.archived&&(kind!=='traits'||!APPEARANCE_TRAITS.includes(row.name))).sort((a,b)=>a.name.localeCompare(b.name));
  const isSelected=row=>kind==='traits'?(character.traits??[]).includes(row.id):Object.hasOwn(character.skills??{},row.id);
  const costLabel=row=>{const cost=row.data.mode==='costed'?Number(row.data.cost)||0:0;return cost>0?'Costs '+cost+' trait points':cost<0?'Refunds '+Math.abs(cost)+' trait points':'No point cost';};
  let focused=null;
+ const mutateRow=(target,row)=>{const selected=kind==='traits'?(target.traits??[]).includes(row.id):Object.hasOwn(target.skills??{},row.id);if(kind==='traits'){target.traits??=[];target.traits=selected?target.traits.filter(id=>id!==row.id):[...target.traits,row.id];}else{target.skills??={};if(selected)delete target.skills[row.id];else target.skills[row.id]=row.data.scale?.min??0;}};
+ const canToggle=row=>{if(!character.playable||kind!=='traits')return true;const candidate=structuredClone(character);return changeSelection(candidate,entities,()=>mutateRow(candidate,row),()=>{});};
  const toggle=row=>{
   if(kind==='skills'&&skillGrants(character,entities)[row.id])return;
-  changeSelection(character,entities,()=>{
-   if(kind==='traits'){character.traits??=[];character.traits=isSelected(row)?character.traits.filter(id=>id!==row.id):[...character.traits,row.id];}
-   else {character.skills??={};if(isSelected(row))delete character.skills[row.id];else character.skills[row.id]=row.data.scale?.min??0;}
-  },onchange);show(row);
+  if(!canToggle(row))return;
+  changeSelection(character,entities,()=>mutateRow(character,row),onchange);show(row);
  };
  const show=row=>{
   focused=row;const d=row.data,stock=kind==='skills'?stockSkill(row.name):stockTrait(row.name);
@@ -87,16 +84,17 @@ export function selectionPool(kind,character,entities,onchange){
    if(skillStatus(row,scale.max).trained)detail.append(el('p','Status: Trained at '+(scale.min+(scale.max-scale.min)/2)+' or higher. +2 to checks using this skill.'+(row.name==='Athletics'?' Also slows ordinary fatigue buildup by 15%.':'')));
    if(grant)detail.append(el('p','Free rating '+grant.value+' from '+grant.sources.join(', ')+'. Remove its background or trait to remove this grant.'));
   }
-  const granted=kind==='skills'&&skillGrants(character,entities)[row.id];if(!granted)detail.append(button(isSelected(row)?'Remove '+row.name:'Choose '+row.name,()=>toggle(row)));
+  const granted=kind==='skills'&&skillGrants(character,entities)[row.id];if(!granted){const action=button(isSelected(row)?'Remove '+row.name:'Choose '+row.name,()=>toggle(row));if(!canToggle(row)){action.disabled=true;action.title='This would exceed the player trait-point limit.';}detail.append(action);}
  };
  const draw=()=>{
+  if(points){const remaining=startingBudget(character,entities).remaining.traits;points.textContent=character.playable?remaining+' trait points left':'Unlimited trait points for NPCs';points.dataset.budget='traits';points.classList.toggle('over-budget',remaining<0);}
   grid.replaceChildren();for(const row of choices){if(!row.name.toLowerCase().includes(search.value.toLowerCase()))continue;const choice=button(row.name,()=>show(row));choice.className='pool-choice';choice.dataset.choiceId=row.id;choice.setAttribute('aria-label',row.name);choice.setAttribute('aria-pressed',String(isSelected(row)));if(kind==='traits')choice.append(el('small',costLabel(row)));grid.append(choice);}
   selected.replaceChildren();const grants=skillGrants(character,entities);
   for(const row of choices.filter(isSelected)){
    const item=el('div','','selected-choice'),grant=grants[row.id];
    if(kind==='skills'){
     const scale=row.data.scale??{min:0,max:100,step:1};
-    item.append(ratingControl(row.name,character.skills[row.id],value=>{character.skills[row.id]=Math.max(grant?.value??scale.min,value);onchange(character);if(grant&&value<grant.value)draw();if(focused)show(focused);},{...scale,bubbles:true,hardMin:grant?.value??-1000000}));
+    item.append(ratingControl(row.name,character.skills[row.id],value=>{character.skills[row.id]=Math.max(grant?.value??scale.min,value);onchange(character);for(const control of selected.querySelectorAll('.rating-control'))control.refreshRating?.();if(grant&&value<grant.value)draw();if(focused)show(focused);},{...scale,bubbles:true,hardMin:grant?.value??-1000000,maxAllowed:()=>startingRatingMaximum(character,entities,'skills',row.id,scale)}));
     if(grant)item.append(el('small','Free to '+grant.value+' · '+grant.sources.join(', ')));
    }else item.append(el('strong',row.name),el('small',costLabel(row)));
    if(kind!=='skills'||!grant)item.append(button('Remove '+row.name,()=>toggle(row)));
@@ -105,7 +103,7 @@ export function selectionPool(kind,character,entities,onchange){
   if(!choices.length)grid.append(el('p','No campaign '+kind+' are published yet. A Creator can install or publish the catalog in Creation Studio.'));
   if(focused)show(focused);
  };
- register(character,draw);search.addEventListener('input',draw);root.append(el('p','Click an option to read its description, in-game effects and cost, then choose it. Free skills appear automatically.'),search,grid,detail,selected);draw();return root;
+ register(character,draw);search.addEventListener('input',draw);root.append(...(points?[points]:[]),el('p','Click an option to read its description, in-game effects and cost, then choose it. Free skills appear automatically.'),search,grid,detail,selected);draw();return root;
 }
 
 import {WORKPLACES} from './city-content.js';

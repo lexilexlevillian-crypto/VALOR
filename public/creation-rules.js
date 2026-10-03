@@ -17,6 +17,12 @@ export function startingBudget(character,entities,attributeScale){
  const credit=Math.min(refund,CREATION_BUDGETS.refundCap),traits=round(spent-credit);
  return {attributes,skills:round(skills),traits,refund:credit,rawRefund:refund,remaining:{attributes:round(CREATION_BUDGETS.attributes-attributes),skills:round(CREATION_BUDGETS.skills-skills),traits:round(CREATION_BUDGETS.traits-traits)}};
 }
+export function startingRatingMaximum(character,entities,kind,key,scale){
+ if(!character.playable)return scale.max;
+ const current=Number(kind==='attributes'?character.attributes?.[key]:character.skills?.[key])||scale.min,remaining=startingBudget(character,entities,kind==='attributes'?scale:undefined).remaining[kind],fullBarCost=kind==='attributes'?10:5,raw=Math.min(scale.max,current+Math.max(0,remaining)*(scale.max-scale.min)/fullBarCost),step=Number(scale.step)||1;
+ const snapped=scale.min+Math.floor((raw-scale.min+1e-8)/step)*step;
+ return Math.max(current,Math.min(scale.max,Math.round(snapped*1e8)/1e8));
+}
 // Explicit authored game effects, not claims about real-world identities or diagnoses.
 const rows={
  'Short':['Agility',1,'Strength',-1], 'Tall':['Strength',1,'Agility',-1],
