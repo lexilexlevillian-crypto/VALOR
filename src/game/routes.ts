@@ -10,6 +10,7 @@ import {NarrativeGateway,GroundedProvider,JsonGatewayProvider} from './ai.ts';
 import type {NarrativeProvider} from './ai.ts';
 import {Readable} from 'node:stream';
 import {geminiFromEnvironment} from './gemini.ts';
+import {storyIntent} from './story-intent.ts';
 import {IntentGateway} from './ai-intent.ts';
 import {simulationTiers} from './simulation.ts';
 export function gameRoutes(app:FastifyInstance,game:Game,actor:(r:object)=>Actor,key:(headers:Record<string,unknown>)=>string){
@@ -20,6 +21,11 @@ export function gameRoutes(app:FastifyInstance,game:Game,actor:(r:object)=>Actor
  app.post('/game/world/life',async r=>{z.strictObject({}).parse(r.body);return world.enter(actor(r),key(r.headers));});
  const providers:NarrativeProvider[]=[new GroundedProvider(),...(process.env.AI_GATEWAY_URL&&process.env.AI_GATEWAY_SECRET?[new JsonGatewayProvider(process.env.AI_GATEWAY_URL,process.env.AI_GATEWAY_SECRET)]:[])];
  const gemini=geminiFromEnvironment();if(gemini)providers.push(gemini);
+ app.post('/game/ai/health',async r=>{
+  const user=await game.domain.active(actor(r));if(!['creator','admin'].includes(user.role))throw new Fault(403,'forbidden');
+  z.strictObject({}).parse(r.body);if(!gemini)return {status:'unconfigured',provider:'gemini'};
+  const started=performance.now();try{return {...await gemini.healthCheck(AbortSignal.timeout(12000)),latencyMs:Math.round(performance.now()-started)};}catch{return {status:'unavailable',provider:'gemini',latencyMs:Math.round(performance.now()-started),message:'Gemini did not complete a valid test response. Check the server key, model, provider quota and connectivity.'};}
+ });
  const ai=new NarrativeGateway(game,providers);
  const intent=new IntentGateway(game,gemini?[gemini]:[],ai.inflight);
  const timeline=(r:FastifyRequest)=>z.object({id}).parse(r.params).id;
@@ -98,18 +104,31 @@ export function gameRoutes(app:FastifyInstance,game:Game,actor:(r:object)=>Actor
   const b=z.strictObject({revision:bodyRevision,layer:z.enum(['truth','knowledge','belief','memory','gossip','correct-belief','retire-truth','refresh-memory']),subjectId:id,text:z.string().max(16000),factId:id.optional(),confidence:z.number().min(0).max(1).optional(),recordId:id.optional(),targetId:id.optional(),salience:z.number().min(0).max(1).optional(),decayPerDay:z.number().min(0).max(1).optional(),predicate:z.string().max(160).optional(),value:z.json().optional(),propositionSubjectId:id.nullable().optional(),objectId:id.nullable().optional(),qualifiers:z.record(z.string(),z.json()).optional(),source:z.string().max(1000).optional(),truthStatus:z.enum(['verified','asserted','disputed','false','superseded','believed','doubted','disproven','confirmed']).optional(),audience:z.array(z.string().max(160)).max(100).optional(),observedAt:z.iso.datetime().nullable().optional(),learnedAt:z.iso.datetime().nullable().optional(),validFrom:z.iso.datetime().nullable().optional(),validUntil:z.iso.datetime().nullable().optional(),eventIds:z.array(id).max(100).optional(),evidenceIds:z.array(id).max(100).optional(),tags:z.array(z.string().max(80)).max(100).optional(),interpretation:z.string().max(16000).optional(),privacy:z.enum(['private','shared']).optional(),recallConditions:z.strictObject({entityIds:z.array(id).max(100).optional(),tags:z.array(z.string().max(80)).max(100).optional(),locationId:id.nullable().optional(),from:z.iso.datetime().nullable().optional(),until:z.iso.datetime().nullable().optional()}).optional(),expiresAt:z.iso.datetime().nullable().optional()}).parse(r.body);
   return wrap(async ()=>(await game.epistemic(actor(r),timeline(r),b.revision,b,key(r.headers))));
  });
+ app.post('/game/timelines/:id/story/resolve',async r=>wrap(async()=>{
+  const b=z.strictObject({characterId:id,text:z.string().trim().min(1).max(1000),provider:z.enum(['grounded','gemini']).default('grounded')}).parse(r.body),a=actor(r),tid=timeline(r);
+  await game.authorizeCharacter(a,tid,b.characterId);const state=await game.load(tid),direct=storyIntent(state,b.characterId,b.text);
+  if(direct)return {action:direct};
+  let interpretationWarning:string|undefined;
+  if(b.provider==='gemini'&&!/\b(?:don't|didn't|doesn't|never|not|would|could|might|if|consider|remember)\b|\?/i.test(b.text)){
+   try{const proposal=await intent.propose(a,tid,b.characterId,b.text,b.provider);if(proposal.action)return {action:proposal.action};}
+   catch(error){if(!(error instanceof Error)||!['provider_unavailable','provider_circuit_open','narration_busy','context_limit','ai_budget_exceeded','ai_user_budget_exceeded'].includes(error.message))throw error;interpretationWarning='AI interpretation is unavailable or its allowance is exhausted. Only recognized actions can change the world.';}
+  }
+  // Non-mechanical prose is kept as prose; unrecognized game actions never silently succeed.
+  if(/\b(?:buy|bought|take|took|pick up|attack|punch|shoot|go to|walk to|equip|consume|give|sell|steal|drive|flee|work|pay|drop|dropped|discard|gave|worked)\b/i.test(b.text))return {action:null,clarification:'Which known item, person, or destination did you mean? Be specific so the right action happens.'};
+  return {action:{type:'story',text:b.text},...(interpretationWarning?{interpretationWarning}:{})};
+ }));
  app.post('/game/timelines/:id/parse',async r=>{const b=z.strictObject({characterId:id,text:z.string().min(1).max(1000)}).parse(r.body);return wrap(async ()=>(await game.parse(actor(r),timeline(r),b.characterId,b.text)));});
  app.post('/game/timelines/:id/interpret',async r=>{const b=z.strictObject({characterId:id,text:z.string().min(1).max(1000),provider:z.literal('gemini')}).parse(r.body);return intent.propose(actor(r),timeline(r),b.characterId,b.text,b.provider);});
  app.post('/game/timelines/:id/turns',async r=>{const b=z.strictObject({revision:bodyRevision,cursor:z.string().min(16).max(128),characterId:id,action:actionSchema,text:z.string().max(1000).optional()}).parse(r.body);return wrap(async ()=>(await game.turn(actor(r),timeline(r),b,key(r.headers))));});
- app.post('/game/timelines/:id/narrate',async r=>{const b=z.strictObject({turnId:id,provider:z.string().max(100).default('grounded')}).parse(r.body);return (await ai.narrate(actor(r),timeline(r),b.turnId,b.provider));});
+ app.post('/game/timelines/:id/narrate',async r=>{const b=z.strictObject({turnId:id,provider:z.string().max(100).default('grounded'),style:z.literal('story').optional()}).parse(r.body);return (await ai.narrate(actor(r),timeline(r),b.turnId,b.provider,undefined,b.style));});
  app.post('/game/timelines/:id/narrate/stream',async(r,reply)=>{
-  const b=z.strictObject({turnId:id,provider:z.string().max(100).default('grounded')}).parse(r.body);
+  const b=z.strictObject({turnId:id,provider:z.string().max(100).default('grounded'),style:z.literal('story').optional()}).parse(r.body);
   const controller=new AbortController(),abort=()=>controller.abort();
   const close=()=>{if(!reply.raw.writableFinished)abort();};
   r.raw.once('aborted',abort);reply.raw.once('close',close);
   try{
    // Validate and atomically commit the complete narration before exposing any model-influenced text.
-   const result=await ai.narrate(actor(r),timeline(r),b.turnId,b.provider,controller.signal);
+   const result=await ai.narrate(actor(r),timeline(r),b.turnId,b.provider,controller.signal,b.style);
    if(controller.signal.aborted)throw new Error('narration_canceled');
    const lines=[...result.narration!.split('\n\n').map(text=>JSON.stringify({type:'paragraph',text})),JSON.stringify({type:'complete',status:result.status,promptVersion:result.promptVersion})];
    return reply.type('application/x-ndjson').send(Readable.from(lines.map(line=>line+'\n')));

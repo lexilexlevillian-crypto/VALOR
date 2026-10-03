@@ -32,7 +32,7 @@ test('owner configures one world and a new player starts a private life without 
   await player.getByRole('button',{name:'New Life',exact:true}).click();await player.getByRole('heading',{name:'Create your life',exact:true}).waitFor();
   assert.equal(await player.getByRole('button',{name:'Choose a start',exact:true}).count(),0);
   await player.getByLabel('Character name',{exact:true}).fill('Pacific arrival');
-  await player.getByRole('button',{name:'Start this life',exact:true}).click();await player.getByRole('heading',{name:'Chronicle.',exact:true}).waitFor();
+  await player.getByRole('button',{name:'Start this life',exact:true}).click();await player.getByRole('heading',{name:'Chronicle',exact:true}).waitFor();
   const life=await f.store.get<{id:string}>('SELECT t.id FROM player_lives p JOIN timelines t ON t.campaign_id=p.campaign_id WHERE p.user_id=?',f.player.id);
   assert.ok(life);assert.equal((await game.load(life.id)).settings.fuel,true);
   assert.equal((await game.load(source.timelineId)).entities.some(e=>e.data.playable),false);

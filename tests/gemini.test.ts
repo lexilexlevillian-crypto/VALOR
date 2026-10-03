@@ -49,3 +49,14 @@ test('anchored prose cites every simulation fragment and preserves player dialog
  const noDialogueProtection={...anchored,protectedIds:[]};
  assert.throws(()=>validateAnchoredNarration({paragraphs:[{sourceIds:[consequence.id],text:'Time passes.'},{sourceIds:[dialogue.id],text:'You decide to leave.'}]},noDialogueProtection),/player_agency_violation/);
 });
+
+test('Gemini live-probe validates third-person past-tense output',async()=>{
+ const id='00000000-0000-4000-8000-000000000001';
+ const provider=(text:string)=>new GeminiProvider('test-secret','gemini-3.8-flash',async(url)=>{
+  assert.match(String(url),/gemini-3.8-flash:generateContent$/);
+  return Response.json({candidates:[{finishReason:'STOP',content:{parts:[{text:JSON.stringify({paragraphs:[{sourceIds:[id],text}]})}]}}]});
+ });
+ assert.equal((await provider('Alex waited by the door.').healthCheck(AbortSignal.timeout(1000))).status,'ok');
+ await assert.rejects(()=>provider('Alex is waiting by the door.').healthCheck(AbortSignal.timeout(1000)),/past_tense/);
+ await assert.rejects(()=>provider('You waited by the door.').healthCheck(AbortSignal.timeout(1000)),/agency_violation|third_person/);
+});

@@ -48,7 +48,8 @@ export function buildApp(store:Store,settings:Config,logging:boolean|{write(chun
       auth.csrf(token!,request.headers['x-csrf-token']);
       if(path!=='/auth/logout')await auth.limit('mutation-user',authenticated.id,settings.mutationLimit,60000);
     }
-    if(/^\/game\/timelines\/[^/]+\/(?:interpret|narrate(?:\/stream)?)$/.test(path??''))await auth.limit('ai-call-user',authenticated.id,settings.aiCallLimit,60000);
+    if(path==='/game/ai/health')await auth.limit('ai-health-user',authenticated.id,3,60000);
+    if(/^\/game\/timelines\/[^/]+\/(?:story\/resolve|interpret|narrate(?:\/stream)?)$/.test(path??''))await auth.limit('ai-call-user',authenticated.id,settings.aiCallLimit,60000);
     if(request.method==='GET'&&/^\/game\/timelines\/[^/]+\/export$/.test(path??''))await auth.limit('export-user',authenticated.id,settings.exportLimit,60000);
   });
   app.addHook('onResponse',async(request,reply)=>{

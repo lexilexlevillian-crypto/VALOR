@@ -1,3 +1,4 @@
+import {chronicleSurface,phoneOverlay,phoneLauncher} from './play-ui.js';
 import {THEMES,THEME_IDS,ACCESSIBILITY_MODES,themeById,applyTheme,applyAccessibilityMode,applyDecorations} from './theme.js';
 import {helpTip,sheetSection,moreDetails,ratingControl,ratingMap,readable,characterFieldGuide} from './studio.js';
 import {cityGuide} from './city-guide.js';
@@ -64,18 +65,27 @@ function developerConfirm(titleText,summary,confirmText,onconfirm,danger=false){
 const nav=['New Game','Chronicle','Character','Inventory','Equipment','Phone','Map','Relationships','Journal / Cases','Lore','Skills / Traits','Health','Vehicles','Jobs / Money','Combat','Search / Loot','Save / Load','Settings','NPC Registry','Creator'];
 function frame(content){
  const inGame=Boolean(S.timeline&&S.character&&!['Campaigns','New Game','Developer','NPC Registry'].includes(S.page));
+ const phoneOpen=inGame&&S.page!=='Chronicle';
+ if(phoneOpen){document.querySelector('.pocket-dialog')?.remove();}
+ const foreground=phoneOpen?chronicleContent():content;
  const setNavigation=open=>{shell.classList.toggle('menu-open',open);const toggle=shell.querySelector('.mobile-menu');toggle.setAttribute('aria-expanded',String(open));(open?rail.querySelector('button'):toggle).focus();};
  const rail=$('aside',{id:'valor-navigation',class:'rail','aria-label':'Primary sidebar',onkeydown:event=>{if(event.key==='Escape'){setNavigation(false);event.stopPropagation();}}},$('button',{type:'button',class:'rail-close',onclick:()=>setNavigation(false)},'Close navigation'),$('div',{class:'brand'},'VALOR',$('small',{},'THE CITY KEEPS A RECORD.')),
  $('div',{class:'eyebrow'},'VALOR'),$('nav',{'aria-label':'Game navigation'},
-  button('Main menu',()=>{S.page='Campaigns';S.menuChoice=null;return render();}),...(inGame?nav.filter(n=>!['Creator','NPC Registry'].includes(n)||(S.mode==='developer'&&['creator','admin'].includes(S.campaign.role))).map(n=>{const label=n==='Creator'?'Developer Studio':n==='New Game'?'New Life':n,b=button(label,()=>{if(n==='New Game'){S.page='Campaigns';S.menuChoice='new';return render();}S.page=n==='Creator'?'Developer':n;if(n==='Creator')S.developerArea=null;return render();});if((n==='Creator'&&S.page==='Developer')||n===S.page)b.setAttribute('aria-current','page');return b;}):[]),...(!inGame&&S.timeline?[button('Load Life',()=>{S.character=null;S.page='Chronicle';return render();}),button('Settings',()=>{S.page='Settings';return render();})]:[])),
+  button('Main menu',()=>{S.page='Campaigns';S.menuChoice=null;return render();}),...(inGame?nav.filter(n=>['Chronicle','New Game','Creator','NPC Registry'].includes(n)).filter(n=>!['Creator','NPC Registry'].includes(n)||(S.mode==='developer'&&['creator','admin'].includes(S.campaign.role))).map(n=>{const label=n==='Creator'?'Developer Studio':n==='New Game'?'New Life':n,b=button(label,()=>{if(n==='New Game'){S.page='Campaigns';S.menuChoice='new';return render();}S.page=n==='Creator'?'Developer':n;if(n==='Creator')S.developerArea=null;return render();});if((n==='Creator'&&S.page==='Developer')||n===S.page)b.setAttribute('aria-current','page');return b;}):[]),...(!inGame&&S.timeline?[button('Load Life',()=>{S.character=null;S.page='Chronicle';return render();}),button('Settings',()=>{S.page='Settings';return render();})]:[])),
  $('div',{class:'rail-utilities'},button('Creation Studio',()=>openCreationStudio()),...(S.mode==='developer'&&S.developerAllowed?[button('World settings',()=>openCreationStudio('Settings'))]:[]),button('Style',()=>{if(shell.classList.contains('menu-open'))setNavigation(false);openStyle();}),accessibilityToggle()),
- $('footer',{},$('div',{class:'eyebrow'},S.user?.role??''),button('Sign out',async()=>{await api('/auth/logout',{});S.user=null;S.csrf='';S.view=null;S.creator=null;S.character=null;S.timeline=null;S.campaign=null;S.mode='player';S.modeRevision=0;S.developerAllowed=false;loginScreen();})));
- const shell=$('div',{class:'shell'+(!inGame?' menu-shell':'')},rail,$('div',{class:'workspace'},
+ $('footer',{},$('div',{class:'eyebrow'},S.user?.role??''),button('Sign out',async()=>{await api('/auth/logout',{});S.user=null;S.csrf='';S.narrator=null;S.view=null;S.creator=null;S.character=null;S.timeline=null;S.campaign=null;S.mode='player';S.modeRevision=0;S.developerAllowed=false;loginScreen();})));
+ const shell=$('div',{class:'shell'+(inGame?' game-shell':' menu-shell')},rail,$('div',{class:'workspace'},
  $('header',{class:'topbar'},$('button',{type:'button',class:'mobile-menu','aria-label':'Toggle navigation','aria-controls':'valor-navigation','aria-expanded':'false',onclick:()=>setNavigation(!shell.classList.contains('menu-open'))},'☰'),
  $('div',{class:'eyebrow'},S.campaign?.name??'PERSISTENT TEXT RPG / SET IN 2012'),
  $('span',{class:'mode-badge'},S.mode==='developer'?'DEVELOPER MODE':'PLAYER MODE')),
- $('main',{id:'main',tabindex:'-1'},content)));
+ $('main',{id:'main',tabindex:'-1'},foreground)));
+ document.querySelector('.pocket-dialog')?.remove();
  app.replaceChildren(shell,modeSwitch());
+ if(inGame){
+  const navigate=page=>run(async()=>{S.page=page;await render();}),close=()=>{S.page='Chronicle';render().then(()=>document.querySelector('.pocket-launcher')?.focus());};
+  app.append(phoneLauncher($,()=>navigate('Phone Home')));
+  if(phoneOpen){const phone=phoneOverlay({$,S,content,navigate,close});document.body.append(phone);phone.showModal();}
+ }
 }
 function loginScreen(mode='login'){
  const signup=mode==='signup',recovery=mode==='recovery',email=input('','email'),password=input('','password');email.autocomplete='email';email.required=true;password.required=true;
@@ -105,8 +115,9 @@ async function render(){
  if(!S.character)return roster();
  S.view=await api(endpoint('view')+'?characterId='+S.character.id);
  if(!S.catalog)S.catalog=await api('/game/catalog');
- if(!S.narrator)S.narrator=S.catalog.providers.includes('gemini')?'gemini':'grounded';
+ if(!S.narrator){const saved=stored('valor.narrator.'+S.user.id,'');S.narrator=S.catalog.providers.includes(saved)?saved:S.catalog.providers.includes('gemini')?'gemini':'grounded';}
  if(S.page==='Chronicle')return chronicle();
+ if(S.page==='Phone Home')return frame($('div',{}));
  if(S.page==='Relationships')return relationshipsScreen();
  if(S.page==='Phone')return phoneScreen();
  if(['Inventory','Equipment'].includes(S.page))return inventoryScreen();
@@ -212,9 +223,11 @@ async function act(action,text,clearDraft=false){
  const payload={revision:S.view.timeline.revision,cursor:S.view.timeline.turnCursor,characterId:S.character.id,action,...(text?{text}:{})};
  const result=await api(endpoint('turns'),payload,'POST',key);
  if(result.deathTransition)S.deathTransition=result.deathTransition;
- if(clearDraft)sessionRemove(draftKey());
- if(S.narrator&&S.narrator!=='grounded')try{const narration=await api(endpoint('narrate'),{turnId:result.eventId,provider:S.narrator});if(narration.status==='grounded-fallback')notify(narration.fallbackMessage??'Turn saved. The deterministic result remains unchanged.');}catch(error){notify('Turn saved. Grounded narration retained: '+error.message);}
- if(result.time)notify('Time: '+result.time.scale+' · '+result.time.minutes+' minute'+(result.time.minutes===1?'':'s')+'.');
+ if(clearDraft){sessionRemove(draftKey());S.page='Chronicle';}
+ await render();
+ const writingStatus=document.querySelector('.composer-status');if(writingStatus&&S.narrator!=='grounded')writingStatus.textContent='Turn saved. Writing the continuation…';
+ if(S.narrator&&S.narrator!=='grounded')try{const narration=await api(endpoint('narrate'),{turnId:result.eventId,provider:S.narrator,style:'story'});if(narration.status==='grounded-fallback')notify(narration.fallbackMessage??'Turn saved. The deterministic result remains unchanged.');}catch(error){notify('Turn saved. Grounded narration retained: '+error.message);}
+ if(clearDraft)S.page='Chronicle';
  await render();
 }
 async function rebuildNarration(turn,text,provider,rebuild,cancel,status){
@@ -222,7 +235,7 @@ async function rebuildNarration(turn,text,provider,rebuild,cancel,status){
  if(!navigator.onLine)throw new Error('Reconnect before rebuilding narration.');
  const controller=new AbortController();S.streamController=controller;rebuild.disabled=true;cancel.hidden=false;status.textContent='Rebuilding narration… You can cancel without showing a partial result.';
  try{
-  const response=await fetch(endpoint('narrate/stream'),{method:'POST',credentials:'same-origin',signal:controller.signal,headers:{'content-type':'application/json','x-csrf-token':S.csrf},body:JSON.stringify({turnId:turn.id,provider:provider.value})});
+  const response=await fetch(endpoint('narrate/stream'),{method:'POST',credentials:'same-origin',signal:controller.signal,headers:{'content-type':'application/json','x-csrf-token':S.csrf},body:JSON.stringify({turnId:turn.id,provider:provider.value,style:'story'})});
   if(!response.ok){const error=await response.json();throw new Error(String(error.error??'Narration unavailable').replaceAll('_',' '));}
   if(!response.body)throw new Error('Narration stream unavailable.');
   const reader=response.body.getReader(),decoder=new TextDecoder();let pending='',paragraphs=[],complete=false;
@@ -232,35 +245,35 @@ async function rebuildNarration(turn,text,provider,rebuild,cancel,status){
  }catch(error){if(error.name==='AbortError'||controller.signal.aborted){status.textContent='Narration rebuild canceled. The previous prose remains displayed.';return;}status.textContent='Narration rebuild failed. The previous prose remains displayed.';throw error;
  }finally{if(S.streamController===controller)S.streamController=null;rebuild.disabled=false;cancel.hidden=true;}
 }
+function chronicleContent(){
+ return chronicleSurface({$,button,S,formatMoment,draft:()=>sessionStored(draftKey(),''),saveDraft:text=>sessionSave(draftKey(),text),
+  rebuild:(...args)=>rebuildNarration(...args).catch(error=>notify(error.message)),
+  openRoster:()=>{S.character=null;S.deathTransition=null;S.page='Chronicle';return render();},
+  loadDeathBranch:async()=>{const timelines=await api('/game/campaigns/'+S.campaign.id+'/timelines'),branch=timelines.find(row=>row.id===S.deathTransition?.branchId);if(!branch)throw new Error('Protected branch is unavailable.');S.timeline=branch;S.deathTransition=null;await render();},
+  submit:(text,status)=>run(async()=>{
+   try{
+    status.textContent='Reading your story…';
+    const resolved=await api(endpoint('story/resolve'),{characterId:S.character.id,text,provider:S.narrator==='gemini'?'gemini':'grounded'});
+    if(!resolved.action){status.textContent=resolved.clarification??'Which person or place did you mean?';return;}
+    if(resolved.interpretationWarning)notify(resolved.interpretationWarning);
+    status.textContent='Saving the turn and writing its continuation…';
+    await act(resolved.action,text,true);
+   }catch(error){status.textContent=error.message;throw error;}
+  })
+ });
+}
 function chronicle(){
- const view=S.view,pc=view.entities.find(e=>e.id===S.character.id),location=view.entities.find(e=>e.id===pc?.data.locationId);
- const prose=$('section',{'aria-label':'Chronicle transcript'},title('Chronicle.','VALOR / '+S.character.name.toUpperCase()),$('div',{class:'scene'},$('span',{},location?.name??'LOCATION UNASSIGNED'),$('time',{datetime:view.clock},new Date(view.clock).toLocaleString())));
- if(!view.turns.length)prose.append($('div',{class:'empty'},$('h3',{},'A blank page. An open city.'),$('p',{},'Your first action starts the chronicle. Look around, speak in your own words, or choose a known destination.')));
- const provider=$('select',{},...(S.catalog.providers??['grounded']).map(id=>$('option',{value:id,selected:id===S.narrator},id)));
- provider.addEventListener('change',()=>{S.narrator=provider.value;});
- prose.append(field('Narration provider',provider));
- for(const [index,turn] of view.turns.entries()){
-  const headingId='turn-'+turn.id,text=$('div',{class:'prose turn-narrative'},turn.narration),status=$('p',{class:'turn-status',role:'status','aria-live':'polite'}),rebuild=$('button',{type:'button'},'Rebuild narration without rerolling'),cancel=$('button',{type:'button',hidden:true},'Cancel rebuild');
-  rebuild.addEventListener('click',()=>rebuildNarration(turn,text,provider,rebuild,cancel,status).catch(error=>notify(error.message)));cancel.addEventListener('click',()=>S.streamController?.abort());
-  const scene=turn.scene??{},meta=$('div',{class:'turn-meta'},scene.locationName??'',scene.clock?$('time',{datetime:scene.clock},new Date(scene.clock).toLocaleString()):'');
-  const notices=turn.notices??[],changes=notices.length?$('details',{class:'change-summary'},$('summary',{},`What changed (${notices.length})`),$('ul',{},...notices.map(notice=>$('li',{},$('strong',{},notice.label),$('span',{},notice.detail))))):null;
-  prose.append($('article',{class:'turn','aria-labelledby':headingId},$('h2',{id:headingId,class:'sr-only'},'Chronicle turn '+(index+1)),meta,$('div',{class:'input'},'› '+turn.input_text),text,changes,$('div',{class:'turn-controls'},rebuild,cancel),status));
+ frame(chronicleContent());
+ const last=S.view.turns.at(-1);
+ if(last?.input_text==='start.character'&&last.narration_status==='grounded'&&S.narrator!=='grounded'){
+  const key='valor.opening.'+last.id;
+  if(!sessionStored(key,'')){sessionSave(key,'requested');S.openingBusy=true;const status=document.querySelector('.composer-status');if(status)status.textContent='Writing the opening scene…';
+   api(endpoint('narrate'),{turnId:last.id,provider:S.narrator,style:'story'}).then(result=>{
+    S.openingBusy=false;if(result.status==='grounded-fallback')notify('The opening was saved, but Gemini could not write it. You can retry from Story tools.');
+    if(S.page==='Chronicle'&&S.view.turns.at(-1)?.id===last.id)return render();
+   }).catch(error=>{S.openingBusy=false;if(status?.isConnected)status.textContent='Opening saved. Narration unavailable: '+error.message;});
+  }
  }
- const composerId='chronicle-action',hintId='chronicle-action-help',composer=$('textarea',{id:composerId,placeholder:'What do you do?',maxlength:1000,rows:5,autocomplete:'off','aria-describedby':hintId},sessionStored(draftKey(),''));
- composer.value=sessionStored(draftKey(),'');composer.addEventListener('input',()=>sessionSave(draftKey(),composer.value));composer.addEventListener('keydown',event=>{if(event.key==='Enter'&&(event.ctrlKey||event.metaKey)){event.preventDefault();form.requestSubmit();}});
- const proposal=$('section',{class:'card','aria-live':'polite'});
- const composerStatus=$('p',{class:'composer-status',role:'status','aria-live':'polite'},S.online?'Ready. Nothing happens until you review and confirm.':'Offline. Your draft is saved in this browser session.');
- const review=async interpret=>{const text=composer.value;if(!text.trim())throw new Error('Enter an intended action first.');composerStatus.textContent='Reviewing your words; no action has been taken.';const parsed=await api(endpoint(interpret?'interpret':'parse'),interpret?{characterId:S.character.id,text,provider:'gemini'}:{characterId:S.character.id,text});proposal.replaceChildren();if(!parsed.action){composerStatus.textContent=parsed.clarification??'More detail is needed.';return;}composerStatus.textContent='Proposal ready. The world is still unchanged.';proposal.append($('h3',{},interpret?'Review Gemini proposal':'Review proposed action'),$('p',{},'Nothing has happened. Confirm only if the exact action and target match your intention.'),renderValue(parsed.action),button('Confirm this action',()=>act(parsed.action,text,true),true),button('Cancel proposal',()=>{proposal.replaceChildren();composerStatus.textContent='Proposal canceled. Your draft remains.';}));};
- const form=$('form',{class:'composer',onsubmit:e=>{e.preventDefault();run(()=>review(false));}},$('div',{class:'field'},$('label',{for:composerId},'Your explicit action'),composer,$('small',{id:hintId,class:'muted'},'Multiline text is welcome. Ctrl+Enter or Command+Enter reviews it; Enter starts a new line. Examples below only fill the draft.')),$('div',{class:'suggestions','aria-label':'Optional action examples'},$('span',{class:'eyebrow'},'EXAMPLES / NON-BINDING'),...['Look around','Search this location','Say "I need a minute."'].map(example=>button('Example: '+example,()=>{composer.value+=(composer.value?'\n':'')+example;sessionSave(draftKey(),composer.value);composer.focus();}))),$('div',{class:'actions'},$('button',{type:'submit',class:'primary',disabled:!S.online},'Review action →')),composerStatus);
- if(S.catalog.providers.includes('gemini'))form.append(button('Ask Gemini to interpret',()=>review(true)));
- form.append(proposal);if(pc?.data.condition==='dead'){const transition=S.deathTransition??{mode:'observer',branchId:null,options:['roster']},actions=$('div',{class:'actions'});if(transition.branchId)actions.append(button('Load protected pre-death branch',async()=>{const timelines=await api('/game/campaigns/'+S.campaign.id+'/timelines'),branch=timelines.find(row=>row.id===transition.branchId);if(!branch)throw new Error('Protected branch is unavailable.');S.timeline=branch;S.deathTransition=null;await render();},true));actions.append(button('Return to life roster',()=>{S.character=null;S.deathTransition=null;return roster();}));prose.append(panel('PROTECTED TRANSITION','This canonical character has died.',$('p',{},'Ordinary turns are closed. Remains, property, evidence, witnesses, and aftermath stay in the timeline; no automatic respawn occurs.'),$('p',{class:'muted'},'Configured continuation: '+transition.mode),actions));}else prose.append(form,universalActions());
- const unread=view.entities.filter(entity=>entity.kind==='message'&&entity.data.toId===S.character.id&&!entity.data.read).length,seenKey=`valor.seen.${S.user?.id}.${S.timeline.id}.${S.character.id}`,seen=stored(seenKey,''),seenIndex=view.turns.findIndex(turn=>turn.id===seen),newEvents=seenIndex>=0?view.turns.length-seenIndex-1:seen?view.turns.length:0;
- const aside=$('aside',{class:'scene-aside','aria-label':'Current scene'},$('h2',{},'Current dossier'),$('div',{class:'indicator-row','aria-live':'off'},$('span',{class:'badge'},`${unread} unread message${unread===1?'':'s'}`),$('span',{class:'badge'},`${newEvents} new event${newEvents===1?'':'s'}`)),$('h3',{},S.character.name),$('p',{},pc?.data.description??''),$('div',{class:'badge'},pc?.data.condition??'Unknown'),pc?.data.healthSummary?renderValue(pc.data.healthSummary):null,...(pc?.data.condition==='dead'?[]:[$('h3',{},'Optional scene actions'),button('Look around',()=>act({type:'look'})),button('Search this location',()=>act({type:'search'}))]),$('h3',{},'Known surroundings'));
- const inspectables=view.entities.filter(entity=>entity.id!==S.character.id&&['character','item','vehicle'].includes(entity.kind)&&(!('locationId'in entity.data)||entity.data.locationId===pc?.data.locationId||entity.data.ownerId===S.character.id)).slice(0,8);
- for(const entity of inspectables)aside.append(button('Inspect '+entity.name,()=>act({type:'inspect',targetId:entity.id})));
- aside.append($('h3',{},'Routes'),...((location?.data.exits??[]).map(exit=>{const dest=view.entities.find(e=>e.id===exit.to);return dest?button(dest.name+' · '+exit.minutes+' min',()=>act({type:'travel',destinationId:dest.id,mode:'walk',vehicleId:null})):null;})),button('Change character',()=>{S.character=null;return roster();}));
- frame($('div',{class:'chronicle-layout'},prose,aside));
- if(view.turns.length)setTimeout(()=>{try{localStorage.setItem(seenKey,view.turns.at(-1).id);}catch{}},0);
 }
 const pageKinds={'Character':['character'],'Inventory':['item'],'Equipment':['item'],'Phone':['item','message','dispatch'],'Map':['location'],'Relationships':['relationship'],'Journal / Cases':['quest','case','evidence','judgment','estate','dispatch','deathRecord'],'Lore':['lore','storycard','media'],'Skills / Traits':['skill','trait'],'Health':['injury','service','dispatch','deathRecord'],'Vehicles':['vehicle','transportService'],'Jobs / Money':['job','business','housing','account','transaction','receipt','bill','recipe','service','estate'],'Combat':['combat','chase'],'Search / Loot':['item','evidence']};
 function characterProfile(entity){
@@ -792,7 +805,11 @@ async function settings(){
  content.append(panel('ACCESSIBILITY / INDEPENDENT OVERRIDE','Display safety',$('p',{},'These device-level controls sit above your saved palette. Emergency mode never replaces your account theme or the Creator recommendation.'),$('div',{class:'display-options'},field('Contrast override',accessibility),field('Show small decorative accents',decorations)),$('div',{class:'status-key','aria-label':'Status colors remain differentiated by label and color'},$('span',{},$('i',{style:'--key-color:var(--success)'}),'Success'),$('span',{},$('i',{style:'--key-color:var(--warning)'}),'Warning'),$('span',{},$('i',{style:'--key-color:var(--danger)'}),'Danger'))));
  content.append(panel('APPEARANCE / PALETTE','Choose your surface',$('p',{},'Choose a readable surface for your own account. Campaign restrictions are enforced by the server. Campaign recommendation: '+THEMES[policy.recommendedThemeId].label+'.'),themeChoices(S.theme,policy.allowedThemes,async id=>{const saved=await api('/me/theme',{themeId:id,expectedRevision:S.themeRevision});S.themeRevision=saved.revision;S.theme=applyTheme(id,policy.allowedThemes);await settings();})));
  content.append(backgroundControls());
+ const narration=$('select',{},...S.catalog.providers.map(id=>$('option',{value:id,selected:id===S.narrator},id==='grounded'?'Grounded results (no AI calls)':id==='gemini'?'Gemini story narration':id)));
+ narration.addEventListener('change',()=>{S.narrator=narration.value;try{localStorage.setItem('valor.narrator.'+S.user.id,S.narrator);}catch{}});
+ content.append(panel('STORY','Narration',field('Story narrator',narration),$('p',{},'Gemini writes third-person, past-tense continuations using your world’s AI allowance. Grounded mode keeps play available without sending your story to an AI provider.')));
  if(!creatorRole){content.append($('section',{class:'empty'},$('h3',{},'Developer controls are not loaded.'),$('p',{},['creator','admin'].includes(S.campaign.role)?'Enter Developer Mode to load campaign policy, validation, and mutation tools. Player Mode keeps that state out of memory.':'Campaign settings are controlled by an authorized Creator.')));frame(content);return;}
+ content.append(panel('AI CONNECTION','Gemini',button('Test Gemini connection',async()=>{const result=await api('/game/ai/health',{});notify(result.status==='ok'?'Gemini responded successfully in '+(result.latencyMs/1000).toFixed(1)+' seconds.':result.message??'Gemini is not configured on this server.');}),$('p',{},'Runs a small synthetic API test. No player story or secret key is shown.')));
  const recommended=$('select',{},...THEME_IDS.map(id=>$('option',{value:id,selected:id===policy.recommendedThemeId},THEMES[id].label)));
  const allowedBox=$('div',{class:'theme-grid','aria-label':'Campaign allowed palettes'});
  for(const id of THEME_IDS){const checkbox=$('input',{type:'checkbox',checked:policy.allowedThemes.includes(id)});allowedBox.append(field(THEMES[id].label,checkbox));}

@@ -429,7 +429,7 @@ export const actionSchema=z.discriminatedUnion('type',[
  z.strictObject({type:z.literal('assess-health'),injuryId:id,method:z.enum(['self','first-aid','clinical']).default('first-aid')}),
  z.strictObject({type:z.literal('identify-remains'),deathRecordId:id,method:z.enum(['visual','records','forensic']).default('visual')}),z.strictObject({type:z.literal('notify-death'),deathRecordId:id,targetId:id}),
  z.strictObject({type:z.literal('forensic-test'),serviceId:id,evidenceId:id,caseId:id}),
- z.strictObject({type:z.literal('look')}),z.strictObject({type:z.literal('inspect'),targetId:id}),z.strictObject({type:z.literal('wait'),minutes:z.number().int().min(1).max(10080)}),z.strictObject({type:z.literal('fast-forward'),minutes:z.number().int().min(1).max(525600)}),
+ z.strictObject({type:z.literal('story'),text:z.string().min(1).max(1000)}),z.strictObject({type:z.literal('look')}),z.strictObject({type:z.literal('inspect'),targetId:id}),z.strictObject({type:z.literal('wait'),minutes:z.number().int().min(1).max(10080)}),z.strictObject({type:z.literal('fast-forward'),minutes:z.number().int().min(1).max(525600)}),
  z.strictObject({type:z.literal('sleep'),minutes:z.number().int().min(1).max(720)}),z.strictObject({type:z.literal('say'),text:short}),
  z.strictObject({type:z.literal('travel'),destinationId:id,mode:z.enum(['walk','drive','transit','taxi']).default('walk'),vehicleId:ref}),
  z.strictObject({type:z.literal('take'),itemId:id}),z.strictObject({type:z.literal('give'),itemId:id,toId:id}),

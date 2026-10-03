@@ -3,6 +3,7 @@ import type {FastifyInstance} from 'fastify';
 const files:Record<string,[string,string]>={
  '/app':['index.html','text/html; charset=utf-8'],'/app.js':['app.js','text/javascript; charset=utf-8'],
  '/style.css':['style.css','text/css; charset=utf-8'],
+ '/play-ui.css':['play-ui.css','text/css; charset=utf-8'],'/play-ui.js':['play-ui.js','text/javascript; charset=utf-8'],
  '/studio.css':['studio.css','text/css; charset=utf-8'],'/studio.js':['studio.js','text/javascript; charset=utf-8'],
  '/theme.js':['theme.js','text/javascript; charset=utf-8'],'/sw.js':['sw.js','text/javascript; charset=utf-8'],
  '/backgrounds.js':['backgrounds.js','text/javascript; charset=utf-8'],

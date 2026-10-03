@@ -116,6 +116,7 @@ export function resolveAction(s:State,actorId:string,action:Action,eventId:strin
  };
  const vehicleEvidence=(vehicle:Entity,name:string,description:string)=>add(s,'evidence',name,{description,medium:'trace',evidenceType:'vehicle',locationId:pc.locationId,sourceLocationId:pc.locationId,sourceAt:s.clock,objectId:vehicle.id,sourceEventId:eventId,discoveredBy:[actorId]},'knowledge');
  switch(action.type){
+ case 'story':say(actor.name+' remained in the current scene. No new possession, movement, or mechanical outcome was established by this passage.','story.continued');break;
  case 'event-action':{const authoredEvent=getEntity(s,action.eventId,'quest');assert(visible(s,authoredEvent,actorId),'event_unknown');applyEventAction(s,authoredEvent.id,actorId,{outcomeId:action.outcomeId,actionTags:action.actionTags,reason:action.reason,causeEventId:eventId});say('Your action changes the situation: '+action.reason,'event.action',authoredEvent.id);minutes=1;break;}
  case 'look':{
   const place=pc.locationId?getEntity(s,pc.locationId,'location'):null;

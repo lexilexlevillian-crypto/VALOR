@@ -14,6 +14,7 @@ import type {CheckRecord} from './actions.ts';
 import {advance,type Effect} from './simulation.ts';
 import {skillNames,traitBackgroundRequirements,traitGenerationTags,traitGroups,traitOppositions} from './catalog.ts';
 import {generateNpcTraitSelection,validateTraitSelection} from './traits.ts';
+import {grantStarterEssentials} from './starter-items.ts';
 import {prepareAppearance,assignResidence} from './profile-creation.ts';
 import {validateStartingBuild,applyPlayerChoices} from './creation.ts';
 import {stockTrait,stockSkill,startingBudget,applyStartingGrants} from '../../public/creation-rules.js';
@@ -197,6 +198,7 @@ export class Game {
   add(definition.reputation.length>0,'reputation');add(Array.isArray(character.traits)&&character.traits.length>0,'traits');add(Boolean(character.skills&&typeof character.skills==='object'&&Object.keys(character.skills).length),'skills');
   add(items.some(e=>e.kind==='item'&&data(e,'item').category==='clothing'),'clothing');add(Object.prototype.hasOwnProperty.call(character,'cash')||Object.prototype.hasOwnProperty.call(character,'bank'),'money');
   add(sources.some(e=>e.kind==='vehicle'),'vehicle');add(sources.some(e=>e.kind==='quest'),'ongoing problem');add(definition.relationshipTemplates.length>0||relations.length>0,'relationship history');
+  for(const label of ['wallet','clothing',...(s.settings.campaign?.technology.features.phone===false||s.settings.campaign?.enabledSystems.communications===false?[]:['phone']),...(character.residence||character.homeId?['home keys']:[])])if(!includes.includes(label))includes.push(label);
   return {characterName:definition.character.name,includes,grantCount:sources.length,relationshipCount:definition.relationshipTemplates.length+relations.length,reputationCount:definition.reputation.length,requiresSystems:definition.requiresSystems};
  }
  private materializeStart(s:State,actor:Actor,definition:StartDefinition,enforceEmpty=true,eventId?:string){
@@ -212,7 +214,7 @@ export class Game {
    ensure(['item','vehicle','quest','housing','relationship','job'].includes(source.kind),400,'invalid_start_grant');
    const clone=structuredClone(source);
    clone.id=randomUUID();clone.revision=1;clone.archived=false;clone.visibility=source.kind==='relationship'?'owner':source.visibility;
-   if(source.kind==='item'){const d=data(clone,'item');d.ownerId=characterId;d.locationId=null;d.containerId=null;d.equipped=false;d.provenance='start:'+characterId;clone.data=d as Entity['data'];}
+   if(source.kind==='item'){const d=data(clone,'item');d.ownerId=characterId;d.possessorId=characterId;d.locationId=null;d.containerId=null;d.equipped=false;d.provenance='start:'+characterId;clone.data=d as Entity['data'];}
    if(source.kind==='vehicle'){const d=data(clone,'vehicle');d.ownerId=characterId;d.registeredOwnerId=characterId;d.locationId=data(character,'character').locationId;d.keyId=null;d.keyIds=[];d.occupants=[];d.ignition='off';d.authorizedDriverIds=[];d.accessGrants=[];d.hotwiredByIds=[];d.routeState=null;d.custodianId=null;d.custodyRole=null;d.custodyHistory=[];d.stolen=false;d.theftStatus='none';d.theftReports=[];d.discoveredByIds=[];clone.data=d as Entity['data'];}
    if(source.kind==='quest'){const d=data(clone,'quest');d.characterId=characterId;clone.data=d as Entity['data'];}
    if(source.kind==='housing'){const d=data(clone,'housing');d.tenantId=characterId;clone.data=d as Entity['data'];}
@@ -276,7 +278,8 @@ export class Game {
    if(await this.store.get('SELECT campaign_id FROM player_lives WHERE campaign_id=?',timeline.campaign_id))ensure(!s.entities.some(e=>e.kind==='character'&&e.data.playable),409,'life_already_started');
    if(parsed.choices?.name)definition.character.name=parsed.choices.name;
    const character=this.materializeStart(s,actor,definition,true,eventId);
-   const effects:Effect[]=[{id:randomUUID(),text:'A new playable life is ready in the roster.',observers:[character.id],type:'start.created',subjectId:character.id}];
+   const essentials=grantStarterEssentials(s,character,eventId),pc=data(character,'character'),place=s.entities.find(e=>e.id===pc.locationId);
+   const effects:Effect[]=[{id:randomUUID(),text:character.name+' began a new life in Valor.'+(place?' The starting place was '+place.name+'.':''),observers:[character.id],type:'start.created',subjectId:character.id},...essentials.map(item=>({id:randomUUID(),text:character.name+' had '+item.name.toLowerCase()+'.',observers:[character.id],type:'item.granted',subjectId:item.id}))];
    return {result:{characterId:character.id,packageId:parsed.packageId??null},effects,characterId:character.id,turnText:'start.character'};
   });
  } async view(actor:Actor,id:string,characterId:string){return this.store.transaction(async()=>{const {t,access}=(await this.access(actor,id));const s=(await this.load(id));this.controlled(actor,s,characterId,access.role);

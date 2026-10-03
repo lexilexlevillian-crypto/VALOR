@@ -16,10 +16,16 @@ export const usageSql='SELECT reserved_tokens,timeline_id,user_id FROM ai_usage 
 export function intentContext(s:State,characterId:string,text:string):IntentContext{
  const view=observerView(s,characterId),self=view.entities.find(e=>e.id===characterId)!;
  const choices:{label:string;action:Action}[]=[{label:'Look around',action:{type:'look'}},{label:'Search current place',action:{type:'search'}},{label:'Wait ten minutes',action:{type:'wait',minutes:10}},{label:'Rest for one hour',action:{type:'sleep',minutes:60}}];
- for(const e of view.entities){
-  if(e.kind==='location'&&e.id!==self.data.locationId)choices.push({label:'Walk to '+e.name,action:{type:'travel',destinationId:e.id,mode:'walk',vehicleId:null}});
+ const location=view.entities.find(e=>e.id===self.data.locationId),exits=new Set((location?.data.exits as Array<{to:string}>??[]).map(e=>e.to));
+ const ordered=[...view.entities].sort((a,b)=>Number(b.data.locationId===self.data.locationId)-Number(a.data.locationId===self.data.locationId));
+ const combat=view.entities.find(e=>e.kind==='combat'&&e.data.active&&(e.data.participants as string[]).includes(characterId));
+ if(combat){choices.push({label:'Raise a guard and block',action:{type:'defend',defense:'block'}},{label:'Dodge the attack',action:{type:'defend',defense:'dodge'}},{label:'Surrender',action:{type:'surrender'}});}
+ for(const e of ordered){
+  if(e.kind==='character'&&e.id!==characterId&&e.data.locationId===self.data.locationId)choices.push({label:'Punch '+e.name,action:{type:'attack',targetId:e.id,weaponId:null,bodyPart:'torso'}});
+  if(combat&&e.kind==='location'&&exits.has(e.id))choices.push({label:'Flee to '+e.name,action:{type:'flee',destinationId:e.id}});
+  if(e.kind==='location'&&exits.has(e.id))choices.push({label:'Walk to '+e.name,action:{type:'travel',destinationId:e.id,mode:'walk',vehicleId:null}});
   if(e.kind==='recipe')choices.push({label:'Prepare '+e.name,action:{type:'cook',recipeId:e.id}});
-  if(e.kind==='item'){if((e.data.possessorId??e.data.ownerId)===characterId){if(['food','drink','medicine','substance'].includes(String(e.data.category)))choices.push({label:'Consume one '+e.name,action:{type:'consume',itemId:e.id}});choices.push({label:(e.data.equipped?'Unequip ':'Equip ')+e.name,action:{type:'equip',itemId:e.id,equipped:!e.data.equipped}});}else if(!e.data.possessorId&&!e.data.ownerId)choices.push({label:'Take '+e.name,action:{type:'take',itemId:e.id}});}
+  if(e.kind==='item'){if((e.data.possessorId??e.data.ownerId)===characterId){if(['food','drink','medicine','substance'].includes(String(e.data.category)))choices.push({label:'Consume one '+e.name,action:{type:'consume',itemId:e.id}});choices.push({label:(e.data.equipped?'Unequip ':'Equip ')+e.name,action:{type:'equip',itemId:e.id,equipped:!e.data.equipped}});}else if(!e.data.possessorId&&!e.data.ownerId&&e.data.locationId===self.data.locationId)choices.push({label:'Take '+e.name,action:{type:'take',itemId:e.id}});}
  }
  const context:IntentContext={version:'intent-v1',text,candidates:[]};
  for(const choice of choices.slice(0,100)){context.candidates.push({id:String(context.candidates.length),...choice});if(Buffer.byteLength(JSON.stringify(context))>s.settings.contextTokens-512){context.candidates.pop();break;}}
@@ -27,7 +33,7 @@ export function intentContext(s:State,characterId:string,text:string):IntentCont
 }
 const intentResult=z.strictObject({choice:z.string().max(10).nullable()});
 const intentJsonSchema:Record<string,unknown>={type:'object',properties:{choice:{type:['string','null'],maxLength:10}},required:['choice'],additionalProperties:false};
-const intentInstructions='Select one supplied candidate ID only when it matches the player text; otherwise choose null. This proposes an interpretation only. Never execute an action, invent consent, or add player speech.';
+const intentInstructions='Select one supplied candidate ID only when it matches the player text; otherwise choose null. Only select an unambiguous action the player is taking now. Quoted, remembered, negated, hypothetical, conditional, or merely considered actions must return null. This proposes an interpretation only. Never execute an action, invent consent, or add player speech.';
 
 export class IntentGateway{
  private game:Game;private providers:Map<string,IntentProvider>;private inflight:Set<string>;private failures=new Map<string,{count:number;until:number}>();private contexts=new Map<string,IntentContext>();private runtime:AiGateway;

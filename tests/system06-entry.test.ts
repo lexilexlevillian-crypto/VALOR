@@ -63,12 +63,12 @@ test('System 06 roster exposes permitted continuity metadata and package summari
   await game.edit(f.creator,timeline.id,{revision:1,entity:location},key());
   const created=await game.createStartPackage(f.creator,timeline.id,{name:'Minimal',slug:'minimal',description:'No assumed equipment',kind:'guided',visibility:'campaign',status:'published',definition:{character:{name:'Morgan',description:'A blank ledger',data:{locationId:location.id}},grantEntityIds:[],relationshipTemplates:[],reputation:[],plotHookIds:[],requiresSystems:[]}},key());
   const packages=await game.startPackages(f.player,timeline.id);
-  assert.deepEqual(packages[0]!.summary.includes,[]);assert.equal(packages[0]!.summary.characterName,'Morgan');assert.equal('definition' in packages[0]!,false);
+  assert.deepEqual(packages[0]!.summary.includes,['wallet','clothing','phone']);assert.equal(packages[0]!.summary.characterName,'Morgan');assert.equal('definition' in packages[0]!,false);
   const started=await game.start(f.player,timeline.id,{revision:2,packageId:created.id},key());
   await game.save(f.player,timeline.id,'Arrival');
   const card=(await game.roster(f.player,timeline.id))[0]!;
   assert.equal(card.id,started.characterId);assert.equal(card.campaign.name,'Test instance');assert.equal(card.location?.name,'Visible station');assert.equal(card.locationTime,card.timeline.clock);assert.ok(card.lastPlayed);assert.ok(card.saveSummary.count>=1);assert.equal(card.saveSummary.latest?.name,'Arrival');assert.equal(card.portraitMediaId,null);
-  const state=await game.load(timeline.id);assert.equal(state.entities.some(e=>['vehicle','item','relationship','job'].includes(e.kind)&&!e.archived),false);
+  const state=await game.load(timeline.id);assert.equal(state.entities.some(e=>['vehicle','relationship','job'].includes(e.kind)&&!e.archived),false);
  }finally{await f.close();}
 });
 
