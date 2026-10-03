@@ -2,6 +2,7 @@ import {randomUUID} from 'node:crypto';
 import {data,getEntity} from './model.ts';
 import type {Data,Entity,State} from './model.ts';
 import {observerView} from './epistemics.ts';
+import {eventNotifications} from './events.ts';
 
 export function phonePowered(phone:Entity,incoming=false){
  const item=data(phone,'item');
@@ -61,6 +62,7 @@ export function phoneView(s:State,observerId:string){
   phones:phones.map(phone=>{const item=data(phone,'item'),apps=Object.fromEntries(Object.entries(item.phoneApps).map(([app,enabled])=>[app,enabled&&s.settings.campaign?.technology.features[app]!==false]));return {id:phone.id,name:phone.name,number:item.phoneNumber,type:item.phoneType,state:item.phoneState,condition:item.condition,battery:item.battery,batteryRequired:item.batteryRequired,service:item.service,apps,contacts:item.contacts.map(contact=>({...contact,savedName:contact.savedName||contact.label})),photoIds:item.mediaIds};}),
   messages:messages.map(entity=>({id:entity.id,name:entity.name,...data(entity,'message')})).sort((a,b)=>a.at.localeCompare(b.at)),
   socialFeed:socialPosts.map(entity=>({id:entity.id,name:entity.name,...data(entity,'socialPost')})),
+  notifications:eventNotifications(s,observerId),
   map:{currentLocationId:data(getEntity(s,observerId,'character'),'character').locationId,locations}
  };
 }

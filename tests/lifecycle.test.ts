@@ -105,7 +105,7 @@ test('deduplicated immutable saves support old formats, preserve branches and de
   const row=(await f.store.get<{snapshot_json:string}>('SELECT snapshot_json FROM saves WHERE id=?',save.id))!;assert.equal(JSON.parse(row.snapshot_json).storageVersion,2);
   assert.equal((await f.game.saveCompatibility(f.creator,f.timeline.id,save.id)).valid,true);
   await assert.rejects(()=>f.store.run("UPDATE snapshot_chunks SET payload='broken'"),/immutable snapshot chunk/);
-  const bundle=await f.game.export(f.creator,f.timeline.id);delete (bundle.payload.state.settings as Record<string,unknown>).npcRouteTravel;delete (bundle.payload.state.settings as Record<string,unknown>).calendar;bundle.checksum=checksum(bundle.payload);
+  const bundle=await f.game.export(f.creator,f.timeline.id);delete (bundle.payload.state.settings as Record<string,unknown>).npcRouteTravel;delete (bundle.payload.state.settings as Record<string,unknown>).calendar;delete (bundle as {manifest?:unknown}).manifest;bundle.checksum=checksum(bundle.payload);
   const report=await f.game.import(f.creator,f.timeline.id,'Legacy export',bundle,true);assert.ok('valid'in report&&report.valid);
   const legacy=key();await f.store.run('INSERT INTO saves VALUES (?,?,?,?,?,?,?,?,?)',legacy,f.timeline.id,'Legacy save',1,JSON.stringify(bundle.payload),bundle.checksum,f.creator.id,new Date().toISOString(),0);
   assert.ok((await f.game.branch(f.creator,f.timeline.id,legacy,'Legacy branch')).id);
@@ -152,7 +152,7 @@ test('media stays database-backed, private, non-cacheable and portable without a
   await assert.rejects(()=>f.game.media(f.player,f.timeline.id,privateId,f.pc),/media_unavailable/);assert.ok((await f.game.media(f.player,f.timeline.id,publicId,f.pc)).bytes.length);
   await assert.rejects(()=>f.add('media','Bad SVG',{mime:'image/png',body:Buffer.from('<svg onload="alert(1)"/>').toString('base64'),alt:'bad'}),/unsupported_media/);
   const session=await login(f,'player@example.test'),response=await f.app.inject({url:'/game/timelines/'+f.timeline.id+'/media/'+publicId+'?characterId='+f.pc,headers:{cookie:session.cookie}});assert.equal(response.statusCode,200);assert.equal(response.headers['cache-control'],'no-store');assert.equal(response.headers['x-content-type-options'],'nosniff');
-  const bundle=await f.game.export(f.creator,f.timeline.id);const child=await f.game.import(f.creator,f.timeline.id,'Media portability',bundle,false);assert.ok('id'in child);assert.equal((await f.game.load(child.id)).entities.find(e=>e.id===publicId)!.data.body,png);
+  const bundle=await f.game.export(f.creator,f.timeline.id),preview=await f.game.import(f.creator,f.timeline.id,'Media portability',bundle,true) as {confirmationToken:string};const child=await f.game.import(f.creator,f.timeline.id,'Media portability',bundle,false,preview.confirmationToken);assert.ok('id'in child);assert.equal((await f.game.load(child.id)).entities.find(e=>e.id===publicId)!.data.body,png);
  }finally{await f.close();}
 });
 test('opt-in fixed-step catch-up preserves NPC wages, needs and production across time segmentation',async()=>{

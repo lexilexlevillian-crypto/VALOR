@@ -49,10 +49,10 @@ test('iPad shell, keyboard login, Creator form, long prose, reduced motion and o
   await page.getByRole('button',{name:'New record',exact:true}).click();
   await page.getByLabel('Name',{exact:true}).fill('Browser-authored room');
   await page.getByLabel('Visibility',{exact:true}).first().selectOption('campaign');
-  await page.getByRole('button',{name:'Review & save',exact:true}).click();
-  await page.getByRole('heading',{name:'Commit Browser-authored room?'}).waitFor();
-  const confirmHit=await page.evaluate(()=>{const button=[...document.querySelectorAll('button')].find(node=>node.textContent==='Confirm audited save')!,dialog=document.querySelector('dialog.developer-confirm')!,rect=button.getBoundingClientRect(),dialogRect=dialog.getBoundingClientRect(),hit=document.elementFromPoint(rect.left+rect.width/2,rect.top+rect.height/2);return {button:{left:rect.left,top:rect.top,right:rect.right,bottom:rect.bottom},dialog:{left:dialogRect.left,top:dialogRect.top,right:dialogRect.right,bottom:dialogRect.bottom},hit:hit?.tagName+'.'+hit?.className};});assert.match(confirmHit.hit,/^BUTTON\./,'confirmation touch target: '+JSON.stringify(confirmHit));
-  await page.getByRole('button',{name:'Confirm audited save',exact:true}).click({force:true});
+  await page.getByRole('button',{name:'Review & publish',exact:true}).click();
+  await page.getByRole('heading',{name:'Publish Browser-authored room?'}).waitFor();
+  const confirmHit=await page.evaluate(()=>{const button=[...document.querySelectorAll('button')].find(node=>node.textContent==='Confirm audited publish')!,dialog=document.querySelector('dialog.developer-confirm')!,rect=button.getBoundingClientRect(),dialogRect=dialog.getBoundingClientRect(),hit=document.elementFromPoint(rect.left+rect.width/2,rect.top+rect.height/2);return {button:{left:rect.left,top:rect.top,right:rect.right,bottom:rect.bottom},dialog:{left:dialogRect.left,top:dialogRect.top,right:dialogRect.right,bottom:dialogRect.bottom},hit:hit?.tagName+'.'+hit?.className};});assert.match(confirmHit.hit,/^BUTTON\./,'confirmation touch target: '+JSON.stringify(confirmHit));
+  await page.getByRole('button',{name:'Confirm audited publish',exact:true}).click({force:true});
   await page.getByRole('button',{name:'Browser-authored room'}).waitFor();
   await page.getByRole('button',{name:'All creation areas',exact:true}).click();
   await page.getByRole('button',{name:/^People Create/}).click();

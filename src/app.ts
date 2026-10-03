@@ -23,7 +23,9 @@ export function buildApp(store:Store,settings:Config,logging:boolean|{write(chun
   const cookie=(token:string,maxAge:number)=>cookieName+'='+token+'; Path=/; HttpOnly; SameSite=Strict; Max-Age='+maxAge+(settings.production?'; Secure':'');
   const tokenFrom=(header:string|undefined)=>header?.split(';').map(s=>s.trim()).find(s=>s.startsWith(cookieName+'='))?.slice(cookieName.length+1);
   const actors=new WeakMap<object,Actor>();
+  const requestStarted=new WeakMap<object,number>();
   app.addHook('onRequest',async(request,reply)=>{
+    requestStarted.set(request,performance.now());
     reply.header('Cache-Control','no-store');
     reply.header('X-Content-Type-Options','nosniff');
     reply.header('Referrer-Policy','no-referrer');
@@ -35,7 +37,7 @@ export function buildApp(store:Store,settings:Config,logging:boolean|{write(chun
     const path=request.url.split('?')[0];
     const unsafe=!['GET','HEAD','OPTIONS'].includes(request.method);
     if(unsafe)ensure(request.headers.origin===settings.origin,403,'origin_rejected');
-    if((path==='/healthz' || path==='/' || publicAssets.has(path??'')) && (request.method==='GET' || request.method==='HEAD'))return;
+    if((path==='/healthz' || path==='/readyz' || path==='/' || publicAssets.has(path??'')) && (request.method==='GET' || request.method==='HEAD'))return;
     if((path==='/auth/login' || path==='/auth/signup' || path==='/auth/password/recover') && request.method==='POST') {
       (await auth.limit(path==='/auth/password/recover'?'recovery-ip':'login-ip',request.ip,settings.loginLimit*3,900000));
       return;
@@ -50,6 +52,15 @@ export function buildApp(store:Store,settings:Config,logging:boolean|{write(chun
     if(request.method==='GET'&&/^\/game\/timelines\/[^/]+\/export$/.test(path??''))await auth.limit('export-user',authenticated.id,settings.exportLimit,60000);
   });
   app.addHook('onResponse',async(request,reply)=>{
+    const duration=Math.max(0,performance.now()-(requestStarted.get(request)??performance.now())),route=request.routeOptions.url??'unmatched',path=request.url.split('?')[0]??'',match=/^\/game\/timelines\/([0-9a-f-]{36})(?:\/|$)/i.exec(path),timelineId=match?.[1]??null;
+    try{
+      const campaign=timelineId?await store.get<{campaign_id:string}>('SELECT campaign_id FROM timelines WHERE id=?',timelineId):null,status=reply.statusCode>=400?'failed':'succeeded',timestamp=new Date().toISOString(),dimensions=JSON.stringify({method:request.method,route,statusCode:reply.statusCode});
+      await store.run('INSERT INTO operational_metric_events(campaign_id,timeline_id,metric,value,status,dimensions_json,created_at) VALUES (?,?,?,?,?,?,?)',campaign?.campaign_id??null,timelineId,'api_latency_ms',duration,status,dimensions,timestamp);
+      if(reply.statusCode>=400)await store.run('INSERT INTO operational_metric_events(campaign_id,timeline_id,metric,value,status,dimensions_json,created_at) VALUES (?,?,?,?,?,?,?)',campaign?.campaign_id??null,timelineId,'api_error',1,'failed',dimensions,timestamp);
+      if(route==='/game/timelines/:id/turns')await store.run('INSERT INTO operational_metric_events(campaign_id,timeline_id,metric,value,status,dimensions_json,created_at) VALUES (?,?,?,?,?,?,?)',campaign?.campaign_id??null,timelineId,'turn_latency_ms',duration,status,dimensions,timestamp);
+      if(route==='/game/timelines/:id/developer/simulation-preview')await store.run('INSERT INTO operational_metric_events(campaign_id,timeline_id,metric,value,status,dimensions_json,created_at) VALUES (?,?,?,?,?,?,?)',campaign?.campaign_id??null,timelineId,'simulation_latency_ms',duration,status,dimensions,timestamp);
+      if(reply.statusCode>=400&&/^\/game\/timelines\/:id\/(?:saves|branch|import)/.test(route))await store.run('INSERT INTO operational_metric_events(campaign_id,timeline_id,metric,value,status,dimensions_json,created_at) VALUES (?,?,?,?,?,?,?)',campaign?.campaign_id??null,timelineId,'save_failure',1,'failed',dimensions,timestamp);
+    }catch{}
     app.log.info({requestId:request.id,method:request.method,route:request.routeOptions.url??'unmatched',status:reply.statusCode},'request.complete');
   });
   app.setErrorHandler((error,request,reply)=>{
@@ -76,6 +87,7 @@ export function buildApp(store:Store,settings:Config,logging:boolean|{write(chun
     return {name:'VALOR',version:'0.2.0-alpha',status:'integrated-alpha',playable:true,client:'/app'};
   });
   app.get('/healthz',async()=>{(await store.get('SELECT 1'));return {status:'ok'};});
+  app.get('/readyz',async()=>{const schema=await store.get<{version:number}>('SELECT max(version) version FROM schema_migrations');ensure(schema?.version===44,503,'schema_not_ready');return {status:'ready',schemaVersion:schema.version};});
   app.post('/auth/login',async(request,reply)=>{
     const input=credentials.parse(request.body);
     (await auth.limit('login-account',input.email,settings.loginLimit,900000));

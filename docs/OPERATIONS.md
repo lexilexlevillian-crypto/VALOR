@@ -2,7 +2,7 @@
 
 ## Database and migrations
 
-Local default: data/valor.sqlite, excluded from Git. Production uses external Turso via the official @libsql/client package. Run npm run migrate before use; startup also awaits verification/application of every migration before accepting requests. All SQL migrations run transactionally with checksums. Never edit an applied migration. Add a forward-compatible migration for future changes. Startup refuses unknown schema versions and modified migration checksums; connectivity/authentication failures never create a local fallback database.
+Local default: data/valor.sqlite, excluded from Git. Production uses external Turso via the official @libsql/client package. Run npm run migrate before use; startup also awaits verification/application of every migration before accepting requests. All SQL migrations run transactionally with checksums. Never edit an applied migration. Add a forward-compatible migration for future changes. Startup refuses unknown schema versions and modified migration checksums; connectivity/authentication failures never create a local fallback database. `/readyz` returns success only when the database is reachable and schema migration 044 is present; `/healthz` remains the liveness/dependency check.
 
 001_foundation establishes the durable model, constraints and immutable history triggers. 002_query_indexes adds scoped query indexes. 003_game adds timelines, typed entities, epistemic tables, game events, saves, templates and AI usage. 004_chronicle_lineage preserves historical turns across branches/imports. 005_game_delivery adds a leased game-event outbox, committed atomically with mutations. Tests migrate a populated 001 database forward through all migrations and inspect it from a new Node process.
 
@@ -29,6 +29,14 @@ Restore rehearsal:
 5. Check /healthz and authenticated campaign/record access.
 6. For a real security-incident restore, revoke restored sessions before accepting traffic.
 
+The release rehearsal automates a new backup, opens it as an independent database, reapplies migration verification, runs integrity and foreign-key checks, and compares critical source/restored row counts:
+
+```sh
+npm run release:rehearse -- ./backups/valor-release-rehearsal.sqlite
+```
+
+The destination must not exist. Run this with writes stopped; a live source can legitimately change between count capture and backup. Keep the JSON result with release evidence. This command proves the application-level restore path, not the provider's off-host retention or disaster-recovery SLA.
+
 The automated backup tests open independent restored databases, verify records and referential integrity, reject overwriting a backup, and compare a complete game export and Chronicle against the original. Game saves restore into new child timelines; they never overwrite the parent. Checksummed imports validate records and transcript references before creating a separate timeline.
 
 ## Configuration and secrets
@@ -54,6 +62,20 @@ Request logs include generated request ID, method, route template and status. Ne
 Archive remains the default content-removal policy. Record hard deletion is restricted to the owning Creator, an archived target, a fresh immutable dependency report with no blockers, and exact confirmation. It retains the audit/event tombstone and deletion report, so it is not a privacy-erasure workflow. Define legal holds, retention, account erasure, and backup purge procedures before treating permanent deletion as regulatory erasure.
 
 SIGINT/SIGTERM stop accepting traffic, close the HTTP server, then close the libSQL client. Uncommitted transactions are rolled back; remote transaction expiry also fails closed. Outbox delivery retries until successful; consumers must deduplicate event IDs. There is no public event subscription endpoint.
+
+## Release gates, metrics and rollback
+
+Migration 044 adds durable Creator drafts/versions/templates, confirmation-bound Developer previews and immutable repair reports, plus bounded operational metric events. The authorized Developer operations view combines API error/latency events, turn and deterministic-simulation trace duration, AI requests/token estimates/failures, outbox depth, saves, snapshot storage, entity growth, and schema version. Request metric writes are best-effort and never make a successful game request fail. Migration/import failures are recorded when the metrics table is already available. Configure external alerts for availability, elevated API/AI/save failures, queue age/depth, storage growth and budget thresholds; VALOR does not silently provision an alert vendor.
+
+Deployment sequence:
+
+1. Stop writes or enter a maintenance window; record the current artifact and schema.
+2. Run the full CI gates and `npm run release:rehearse -- <new path>` against the intended source.
+3. Deploy to staging, run migrations, require `/healthz` and `/readyz`, then exercise the acceptance matrix in `SYSTEM32_RELEASE.md`.
+4. Deploy the same immutable artifact to production, run forward migrations once, require readiness, and inspect errors, latency, queue depth and storage growth before reopening writes.
+5. For code rollback, redeploy the prior artifact only if it understands schema 044. Otherwise keep the service stopped and restore the verified pre-release backup to a new database, validate it, then switch credentials. Never down-migrate or overwrite the live database in place.
+
+The release owner must record backup path/checksum custody, artifact/commit, migration result, health/readiness evidence, acceptance result, monitoring baseline, and rollback decision. See [System 32 release report](SYSTEM32_RELEASE.md).
 
 ## Durable event worker
 

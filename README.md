@@ -18,10 +18,11 @@ npx playwright install chromium
 npm run check
 npm test
 npm run migrate
+npm run release:rehearse -- ./backups/valor-release-rehearsal.sqlite
 npm start
 ```
 
-Open http://localhost:3000/app after provisioning an account. Browser requests to / also open the client. GET /healthz returns a database-backed health result. JSON requests to / return release metadata.
+Open http://localhost:3000/app after provisioning an account. Browser requests to / also open the client. GET /healthz returns a database-backed health result; GET /readyz additionally requires the current schema. JSON requests to / return release metadata.
 
 Optional: create .env from .env.example and customize the settings. Node loads it for start/dev/operator commands; environment variables take precedence. No credentials or database files belong in Git.
 
@@ -59,6 +60,7 @@ On iPad Safari, use Share → Add to Home Screen. The app is a PWA, not an App S
 ```sh
 npm run check
 npm test
+npm run test:release
 npm audit
 ```
 

@@ -11,8 +11,10 @@
     "start": "node --env-file-if-exists=.env src/server.ts",
     "check": "tsc --noEmit",
     "test": "node tests/run.ts",
+    "test:release": "node tests/run.ts tests/system32-release.test.ts",
     "migrate": "node --env-file-if-exists=.env src/cli.ts migrate",
     "backup": "node --env-file-if-exists=.env src/cli.ts backup",
+    "release:rehearse": "node --env-file-if-exists=.env src/cli.ts release:rehearse",
     "db:import": "node --env-file-if-exists=.env src/cli.ts import-sqlite",
     "worker": "node --env-file-if-exists=.env src/notifications-worker.ts",
     "user:create": "node --env-file-if-exists=.env src/cli.ts user:create"

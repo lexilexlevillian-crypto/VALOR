@@ -1,6 +1,6 @@
 # VALOR integrated implementation status
 
-Build: 0.2.0-alpha, 2026-09-28. The owner authorized continuing across systems and publishing the source and brief. This report separates a working cross-system implementation from full satisfaction of every advanced requirement. **All 18 systems are not yet production-complete.** No city, person, faction or legal canon is seeded into production.
+Build: 0.2.0-alpha, updated 2026-10-02. Systems 30–32 now add authored dynamic-event projections, branch-safe versioned recovery, durable Creator draft/publish/version/template workflows, confirmation-bound fixtures and repairs, release readiness, and consolidated operational evidence. See [SYSTEM32_RELEASE.md](SYSTEM32_RELEASE.md) for the current release gate and known limitations. This older coverage table remains a subsystem inventory rather than a production certification. No city, person, faction or legal canon is seeded into production.
 
 ## System coverage
 

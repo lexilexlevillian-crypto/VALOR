@@ -161,11 +161,11 @@ test('saves branch without modifying parent, malformed imports fail, and export/
   assert.equal((await f.game.load(child.id)).entities.find(e=>e.id===f.pc)!.data.locationId,f.location);
   assert.equal((await f.game.view(f.player,child.id,f.pc)).turns.length,1);
   (await assert.rejects(async ()=>(await f.game.import(f.creator,f.timeline.id,'Bad',{...before,checksum:'0'.repeat(64)})),/checksum/));
-  const check=(await f.game.import(f.creator,f.timeline.id,'Copy',before,true));assert.ok('valid'in check);
-  const imported=(await f.game.import(f.creator,f.timeline.id,'Copy',before,false)) as {id:string};
+  const check=(await f.game.import(f.creator,f.timeline.id,'Copy',before,true)) as {valid:true;confirmationToken:string};assert.ok(check.valid);
+  const imported=(await f.game.import(f.creator,f.timeline.id,'Copy',before,false,check.confirmationToken)) as {id:string};
   assert.equal((await f.game.load(imported.id)).entities.length,before.payload.state.entities.length);
   assert.equal((await f.game.load(imported.id)).entities.find(e=>e.id===f.pc)!.data.controllerUserId,f.creator.id);
-  const corrupt=structuredClone(before);corrupt.payload.state.entities[0]!.data.invalid='bad';corrupt.checksum=checksum(corrupt.payload);
+  const corrupt=structuredClone(before);corrupt.payload.state.entities[0]!.data.invalid='bad';delete (corrupt as {manifest?:unknown}).manifest;corrupt.checksum=checksum(corrupt.payload);
   (await assert.rejects(async ()=>(await f.game.import(f.creator,f.timeline.id,'Bad schema',corrupt)),/unrecognized|Unrecognized/));
  }finally{await f.close();}
 });
@@ -289,7 +289,7 @@ test('integrated acceptance preserves prose, travel, NPCs, consent, objects, inj
   state=(await f.game.load(f.timeline.id));assert.ok((state.entities.find(e=>e.id===casing)!.data.discoveredBy as string[]).includes(f.pc));assert.ok(state.entities.some(e=>e.kind==='case'));
   const save=(await f.game.save(f.player,f.timeline.id,'Acceptance checkpoint')),parent=(await f.game.export(f.creator,f.timeline.id)),child=(await f.game.branch(f.player,f.timeline.id,save.id,'Acceptance branch'));
   assert.deepEqual((await f.game.export(f.creator,f.timeline.id)),parent);assert.equal((await f.game.view(f.player,child.id,f.pc)).turns.length,parent.payload.transcript.length);
-  const copied=(await f.game.import(f.creator,child.id,'Acceptance restored',parent,false)) as {id:string};assert.equal((await f.game.view(f.creator,copied.id,f.pc)).turns.length,parent.payload.transcript.length);
+  const copyPreview=await f.game.import(f.creator,child.id,'Acceptance restored',parent,true) as {confirmationToken:string},copied=(await f.game.import(f.creator,child.id,'Acceptance restored',parent,false,copyPreview.confirmationToken)) as {id:string};assert.equal((await f.game.view(f.creator,copied.id,f.pc)).turns.length,parent.payload.transcript.length);
   assert.ok(parent.payload.transcript.some(t=>t.narration.includes('An authored invitation.')));assert.doesNotMatch(JSON.stringify((await f.game.view(f.player,f.timeline.id,f.pc))),/NEVER_EXPOSE|SECRET_INSTRUCTION/);
  }finally{await f.close();}
 });
@@ -298,7 +298,7 @@ test('large authored roster and lore set remain bounded through catch-up, retrie
   const bundle=(await f.game.export(f.creator,f.timeline.id));
   for(let i=0;i<1000;i++)bundle.payload.state.entities.push(validateEntity({id:randomUUID(),kind:'character',name:'Load NPC '+i,visibility:'knowledge',data:{locationId:f.destination,schedule:[{id:randomUUID(),minute:9*60,locationId:f.destination,activity:'routine'}]}}));
   for(let i=0;i<1000;i++)bundle.payload.state.entities.push(validateEntity({id:randomUUID(),kind:'lore',name:'Load lore '+i,visibility:'campaign',data:{description:'Synthetic benchmark reference '+i}}));
-  bundle.checksum=checksum(bundle.payload);let began=performance.now();const imported=(await f.game.import(f.creator,f.timeline.id,'Load fixture',bundle,false)) as {id:string};const importMs=performance.now()-began;
+  delete (bundle as {manifest?:unknown}).manifest;bundle.checksum=checksum(bundle.payload);let began=performance.now();const preview=await f.game.import(f.creator,f.timeline.id,'Load fixture',bundle,true) as {confirmationToken:string},imported=(await f.game.import(f.creator,f.timeline.id,'Load fixture',bundle,false,preview.confirmationToken)) as {id:string};const importMs=performance.now()-began;
   began=performance.now();const context=(await f.game.context(f.creator,imported.id,f.pc,'benchmark reference'));const retrievalMs=performance.now()-began;assert.ok(context.sources.length<=12);
   began=performance.now();for(let i=0;i<10;i++)(await f.game.turn(f.creator,imported.id,{revision:(await f.game.access(f.creator,imported.id)).t.revision,characterId:f.pc,action:{type:'wait',minutes:60}},key()));const tenTurnsMs=performance.now()-began;
   assert.equal((await f.game.view(f.creator,imported.id,f.pc)).turns.length,10);assert.ok(tenTurnsMs<30000,'ten hourly turns exceeded 30-second regression ceiling');

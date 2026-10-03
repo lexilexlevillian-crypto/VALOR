@@ -14,6 +14,7 @@ import {resolveTraitEffects,socialPresentationDescriptors} from './traits.ts';
 import {applyRelationshipMovement,decayReputations,recordRelationshipHistory,relationshipBehaviorSignal} from './social.ts';
 import {carriedBy,itemPossessor} from './items.ts';
 import {creditCharacter,debitBusiness,jobEligible,postTransaction} from './economy.ts';
+import {advanceEventDeadlines,evaluateEventWatchers} from './events.ts';
 export type Effect={id:string;text:string;observers:string[];type:string;subjectId:string};
 export const simulationTiers={
  active:{
@@ -203,31 +204,8 @@ function advanceStep(s:State,minutes:number,eventId:string,effects:Effect[],play
   if(!d.playable&&priorCondition!==d.condition){if(d.condition==='dead')recordNpcActivity(s,character,d,eventId,'killed','health',wounds[0]?.id??null,'Died from simulated injuries.');else if(d.condition==='unconscious')recordNpcActivity(s,character,d,eventId,'injured','health',wounds[0]?.id??null,'Became unconscious from simulated injuries.');}
   character.data=d as Entity['data'];
  }
- for(const q of s.entities.filter(e=>e.kind==='quest'&&!e.archived&&e.data.status==='active')){const d=data(q,'quest');if(d.deadline&&Date.parse(d.deadline)<=end){d.status='expired';q.data=d as Entity['data'];emit(effects,'An unresolved situation has expired: '+q.name,d.characterId?[d.characterId]:[],'quest.expired',q.id);}}
- const watchers=s.entities.filter(e=>e.kind==='watcher'&&!e.archived).sort((a,b)=>Number(b.data.priority)-Number(a.data.priority)||a.id.localeCompare(b.id));
- const firedGroups=new Set<string>();
- for(const watcher of watchers){
-  const w=data(watcher,'watcher');
-  if(w.conflictGroup&&firedGroups.has(w.conflictGroup))continue;
-  if(w.once&&w.fired||w.expiresAt&&Date.parse(w.expiresAt)<end||w.lastFired&&end-Date.parse(w.lastFired)<w.cooldownMinutes*60000)continue;
-  const subject=w.subjectId?s.entities.find(e=>e.id===w.subjectId&&!e.archived):null;
-  const matches=w.trigger==='time'?!!w.dueAt&&Date.parse(w.dueAt)<=end:
-   w.trigger==='location'?subject?.data.locationId===w.targetId:
-   w.trigger==='item'?subject?.data.ownerId===w.targetId:
-   w.trigger==='health'?Number(subject?.data.blood)<=w.threshold:
-   w.trigger==='relationship'?Number(subject?.data.trust)>=w.threshold:
-   w.trigger==='quest'?subject?.data.status==='active':
-   s.knowledge.some(k=>k.observerId===w.subjectId&&s.facts.some(f=>f.id===k.factId&&f.subjectId===w.targetId));
-  const compound=w.conditions.map(c=>matchesCondition(s,c));
-  if(!matches||compound.length&&!(w.conditionMode==='all'?compound.every(Boolean):compound.some(Boolean)))continue;
-  const target=w.targetId?s.entities.find(e=>e.id===w.targetId&&!e.archived):null;
-  if(w.effect==='activate-quest'||w.effect==='fail-quest'){if(target?.kind!=='quest')throw new Error('watcher_target_invalid');target.data.status=w.effect==='activate-quest'?'active':'failed';}
-  if(w.effect==='reveal-lore'){if(!target||!w.subjectId)throw new Error('watcher_target_invalid');const id=fact(s,target.id,'discovered',true,eventId,[w.subjectId]);observe(s,w.subjectId,id,'watcher:'+watcher.id);}
-  if(w.effect==='npc-offer'&&w.subjectId){emit(effects,watcher.name+': '+w.description,[w.subjectId],'npc.offer',watcher.id);remember(s,w.subjectId,w.description,eventId);}
-  w.fired=true;w.lastFired=s.clock;watcher.data=w as Entity['data'];
-  if(w.conflictGroup)firedGroups.add(w.conflictGroup);
-  emit(effects,'Watcher fired: '+watcher.name,[],'watcher.fired',watcher.id);
- }
+ advanceEventDeadlines(s,end,eventId,effects);
+ evaluateEventWatchers(s,end,eventId,effects,['time','location','people','relationships','objects','evidence','knowledge','world']);
  // Offscreen NPC interaction records remain directional and private unless explicitly revealed.
  for(const entity of s.entities.filter(e=>e.kind==='faction'&&!e.archived)){
   const f=data(entity,'faction');if(!f.groupPolicy||!f.leaderId)continue;
