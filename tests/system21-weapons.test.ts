@@ -47,6 +47,14 @@ test('narration cannot claim weapon mechanics that were not emitted',()=>{
  assert.equal(reviewMechanicalClaims('An empty click follows.',[])[0]?.value,'empty-click');
 });
 
+test('ordinary fire and clicks are not mistaken for weapon outcomes',()=>{
+ for(const prose of ['The door clicked shut.','A fire flickered in the fireplace.','Her heels clicked on the pavement.','The mouse clicked twice.','She was discharged from hospital.','He was fired from his job.','The pistol rested on the table. The door clicked shut.'])assert.deepEqual(reviewMechanicalClaims(prose,[]),[],prose);
+ for(const prose of ['He fired the pistol.','The rifle fired.','Gunfire echoed in the alley.','A shot rang out.','She opened fire.'])assert.ok(reviewMechanicalClaims(prose,[]).some(flag=>flag.value==='shot'),prose);
+ for(const prose of ['The pistol clicked.','Her gun gave a dry click.','A click from the empty revolver followed.','An empty click followed.'])assert.ok(reviewMechanicalClaims(prose,[]).some(flag=>flag.value==='empty-click'),prose);
+ const effect={id:randomUUID(),text:'Shot resolved.',observers:[],type:'weapon.shot',subjectId:randomUUID()};
+ assert.deepEqual(reviewMechanicalClaims('He fired the pistol.',[effect]),[]);
+});
+
 test('shot history and casing evidence survive save and branch restoration',async()=>{
  const f=await fixture(),game=new Game(f.store);try{
   const timeline=await game.initialize(f.creator,f.campaign.id),room=make('location','Range'),skill=make('skill','Pistol'),shooter=make('character','Shooter',{playable:true,controllerUserId:f.player.id,locationId:room.id,attributes:{Strength:30,Agility:100,Endurance:30,Intellect:30,Perception:100,Presence:30,Will:30},skills:{[skill.id]:100}},'owner'),target=make('character','Target',{locationId:room.id}),gun=make('item','Serialized pistol',{category:'firearm',ownerId:shooter.id,possessorId:shooter.id,equipped:true,carryState:'held',serial:'SAVE-21',caliber:'9mm',weaponFamily:'Pistol',magazine:1,loaded:1},'owner');

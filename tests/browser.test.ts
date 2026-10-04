@@ -106,6 +106,9 @@ test('iPad shell, keyboard login, Creator form, long prose, reduced motion and o
   assert.ok((await page.locator('.turn .prose').textContent())!.length>3000);
   assert.equal(await page.locator('.story-tools').count(),0);
   const originalProse=await page.locator('.turn .prose').first().textContent();await page.getByRole('button',{name:'Retry',exact:true}).first().click();await page.getByRole('button',{name:'Cancel',exact:true}).click();await page.getByText('Narration rebuild canceled. The previous prose remains displayed.',{exact:true}).waitFor();assert.equal(await page.locator('.turn .prose').first().textContent(),originalProse);
+  const fallback='The AI reply did not match the required story format. Your saved turn is unchanged. Code: ai_output_schema_invalid.';
+  await page.route('**/narrate/stream',async route=>route.fulfill({status:200,contentType:'application/x-ndjson',body:JSON.stringify({type:'paragraph',text:'Do not replace the existing prose.'})+'\n'+JSON.stringify({type:'complete',status:'grounded-fallback',failureCode:'ai_output_schema_invalid',fallbackMessage:fallback})+'\n'}));
+  await page.getByRole('button',{name:'Retry',exact:true}).click();await page.getByText(fallback,{exact:true}).waitFor();assert.equal(await page.locator('.turn .prose').first().textContent(),originalProse);
   await page.locator('.composer').scrollIntoViewIfNeeded();
   assert.equal(await page.evaluate(()=>{const composer=document.querySelector('.composer'),switcher=document.querySelector('.mode-switch');if(!composer||!switcher)return false;const a=composer.getBoundingClientRect(),b=switcher.getBoundingClientRect();return !(a.right>b.left&&a.left<b.right&&a.bottom>b.top&&a.top<b.bottom);}),true,'bottom-edge switch does not cover the composer');
   const beforeProposal=(await game.access(f.creator,timeline.id)).t.revision;

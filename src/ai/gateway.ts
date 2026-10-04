@@ -1,6 +1,7 @@
 import {z} from 'zod';
 import {aiProviderResponseSchema,aiRequestSchema,redactedRequestLog,safeCacheKey,type AiProviderAdapter,type AiProviderResponse,type AiRequest} from './contracts.ts';
 import {validateToolCalls,type ToolAuthorization} from './tools.ts';
+import {safeAiFailure,narrationFailureMessage,type FailureStage} from './failures.ts';
 
 export const fallbackMessages={
  narration:'Narration assistance is temporarily unavailable. The grounded result remains unchanged.',
@@ -62,15 +63,18 @@ export class AiGateway {
    await this.audit.record({traceId:request.traceId,status:'running',attempts:0,inputTokens:0,outputTokens:0,at:new Date(this.now()).toISOString()});
    for(;attempts<request.budget.maxAttempts;attempts++){
     if(options.signal?.aborted){await this.audit.record({traceId:request.traceId,status:'canceled',attempts,inputTokens:0,outputTokens:0,reason:'ai_canceled',at:new Date(this.now()).toISOString()});throw new Error('ai_canceled');}
+    let stage:FailureStage='provider';
     try{
-     const response=await this.invoke(provider,request,options.signal),toolResults=validateToolCalls(response.toolCalls,request.allowedTools,options.toolAuthorization??{}),output=options.validate(response.output);
+     const response=await this.invoke(provider,request,options.signal);stage='tools';
+     const toolResults=validateToolCalls(response.toolCalls,request.allowedTools,options.toolAuthorization??{});stage='output';
+     const output=options.validate(response.output);
      if(response.usage.inputTokens>request.budget.maxInputTokens||response.usage.outputTokens>request.budget.maxOutputTokens||response.usage.inputTokens+response.usage.outputTokens>request.budget.maxTotalTokens)throw new Error('ai_usage_exceeded_budget');
      if(key&&request.cache.kind==='reproducible')this.cache.set(key,{response,expires:this.now()+request.cache.ttlSeconds*1000});
      await this.audit.record({traceId:request.traceId,status:'succeeded',attempts:attempts+1,...response.usage,at:new Date(this.now()).toISOString()});
      return {traceId:request.traceId,status:'succeeded',output,usage:response.usage,attempts:attempts+1,toolResults};
     }catch(error){
      if(options.signal?.aborted){await this.audit.record({traceId:request.traceId,status:'canceled',attempts:attempts+1,inputTokens:0,outputTokens:0,reason:'ai_canceled',at:new Date(this.now()).toISOString()});throw new Error('ai_canceled',{cause:error});}
-     lastReason=error instanceof Error&&/^[a-z0-9_]+$/.test(error.message)?error.message:'ai_provider_failed';
+     lastReason=safeAiFailure(error,stage);
     }
    }
    return this.useFallback(options,lastReason,attempts,lastReason==='ai_timeout'?'timed-out':'failed');
@@ -92,7 +96,7 @@ export class AiGateway {
   }catch(error){if(timeout.aborted&&!external?.aborted)throw new Error('ai_timeout',{cause:error});throw error;}finally{clearTimeout(timer);if(abort)external?.removeEventListener('abort',abort);}
  }
  private async useFallback<T>(options:ExecuteOptions<T>,reason:string,attempts:number,status:Extract<AiAuditStatus,'failed'|'timed-out'|'queue-rejected'>):Promise<GatewayResult<T>>{
-  const fallbackMessage=options.request.purpose==='narration'?fallbackMessages.narration:options.request.purpose==='classification'?fallbackMessages.interpretation:options.request.purpose==='creator-assistance'?fallbackMessages.creator:fallbackMessages.extraction;
+  const fallbackMessage=options.request.purpose==='narration'?narrationFailureMessage(reason):options.request.purpose==='classification'?fallbackMessages.interpretation:options.request.purpose==='creator-assistance'?fallbackMessages.creator:fallbackMessages.extraction;
   await this.audit.record({traceId:options.request.traceId,status:options.fallback?'fallback':status,attempts,inputTokens:0,outputTokens:0,reason,at:new Date(this.now()).toISOString()});
   if(!options.fallback)throw new Error(reason);
   return {traceId:options.request.traceId,status:'fallback',output:options.fallback(reason),usage:{inputTokens:0,outputTokens:0},attempts,toolResults:[],fallbackMessage,failureReason:reason};

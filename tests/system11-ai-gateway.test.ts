@@ -15,6 +15,24 @@ function request(overrides:Partial<{purpose:AiPurpose;tools:AiRequest['allowedTo
 }
 const response=(request:AiRequest,value:unknown,toolCalls:unknown[]=[])=>({traceId:request.traceId,output:value,usage:{inputTokens:10,outputTokens:2},toolCalls});
 
+test('failure diagnostics distinguish schemas, network, HTTP, and validation without leaking exceptions',async()=>{
+ const cases:Array<{expected:string;complete:(req:AiRequest)=>unknown;validate?:(raw:unknown)=>unknown}>=[
+  {expected:'ai_output_schema_invalid',complete:req=>response(req,{secret:'private_model_text'})},
+  {expected:'ai_response_schema_invalid',complete:()=>({private_field:'private_model_text'})},
+  {expected:'ai_provider_network_error',complete:()=>{throw new TypeError('fetch failed');}},
+  ...([[401,'ai_provider_auth_failed'],[429,'ai_provider_rate_limited'],[503,'ai_provider_unavailable'],[400,'ai_provider_request_rejected']] as const).map(([status,expected])=>({expected,complete:()=>{throw Object.assign(new Error('deepinfra_request_failed'),{httpStatus:status});}})),
+  {expected:'ai_provider_failed',complete:()=>{throw new Error('secret_token_with_underscores');}},
+  {expected:'ai_output_validation_failed',complete:req=>response(req,{choice:null}),validate:()=>{throw new Error('private story or https://secret.example');}},
+  {expected:'narrative_mechanical_claim_rejected',complete:req=>response(req,{choice:null}),validate:()=>{throw new Error('narrative_mechanical_claim_rejected');}}
+ ];
+ for(const scenario of cases){
+  const audit=new MemoryAuditSink(),gateway=new AiGateway([{id:'mock',async complete(req){return scenario.complete(req);}}],{audit}),req=request({purpose:'narration'});req.budget.maxAttempts=1;
+  const result=await gateway.execute({request:req,validate:scenario.validate??(raw=>output.parse(raw)),fallback:()=>({choice:null})});
+  assert.equal(result.failureReason,scenario.expected);assert.match(result.fallbackMessage!,new RegExp('Code: '+scenario.expected));assert.equal(audit.events.at(-1)?.reason,scenario.expected);
+  assert.doesNotMatch(JSON.stringify({result,audit:audit.events}),/private_model_text|private_field|secret_token|secret\.example/);
+ }
+});
+
 test('System 11 requires the complete request contract and routes every purpose independently',()=>{
  const valid=request();assert.equal(aiRequestSchema.parse(valid).purpose,'classification');
  for(const field of ['purpose','model','budget','allowedTools','response','context','traceId'] as const){const broken={...valid} as Record<string,unknown>;delete broken[field];assert.throws(()=>aiRequestSchema.parse(broken));}

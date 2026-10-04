@@ -31,6 +31,11 @@ export function gameRoutes(app:FastifyInstance,game:Game,actor:(r:object)=>Actor
   const started=performance.now();try{return {...await selected.healthCheck(AbortSignal.timeout(12000)),latencyMs:Math.round(performance.now()-started)};}catch{return {status:'unavailable',provider:selected.id,latencyMs:Math.round(performance.now()-started),message:'The AI provider did not complete a valid test response. Check the server key, model, provider quota and connectivity.'};}
  });
  const ai=new NarrativeGateway(game,providers);
+ const narrate=async(...args:Parameters<NarrativeGateway['narrate']>)=>{
+  const result=await ai.narrate(...args);
+  if(result.status==='grounded-fallback')app.log.warn({traceId:result.traceId,failureCode:'failureCode' in result?result.failureCode:undefined},'ai.narration_fallback');
+  return result;
+ };
  const intent=new IntentGateway(game,directProviders,ai.inflight);
  const timeline=(r:FastifyRequest)=>z.object({id}).parse(r.params).id;
  const bodyRevision=z.number().int().positive();
@@ -124,7 +129,7 @@ export function gameRoutes(app:FastifyInstance,game:Game,actor:(r:object)=>Actor
  app.post('/game/timelines/:id/parse',async r=>{const b=z.strictObject({characterId:id,text:z.string().min(1).max(1000)}).parse(r.body);return wrap(async ()=>(await game.parse(actor(r),timeline(r),b.characterId,b.text)));});
  app.post('/game/timelines/:id/interpret',async r=>{const b=z.strictObject({characterId:id,text:z.string().min(1).max(1000),provider:z.enum(directProviderIds)}).parse(r.body);return intent.propose(actor(r),timeline(r),b.characterId,b.text,b.provider);});
  app.post('/game/timelines/:id/turns',async r=>{const b=z.strictObject({revision:bodyRevision,cursor:z.string().min(16).max(128),characterId:id,action:actionSchema,text:z.string().max(1000).optional()}).parse(r.body);return wrap(async ()=>(await game.turn(actor(r),timeline(r),b,key(r.headers))));});
- app.post('/game/timelines/:id/narrate',async r=>{const b=z.strictObject({turnId:id,provider:z.string().max(100).default('grounded'),style:z.literal('story').optional()}).parse(r.body);return (await ai.narrate(actor(r),timeline(r),b.turnId,b.provider,undefined,b.style));});
+ app.post('/game/timelines/:id/narrate',async r=>{const b=z.strictObject({turnId:id,provider:z.string().max(100).default('grounded'),style:z.literal('story').optional()}).parse(r.body);return (await narrate(actor(r),timeline(r),b.turnId,b.provider,undefined,b.style));});
  app.post('/game/timelines/:id/narrate/stream',async(r,reply)=>{
   const b=z.strictObject({turnId:id,provider:z.string().max(100).default('grounded'),style:z.literal('story').optional()}).parse(r.body);
   const controller=new AbortController(),abort=()=>controller.abort();
@@ -132,9 +137,9 @@ export function gameRoutes(app:FastifyInstance,game:Game,actor:(r:object)=>Actor
   r.raw.once('aborted',abort);reply.raw.once('close',close);
   try{
    // Validate and atomically commit the complete narration before exposing any model-influenced text.
-   const result=await ai.narrate(actor(r),timeline(r),b.turnId,b.provider,controller.signal,b.style);
+   const result=await narrate(actor(r),timeline(r),b.turnId,b.provider,controller.signal,b.style);
    if(controller.signal.aborted)throw new Error('narration_canceled');
-   const lines=[...result.narration!.split('\n\n').map(text=>JSON.stringify({type:'paragraph',text})),JSON.stringify({type:'complete',status:result.status,promptVersion:result.promptVersion})];
+   const lines=[...result.narration!.split('\n\n').map(text=>JSON.stringify({type:'paragraph',text})),JSON.stringify({type:'complete',status:result.status,promptVersion:result.promptVersion,...('failureCode' in result?{failureCode:result.failureCode,fallbackMessage:result.fallbackMessage}:{})})];
    return reply.type('application/x-ndjson').send(Readable.from(lines.map(line=>line+'\n')));
   }finally{r.raw.off('aborted',abort);reply.raw.off('close',close);}
  });

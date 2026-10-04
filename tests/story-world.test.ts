@@ -15,6 +15,24 @@ async function setup(){
  const turn=await game.turn(f.player,t.id,{revision:3,characterId:pc.id,action:{type:'story',text:'Alex watched the street.'}},key());
  return {f,game,t,place,pc,turn};
 }
+
+test('descriptive fire and door clicks narrate; invalid schemas and invented shots produce safe diagnostics',async()=>{
+ const {f,game,t,pc,turn}=await setup();
+ try{
+  let mode='ordinary';
+  const provider:NarrativeProvider={id:'diagnostic-story',arrange:async c=>mode==='schema'?{paragraphs:[{sourceIds:c.fragments.map(f=>f.id),text:42}],private_field:'DO NOT EXPOSE'}:{additions:[],paragraphs:[{sourceIds:c.fragments.map(f=>f.id),text:mode==='shot'?'Alex fired the pistol.':'The door clicked shut. A fire flickered in the fireplace.'}]}};
+  const gateway=new NarrativeGateway(game,[provider]),before=(await game.access(f.player,t.id)).t.revision;
+  assert.equal((await gateway.narrate(f.player,t.id,turn.eventId,provider.id,undefined,'story')).status,'validated');
+  for(const [next,code] of [['schema','ai_output_schema_invalid'],['shot','narrative_mechanical_claim_rejected']]){
+   mode=next!;const result=await gateway.narrate(f.player,t.id,turn.eventId,provider.id,undefined,'story');
+   assert.equal(result.status,'grounded-fallback');assert.equal('failureCode' in result?result.failureCode:null,code);
+   assert.doesNotMatch(JSON.stringify(result),/DO NOT EXPOSE|private_field/);
+   const saved=await f.store.get<{failure_code:string}>('SELECT failure_code FROM ai_requests WHERE trace_id=?',result.traceId);assert.equal(saved?.failure_code,code);
+  }
+  assert.equal((await game.access(f.player,t.id)).t.revision,before);
+  assert.equal((await game.view(f.player,t.id,pc.id)).turns.at(-1)?.narration,'The door clicked shut. A fire flickered in the fireplace.');
+ }finally{await f.close();}
+});
 test('story additions persist in the life, support interaction and survive saves; retry only changes prose',async()=>{
  const {f,game,t,place,pc,turn}=await setup();
  try{

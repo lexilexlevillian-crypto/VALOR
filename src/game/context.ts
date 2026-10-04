@@ -113,9 +113,10 @@ export function checkCharacterDrift(s:State,evidence:CharacterDriftEvidence){
 
 export function reviewMechanicalClaims(text:string,effects:Effect[]=[]){
  const emitted=new Set(effects.map(effect=>effect.type)),claims:Array<{pattern:RegExp;eventTypes:string[];value:string}>=[
-  {pattern:/\b(?:fires?|fired|gunfire|discharg(?:e|ed|es)|shot (?:rings|rang|strikes|misses))\b/i,eventTypes:['weapon.shot'],value:'shot'},
+  // Ambiguous words such as fire/discharge need weapon context, not a fireplace or hospital.
+  {pattern:/\b(?:gunfire|gunshots?|shots? (?:rings?|rang|strikes?|struck|misses|missed)|open(?:s|ed|ing)? fire)\b|\b(?:fires?|fired|firing|discharg(?:e|ed|es|ing))\b[^.!?;\n]{0,32}\b(?:gun|firearm|pistol|rifle|shotgun|revolver|weapon|rounds?|bullets?)\b|\b(?:gun|firearm|pistol|rifle|shotgun|revolver|weapon)\b(?:\s+(?:was|were|had|been|suddenly|then))?\s+(?:fires?|fired|discharg(?:ed|es))\b/i,eventTypes:['weapon.shot'],value:'shot'},
   {pattern:/\breload(?:s|ed|ing)?\b|\b(?:loads?|loaded|loading) (?:a |the )?(?:gun|firearm|pistol|rifle|weapon|magazine)\b/i,eventTypes:['weapon.reload'],value:'reload'},
-  {pattern:/\b(?:empty[- ]?)?click(?:s|ed)?\b/i,eventTypes:['weapon.empty-click'],value:'empty-click'},
+  {pattern:/\bempty[- ]click(?:s|ed)?\b|\b(?:gun|firearm|pistol|rifle|shotgun|revolver|weapon|trigger)\b(?:\s+(?:only|just|merely|gave|produced|made|an?|the|dry|hollow|empty)){0,4}\s+click(?:s|ed)?\b|\bclick(?:s|ed)?\s+(?:of|from)\s+(?:(?:an?|the|his|her|their|empty)\s+){0,3}(?:gun|firearm|pistol|rifle|shotgun|revolver|weapon|trigger)\b/i,eventTypes:['weapon.empty-click'],value:'empty-click'},
   {pattern:/\b(?:spent )?casings?\b/i,eventTypes:['weapon.shot'],value:'casing'},
   {pattern:/\bdisarm(?:s|ed|ing)?\b/i,eventTypes:['weapon.disarmed'],value:'disarmed-weapon'},
   {pattern:/\brecover(?:s|ed|ing)?\b.{0,40}\b(?:gun|weapon|firearm|pistol|rifle)\b|\b(?:gun|weapon|firearm|pistol|rifle)\b.{0,40}\brecover(?:s|ed|ing)?\b/i,eventTypes:['weapon.recovered'],value:'recovered-weapon'},

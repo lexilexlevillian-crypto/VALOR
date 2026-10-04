@@ -80,6 +80,8 @@ New lives receive one-time everyday essentials: a wallet, clothes, a working pho
 
 Creator/admin Settings includes **Test DeepSeek connection**. The server also makes one small synthetic check of the selected provider after startup and logs `<provider>.startup_check` with status and latency, never credentials or player content. Set `AI_STARTUP_CHECK=off` to disable that check. Provider availability does not override zero or exhausted world/user budgets.
 
+Narration failures show a safe failure code in the notice or Retry status. Render logs `ai.narration_fallback` with only the trace ID and code, never raw exception messages or story text. Diagnostics distinguish output-schema errors, provider/network errors, and narrative checks. Existing audit rows retain their original codes. Retry rewrites narration without repeating the saved action; no additional automatic attempts or budget increases are enabled by these diagnostics.
+
 
 ## Lives and phone apps
 
