@@ -74,6 +74,8 @@ Optional DeepInfra narration uses the server-only `DEEPINFRA_API_KEY` (or `DEEPI
 
 Chronicle submits roleplay through `story/resolve`: common actions have a deterministic fast path, and a configured AI provider can select among observer-permitted actions when needed. The normal transactional turn endpoint still validates ownership, availability, revision, cursor, and permissions. The legacy `/interpret` API continues to return proposals for clients that want separate confirmation.
 
+Unmatched wording now continues as a story turn, including questions, casual conversation, and attempted actions. Words like “work” or “take” no longer block the writing box. A story turn advances the ordinary moment; it does not execute an unrecognized purchase, attack, pickup, or other claimed outcome. Narration can respond with reactions and obstacles while preserving the simulation’s result. Content settings, permissions, and AI availability/budgets still apply.
+
 Story narration uses source-anchored prose: the provider rewrites the committed simulation outcome, preserving player dialogue, without authority to grant items or change the world. A saved turn appears immediately; generation is asynchronous and may take several seconds. Story narration has a 12-second provider deadline and one attempt, then retains the grounded result. Story tools can rebuild narration without rerolling mechanics.
 
 New lives receive one-time everyday essentials: a wallet, clothes, a working phone when communications are enabled, and keys when a home exists. Authored equipment takes precedence. Pickups and other validated inventory actions persist before narration; prose alone never awards money, weapons, or arbitrary items. Dropping or consuming equipment does not respawn it.
@@ -81,6 +83,8 @@ New lives receive one-time everyday essentials: a wallet, clothes, a working pho
 Creator/admin Settings includes **Test DeepSeek connection**. The server also makes one small synthetic check of the selected provider after startup and logs `<provider>.startup_check` with status and latency, never credentials or player content. Set `AI_STARTUP_CHECK=off` to disable that check. Provider availability does not override zero or exhausted world/user budgets.
 
 Narration failures show a safe failure code in the notice or Retry status. Render logs `ai.narration_fallback` with only the trace ID and code, never raw exception messages or story text. Diagnostics distinguish output-schema errors, provider/network errors, and narrative checks. Existing audit rows retain their original codes. Retry rewrites narration without repeating the saved action; no additional automatic attempts or budget increases are enabled by these diagnostics.
+
+The shared narration schema lists the exact citable event UUIDs and matches the validator’s paragraph limits. Background labels such as `original-story-input` and `dossier` are not citations. Schema failures identify fixed structural fields (`source_ids`, `text`, `paragraphs`, `additions`, or `order`) without logging model values, unknown keys, or raw errors. Startup probes use the production provider completion path with synthetic background entries. Broad repeated narrative beats are advisory; duplicated passages and unsupported mechanics remain checked.
 
 
 ## Lives and phone apps

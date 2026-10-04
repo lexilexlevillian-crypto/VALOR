@@ -122,8 +122,7 @@ export function gameRoutes(app:FastifyInstance,game:Game,actor:(r:object)=>Actor
    try{const proposal=await intent.propose(a,tid,b.characterId,b.text,b.provider);if(proposal.action)return {action:proposal.action};}
    catch(error){if(!(error instanceof Error)||!['provider_unavailable','provider_circuit_open','narration_busy','context_limit','ai_budget_exceeded','ai_user_budget_exceeded'].includes(error.message))throw error;interpretationWarning='AI interpretation is unavailable or its allowance is exhausted. Only recognized actions can change the world.';}
   }
-  // Non-mechanical prose is kept as prose; unrecognized game actions never silently succeed.
-  if(/\b(?:buy|bought|take|took|pick up|attack|punch|shoot|go to|walk to|equip|consume|give|sell|steal|drive|flee|work|pay|drop|dropped|discard|gave|worked)\b/i.test(b.text))return {action:null,clarification:'Which known item, person, or destination did you mean? Be specific so the right action happens.'};
+  // Any unmatched roleplay can continue. A story turn does not execute the alleged action.
   return {action:{type:'story',text:b.text},...(interpretationWarning?{interpretationWarning}:{})};
  }));
  app.post('/game/timelines/:id/parse',async r=>{const b=z.strictObject({characterId:id,text:z.string().min(1).max(1000)}).parse(r.body);return wrap(async ()=>(await game.parse(actor(r),timeline(r),b.characterId,b.text)));});

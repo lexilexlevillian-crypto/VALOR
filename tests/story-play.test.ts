@@ -8,6 +8,7 @@ import {storyIntent} from '../src/game/story-intent.ts';
 import {grantStarterEssentials} from '../src/game/starter-items.ts';
 import {NarrativeGateway,validateStoryVoice} from '../src/game/ai.ts';
 import {GeminiProvider} from '../src/game/gemini.ts';
+import {DeepInfraProvider} from '../src/game/deepinfra.ts';
 
 test('story mode persists starter essentials once, respects authored equipment and keeps real pickup ownership',async()=>{
  const f=await fixture(),game=new Game(f.store);
@@ -28,7 +29,7 @@ test('story mode persists starter essentials once, respects authored equipment a
   const view=await game.view(f.player,timeline.id,pc.id);
   const turn=await post('turns',{characterId:pc.id,revision:before,cursor:view.timeline.turnCursor,action:parsed.json().action,text:'Alex took Notebook.'});assert.equal(turn.statusCode,200,turn.body);
   assert.ok((await game.inventory(f.player,timeline.id,pc.id,{})).items.some(i=>i.id===loose.id));
-  for(const text of ["I didn't attack Alex.",'I take a million dollars.']){const result=await post('story/resolve',{characterId:pc.id,text,provider:'grounded'});assert.equal(result.json().action,null);}
+  for(const text of ["I didn't attack Alex.",'I take a million dollars.','Work was a nightmare today.','What if I went somewhere else?','I tried to find a quiet corner.']){const result=await post('story/resolve',{characterId:pc.id,text,provider:'grounded'});assert.deepEqual(result.json().action,{type:'story',text});}
   const story=await post('story/resolve',{characterId:pc.id,text:'Rain tapped against the window.',provider:'grounded'});assert.equal(story.json().action.type,'story');
   const noProvider=await post('story/resolve',{characterId:pc.id,text:'Rain tapped against the window.',provider:'gemini'});assert.equal(noProvider.statusCode,200);assert.equal(noProvider.json().action.type,'story');assert.match(noProvider.json().interpretationWarning,/unavailable/);
   const stateSettings=(await game.load(timeline.id)).settings;stateSettings.tokenBudget=100000;stateSettings.userTokenBudget=100000;await game.configure(f.creator,timeline.id,(await game.access(f.creator,timeline.id)).t.revision,stateSettings,key());
@@ -84,5 +85,29 @@ test('AI health endpoint is authenticated, role checked, and secret-free',async(
   const player=await login(f,'player@example.test'),creator=await login(f);
   const request=(auth:typeof player)=>f.app.inject({method:'POST',url:'/game/ai/health',headers:{origin:f.settings.origin,cookie:auth.cookie,'x-csrf-token':auth.csrf},payload:{}});
   assert.equal((await request(player)).statusCode,403);assert.deepEqual((await request(creator)).json(),{status:'unconfigured',provider:'deepinfra'});
+ }finally{await f.close();}
+});
+
+test('unmatched roleplay reaches DeepSeek narration without granting claimed money or items',async()=>{
+ const f=await fixture(),game=new Game(f.store);
+ try{
+  const t=await game.initialize(f.creator,f.campaign.id),pc=validateEntity({id:key(),kind:'character',name:'Alex',visibility:'owner',data:{playable:true,controllerUserId:f.player.id,cash:125}});
+  await game.edit(f.creator,t.id,{revision:1,entity:pc},key());const settings=(await game.load(t.id)).settings;settings.contextTokens=6000;settings.tokenBudget=100000;settings.userTokenBudget=100000;await game.configure(f.creator,t.id,2,settings,key());
+  const auth=await login(f,'player@example.test'),texts=['Work was a nightmare today.','What if I left the city?','I take a million dollars.','I tried to find a quiet corner.'],replies=['Alex lingered in the hush after a difficult day.','The thought of another city hung over the quiet moment.','No sudden fortune appeared; the moment left Alex where the evening had found him.','The surrounding quiet offered a brief pause.'];let calls=0;
+  const provider=new DeepInfraProvider('test-secret','deepseek-ai/DeepSeek-V4-Pro',async(_url,options)=>{
+   const body=JSON.parse(String(options?.body)),payload=JSON.parse(body.messages[1].content),input=payload.context.provenance.find((p:{id:string})=>p.id==='original-story-input');
+   assert.equal(input.content,texts[calls]);const sourceIds=payload.context.provenance.filter((p:{source:string})=>p.source==='simulation').map((p:{id:string})=>p.id);
+   return Response.json({choices:[{finish_reason:'stop',message:{content:JSON.stringify({paragraphs:[{sourceIds,text:replies[calls++]}],additions:[]})}}],usage:{prompt_tokens:1000,completion_tokens:50}});
+  });
+  const gateway=new NarrativeGateway(game,[provider]);
+  for(const text of texts){
+   const response=await f.app.inject({method:'POST',url:'/game/timelines/'+t.id+'/story/resolve',headers:{cookie:auth.cookie,origin:f.settings.origin,'x-csrf-token':auth.csrf},payload:{characterId:pc.id,text,provider:'grounded'}});
+   assert.equal(response.statusCode,200);assert.deepEqual(response.json().action,{type:'story',text});
+   const before=await game.load(t.id),revision=(await game.access(f.player,t.id)).t.revision,turn=await game.turn(f.player,t.id,{revision,characterId:pc.id,action:response.json().action,text},key());
+   const result=await gateway.narrate(f.player,t.id,turn.eventId,'deepinfra',undefined,'story');assert.equal(result.status,'validated',JSON.stringify(result));
+   const after=await game.load(t.id);assert.equal(after.entities.find(e=>e.id===pc.id)!.data.cash,125);assert.deepEqual(after.entities.filter(e=>e.kind==='item'),before.entities.filter(e=>e.kind==='item'));
+   assert.equal((await game.view(f.player,t.id,pc.id)).turns.at(-1)?.input_text,text);
+  }
+  assert.equal(calls,texts.length);
  }finally{await f.close();}
 });

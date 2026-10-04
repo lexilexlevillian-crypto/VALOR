@@ -56,9 +56,20 @@ export function validateNarration(raw:unknown,context:NarrativeContext){
  ensure(result.order.length===allowed.size&&new Set(result.order).size===allowed.size&&result.order.every(id=>allowed.has(id)),400,'invalid_narrative_sources');
  return result.order.map(id=>context.fragments.find(f=>f.id===id)!.text).join('\n\n');
 }
-const narrativeJsonSchema=(context:NarrativeContext):Record<string,unknown>=>context.mode==='anchored-prose'?{
- type:'object',properties:{additions:{type:'array',maxItems:context.allowExpansion?3:0,items:{type:'object',properties:{kind:{type:'string',enum:['npc','street','place','detail']},name:{type:'string',minLength:2,maxLength:80},description:{type:'string',minLength:1,maxLength:600}},required:['kind','name','description'],additionalProperties:false}},paragraphs:{type:'array',maxItems:200,items:{type:'object',properties:{sourceIds:{type:'array',items:{type:'string'},minItems:1,maxItems:50},text:{type:'string',maxLength:4000}},required:['sourceIds','text'],additionalProperties:false}}},required:['paragraphs'],additionalProperties:false
-}:{type:'object',properties:{order:{type:'array',items:{type:'string'},minItems:context.fragments.length,maxItems:context.fragments.length}},required:['order'],additionalProperties:false};
+// All provider paths use the same field limits and the actual permitted event IDs.
+export function narrativeJsonSchema(context:NarrativeContext):Record<string,unknown>{
+ const ids=context.fragments.map(fragment=>fragment.id),source={type:'string',...(ids.length?{enum:ids}:{format:'uuid'})};
+ return context.mode==='anchored-prose'?{
+  type:'object',properties:{additions:{type:'array',maxItems:context.allowExpansion?3:0,items:{type:'object',properties:{kind:{type:'string',enum:['npc','street','place','detail']},name:{type:'string',minLength:2,maxLength:80},description:{type:'string',minLength:1,maxLength:600}},required:['kind','name','description'],additionalProperties:false}},paragraphs:{type:'array',maxItems:ids.length?200:0,items:{type:'object',properties:{sourceIds:{type:'array',items:source,minItems:1,maxItems:50},text:{type:'string',minLength:1,maxLength:4000}},required:['sourceIds','text'],additionalProperties:false}}},required:['paragraphs'],additionalProperties:false
+ }:{type:'object',properties:{order:{type:'array',items:source,minItems:ids.length,maxItems:Math.min(ids.length,200)}},required:['order'],additionalProperties:false};
+}
+
+// Exercise the production complete() path, including non-citable background, with synthetic text only.
+export function narrationProbe(model:ModelIdentity){
+ const id='00000000-0000-4000-8000-000000000001',context:NarrativeContext={mode:'anchored-prose',allowExpansion:false,promptVersion:anchoredNarrationPrompt.version,instructions:anchoredNarrationPrompt.instructions,fragments:[{id,text:'Alex waited by the door.'}]};
+ const request=makeAiRequest({purpose:'narration',model,budget:{maxInputTokens:2000,maxOutputTokens:256,maxTotalTokens:2256,timeoutMs:12000,maxAttempts:1},allowedTools:['narration.compose'],response:responseContract('anchored-narration','2',narrativeJsonSchema(context)),prompt:{id:'narration-probe',version:context.promptVersion,instructions:context.instructions+' For this connection check, write one brief sentence only; additions must be [].'},context:{provenance:[{id,source:'simulation',trust:'trusted',privacy:'public',revision:'1',content:context.fragments[0]},{id:'original-story-input',source:'player-input',trust:'untrusted',privacy:'private',revision:'1',content:'I waited by the door.'},{id:'dossier',source:'lore',trust:'untrusted',privacy:'public',revision:'1',content:'Alex lived in Valor.'}]},cache:{kind:'none'}});
+ return {context,request};
+}
 
 export class NarrativeGateway {
  game:Game;providers:Map<string,NarrativeProvider>;inflight=new Set<string>();failures=new Map<string,{count:number;until:number}>();
@@ -95,7 +106,7 @@ export class NarrativeGateway {
   const failure=this.failures.get(providerId);ensure(!failure||failure.until<Date.now(),503,'provider_circuit_open');
   const traceId=randomUUID(),identity=provider.identity?.('narration')??{provider:provider.id,model:provider.id,configurationId:'narration-'+provider.id+'-v1'};
   const fragmentProvenance=context.fragments.map(fragment=>{const effect=effects.find(value=>value.id===fragment.id),player=context.protectedIds?.includes(fragment.id),npc=effect?.type.startsWith('npc.');return {id:fragment.id,source:player?'player-input' as const:npc?'npc-text' as const:'simulation' as const,trust:player||npc?'untrusted' as const:'trusted' as const,privacy:player?'private' as const:'campaign' as const,revision:String(t.revision),content:fragment};});
-  const request=makeAiRequest({traceId,purpose:'narration',model:identity,budget:{maxInputTokens:s.settings.contextTokens,maxOutputTokens:style==='story'?1024:2048,maxTotalTokens:s.settings.contextTokens+2048,timeoutMs:12000,maxAttempts:style==='story'?1:2},allowedTools:['narration.compose'],response:responseContract(mode==='anchored-prose'?'anchored-narration':'ordered-narration','1',narrativeJsonSchema(context)),prompt:{id:'game-narration',version:context.promptVersion,instructions:context.instructions+' '+untrustedDataInstruction},context:{provenance:[
+  const request=makeAiRequest({traceId,purpose:'narration',model:identity,budget:{maxInputTokens:s.settings.contextTokens,maxOutputTokens:style==='story'?1024:2048,maxTotalTokens:s.settings.contextTokens+2048,timeoutMs:12000,maxAttempts:style==='story'?1:2},allowedTools:['narration.compose'],response:responseContract(mode==='anchored-prose'?'anchored-narration':'ordered-narration','2',narrativeJsonSchema(context)),prompt:{id:'game-narration',version:context.promptVersion,instructions:context.instructions+' '+untrustedDataInstruction},context:{provenance:[
    ...fragmentProvenance,
    ...(style==='story'?[{id:'original-story-input',source:'player-input' as const,trust:'untrusted' as const,privacy:'private' as const,revision:String(t.revision),content:turn.input_text}]:[]),
    ...(context.dossier?[{id:'dossier',source:'lore' as const,trust:'untrusted' as const,privacy:'campaign' as const,revision:String(t.revision),content:context.dossier}]:[])

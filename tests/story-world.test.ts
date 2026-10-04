@@ -23,7 +23,7 @@ test('descriptive fire and door clicks narrate; invalid schemas and invented sho
   const provider:NarrativeProvider={id:'diagnostic-story',arrange:async c=>mode==='schema'?{paragraphs:[{sourceIds:c.fragments.map(f=>f.id),text:42}],private_field:'DO NOT EXPOSE'}:{additions:[],paragraphs:[{sourceIds:c.fragments.map(f=>f.id),text:mode==='shot'?'Alex fired the pistol.':'The door clicked shut. A fire flickered in the fireplace.'}]}};
   const gateway=new NarrativeGateway(game,[provider]),before=(await game.access(f.player,t.id)).t.revision;
   assert.equal((await gateway.narrate(f.player,t.id,turn.eventId,provider.id,undefined,'story')).status,'validated');
-  for(const [next,code] of [['schema','ai_output_schema_invalid'],['shot','narrative_mechanical_claim_rejected']]){
+  for(const [next,code] of [['schema','ai_output_schema_invalid_text'],['shot','narrative_mechanical_claim_rejected']]){
    mode=next!;const result=await gateway.narrate(f.player,t.id,turn.eventId,provider.id,undefined,'story');
    assert.equal(result.status,'grounded-fallback');assert.equal('failureCode' in result?result.failureCode:null,code);
    assert.doesNotMatch(JSON.stringify(result),/DO NOT EXPOSE|private_field/);

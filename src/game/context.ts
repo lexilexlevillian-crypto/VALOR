@@ -133,5 +133,7 @@ export function reviewMechanicalClaims(text:string,effects:Effect[]=[]){
 
 export function reviewNarrativeOutput(text:string,controls:NarrativeControls,repetition:RepetitionTracker,requiredPhrases:string[]=[],effects:Effect[]=[]){
  const flags:Array<{kind:string;value:string}>=[...repetition.review(text,requiredPhrases),...reviewMechanicalClaims(text,effects)];for(const excluded of controls.safety.excludedContent)if(normalize(text).includes(normalize(excluded)))flags.push({kind:'safety',value:excluded});
- return {accepted:flags.length===0,decision:flags.length?'retry' as const:'accept' as const,flags};
+ // Reusing a broad beat (quiet, a glance, a question) is normal conversation, not a failed turn.
+ const blocking=flags.filter(flag=>flag.kind!=='beat');
+ return {accepted:blocking.length===0,decision:blocking.length?'retry' as const:'accept' as const,flags};
 }

@@ -1,8 +1,8 @@
 import {z} from 'zod';
 import type {NarrativeContext,NarrativeProvider} from './ai.ts';
-import {validateAnchoredNarration,validateStoryVoice} from './ai.ts';
+import {validateAnchoredNarration,validateStoryVoice,narrativeJsonSchema,narrationProbe} from './ai.ts';
 import type {IntentContext,IntentProvider} from './ai-intent.ts';
-import {untrustedDataInstruction,type AiProviderResponse,type AiPurpose,type AiRequest,type ModelIdentity} from '../ai/contracts.ts';
+import {untrustedDataInstruction,providerRequestContent,type AiProviderResponse,type AiPurpose,type AiRequest,type ModelIdentity} from '../ai/contracts.ts';
 const resultSchema=z.object({
  candidates:z.array(z.object({finishReason:z.string(),content:z.object({parts:z.array(z.object({text:z.string().optional(),thought:z.boolean().optional()}))})})).min(1),
  usageMetadata:z.object({promptTokenCount:z.number().int().nonnegative().optional(),candidatesTokenCount:z.number().int().nonnegative().optional()}).optional()
@@ -20,7 +20,7 @@ export class GeminiProvider implements NarrativeProvider,IntentProvider{
  identity(purpose:AiPurpose):ModelIdentity{const model=this.models[purpose];if(!model)throw new Error('creator_assistance_not_configured');return {provider:this.id,model,configurationId:purpose+'-v1'};}
  private body(context:NarrativeContext){
   const anchored=context.mode==='anchored-prose';
-  const responseSchema=anchored?{type:'object',properties:{paragraphs:{type:'array',items:{type:'object',properties:{sourceIds:{type:'array',items:{type:'string'},minItems:1,maxItems:50},text:{type:'string'}},required:['sourceIds','text'],additionalProperties:false},maxItems:200}},required:['paragraphs'],additionalProperties:false}:{type:'object',properties:{order:{type:'array',items:{type:'string'},minItems:context.fragments.length,maxItems:context.fragments.length}},required:['order'],additionalProperties:false};
+  const responseSchema=narrativeJsonSchema(context);
   return {systemInstruction:{parts:[{text:context.instructions+' '+untrustedDataInstruction}]},
    contents:[{role:'user',parts:[{text:JSON.stringify({promptVersion:context.promptVersion,fragments:context.fragments,protectedIds:context.protectedIds??[],dossier:context.dossier})}]}],
    generationConfig:{candidateCount:1,maxOutputTokens:Math.min(2048,anchored?512+context.fragments.length*96:256+context.fragments.length*48),responseFormat:{text:{mimeType:'application/json',schema:responseSchema}}}};
@@ -31,14 +31,13 @@ export class GeminiProvider implements NarrativeProvider,IntentProvider{
  estimateIntentTokens(context:IntentContext){return Math.ceil(Buffer.byteLength(JSON.stringify(this.intentBody(context)))/2)+256;}
  async interpret(context:IntentContext,signal:AbortSignal){return (await this.requestJson(this.models.classification,this.intentBody(context),signal)).output;}
  async healthCheck(signal:AbortSignal){
-  const id='00000000-0000-4000-8000-000000000001';
-  const context:NarrativeContext={mode:'anchored-prose',promptVersion:'health-v1',instructions:'Return JSON paragraphs with sourceIds and text. Rewrite the supplied sentence in third person, past tense. Do not add facts.',fragments:[{id,text:'Alex waited by the door.'}]};
-  const raw=await this.arrange(context,signal),narration=validateAnchoredNarration(raw,context);validateStoryVoice(narration,context);
+  const {context,request}=narrationProbe(this.identity('narration'));
+  const raw=(await this.complete(request,signal)).output,narration=validateAnchoredNarration(raw,context);validateStoryVoice(narration,context);
   return {provider:this.id,model:this.models.narration,status:'ok' as const};
  }
  private completionBody(request:AiRequest){return {
    systemInstruction:{parts:[{text:request.prompt.instructions+' '+untrustedDataInstruction}]},
-   contents:[{role:'user',parts:[{text:JSON.stringify({traceId:request.traceId,purpose:request.purpose,allowedTools:request.allowedTools,context:request.context})}]}],
+   contents:[{role:'user',parts:[{text:JSON.stringify(providerRequestContent(request))}]}],
    generationConfig:{candidateCount:1,maxOutputTokens:request.budget.maxOutputTokens,responseFormat:{text:{mimeType:'application/json',schema:request.response.jsonSchema}}}
   };
  }

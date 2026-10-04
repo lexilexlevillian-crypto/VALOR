@@ -60,5 +60,5 @@ test('System 05 static shell exposes safe-area switch styling and does not cache
  const css=readFileSync('public/style.css','utf8'),sw=readFileSync('public/sw.js','utf8'),app=readFileSync('public/app.js','utf8');
  assert.match(css,/env\(safe-area-inset-bottom\)/);assert.match(css,/mode-switch/);assert.match(css,/mode-dialog/);
  assert.match(app,/Developer Mode/);assert.match(app,/clearDeveloperState/);assert.match(app,/\/me\/developer-access/);assert.match(app,/cache:'no-store'/);assert.match(app,/developer\/simulation-preview/);assert.match(app,/Developer controls are not loaded/);
- assert.match(sw,/valor-shell-v24/);assert.match(sw,/http\.js/);assert.match(sw,/phone-apps\.js/);assert.match(sw,/theme\.js/);assert.match(sw,/backgrounds\.js/);assert.match(sw,/studio\.js/);assert.match(sw,/studio\.css/);assert.doesNotMatch(sw,/game\/timelines|\/me\/mode|creator/);
+ assert.match(sw,/valor-shell-v25/);assert.match(sw,/http\.js/);assert.match(sw,/phone-apps\.js/);assert.match(sw,/theme\.js/);assert.match(sw,/backgrounds\.js/);assert.match(sw,/studio\.js/);assert.match(sw,/studio\.css/);assert.doesNotMatch(sw,/game\/timelines|\/me\/mode|creator/);
 });
