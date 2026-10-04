@@ -14,6 +14,7 @@ import {caseFileView,journalView} from './events.ts';
 import {resolveAction} from './actions.ts';
 import type {CheckRecord} from './actions.ts';
 import {advance,type Effect} from './simulation.ts';
+import {maintainAutomaticStoryCards} from './story-cards.ts';
 import {skillNames,traitBackgroundRequirements,traitGenerationTags,traitGroups,traitOppositions} from './catalog.ts';
 import {generateNpcTraitSelection,validateTraitSelection} from './traits.ts';
 import {grantStarterEssentials} from './starter-items.ts';
@@ -483,6 +484,43 @@ export class Game {
  async applyDeveloperFixture(actor:Actor,id:string,input:{token:string;revision:number;confirmation:string},key:string){
   await this.developerAccess(actor,id);return this.mutate(actor,id,input.revision,key,input,'developer.fixture.applied',true,async s=>{const preview=await this.store.get<{plan_json:string;plan_checksum:string;state_checksum:string;expires_at:string;used_at:string|null}>('SELECT plan_json,plan_checksum,state_checksum,expires_at,used_at FROM developer_operation_previews WHERE token=? AND timeline_id=? AND actor_id=? AND operation=?',input.token,id,actor.id,'fixture');ensure(preview,404,'developer_preview_unavailable');ensure(!preview.used_at,409,'developer_preview_used');ensure(preview.expires_at>now(),409,'developer_preview_expired');ensure(input.confirmation==='APPLY '+input.token,409,'developer_confirmation_mismatch');ensure(checksum(s)===preview.state_checksum,409,'developer_preview_state_changed');const plan=JSON.parse(preview.plan_json) as {entities:unknown[]};ensure(checksum(plan)===preview.plan_checksum,409,'developer_preview_corrupt');const entities=plan.entities.map(validateEntity);ensure(entities.every(entity=>!s.entities.some(row=>row.id===entity.id)),409,'fixture_collision');for(const entity of entities)await this.applyEntity(id,s,entity);validateState(s);await this.store.run('UPDATE developer_operation_previews SET used_at=? WHERE token=?',now(),input.token);return {result:{fixtureEntityIds:entities.map(entity=>entity.id),previewToken:input.token}};});
  }
+ async developerTestCommand(actor:Actor,id:string,input:{revision:number;characterId:string;command:'combat'|'loot'|'end-combat'},key:string){
+  await this.developerAccess(actor,id);return this.mutate(actor,id,input.revision,key,input,'developer.test-command',true,(s,eventId)=>{
+   const character=getEntity(s,input.characterId,'character'),pc=data(character,'character'),createdEntityIds:string[]=[];
+   const effect=(text:string,subjectId=character.id):Effect=>({id:randomUUID(),text,observers:[character.id],type:'developer.test-command',subjectId});
+   const ensureLocation=()=>{
+    const current=pc.locationId?s.entities.find(entity=>entity.id===pc.locationId&&entity.kind==='location'&&!entity.archived):null;
+    if(current)return current;
+    const location=validateEntity({id:randomUUID(),kind:'location',name:'Developer test room',visibility:'campaign',data:{description:'A temporary scene created by a Developer test command.',discoverable:true,discoveredByIds:[character.id],visitedByIds:[character.id]}});
+    s.entities.push(location);createdEntityIds.push(location.id);pc.locationId=location.id;character.data=pc as Entity['data'];return location;
+   };
+   const endEncounters=()=>{
+    let ended=0;
+    for(const entity of s.entities){
+     if(entity.kind==='combat'){const combat=data(entity,'combat');if(combat.active&&combat.participants.includes(character.id)){combat.active=false;combat.phase='ended';combat.endedReason='authored';entity.data=combat as Entity['data'];ended++;}}
+     if(entity.kind==='chase'){const chase=data(entity,'chase');if(chase.status==='active'&&chase.participants.includes(character.id)){chase.status='abandoned';chase.phase='resolved';chase.outcome='Ended by Developer test command.';entity.data=chase as Entity['data'];ended++;}}
+    }
+    return ended;
+   };
+   let effects:Effect[]=[],summary='';
+   if(input.command==='end-combat'){
+    const ended=endEncounters();summary=ended?'Ended '+ended+' active encounter'+(ended===1?'':'s')+'.':'No active encounter needed to be ended.';effects=[effect(summary)];
+   }
+   if(input.command==='combat'){
+    const location=ensureLocation(),ended=endEncounters(),number=s.entities.filter(entity=>entity.kind==='character'&&entity.name.startsWith('Test opponent')).length+1;
+    pc.condition='conscious';pc.blood=Math.max(1,pc.blood);pc.restrainedBy=null;character.data=pc as Entity['data'];
+    const opponent=validateEntity({id:randomUUID(),kind:'character',name:'Test opponent '+number,visibility:'campaign',data:{description:'A temporary NPC generated to force a combat test.',locationId:location.id,playable:false,condition:'conscious',simulationTier:'active',simulationTierReason:'Developer combat test'}});
+    const encounter=validateEntity({id:randomUUID(),kind:'combat',name:'Developer test combat',visibility:'campaign',data:{description:'Forced by a Developer test command.',locationId:location.id,participants:[character.id,opponent.id],sides:{[character.id]:'player-test-side',[opponent.id]:'opponent-test-side'},turnOrder:[character.id,opponent.id],turnIndex:0,phase:'initiative'}});
+    s.entities.push(opponent,encounter);createdEntityIds.push(opponent.id,encounter.id);summary='Combat started with '+opponent.name+(ended?' after ending '+ended+' active encounter'+(ended===1?'':'s'):'')+'.';effects=[effect(summary,encounter.id)];
+   }
+   if(input.command==='loot'){
+    const location=ensureLocation(),number=s.entities.filter(entity=>entity.kind==='character'&&entity.name.startsWith('Test victim')).length+1,bodyId=randomUUID(),remainsId=randomUUID(),lootId=randomUUID(),deathRecordId=randomUUID();
+    const body=validateEntity({id:bodyId,kind:'character',name:'Test victim '+number,visibility:'campaign',data:{description:'A temporary body generated for search and loot testing.',locationId:location.id,playable:false,condition:'dead',blood:0,deathRecordId}}),remains=validateEntity({id:remainsId,kind:'item',name:'Test body '+number,visibility:'campaign',data:{description:'Remains generated by a Developer loot test.',category:'object',locationId:location.id,deceasedId:bodyId,discoveredByIds:[character.id],tags:['developer-test','remains']}}),loot=validateEntity({id:lootId,kind:'item',name:'Test loot '+number,visibility:'campaign',data:{description:'A searchable item generated beside the test body.',category:'wallet',ownerId:bodyId,locationId:location.id,discoveredByIds:[character.id],tags:['developer-test','loot']}}),death=validateEntity({id:deathRecordId,kind:'deathRecord',name:'Death record: '+body.name,visibility:'knowledge',data:{description:'Developer-generated test record.',characterId:bodyId,occurredAt:s.clock,locationId:location.id,sourceEventId:eventId,remainsId,witnessIds:[character.id],identified:true,identifiedByIds:[character.id],status:'identified'}});
+    s.entities.push(body,remains,loot,death);createdEntityIds.push(body.id,remains.id,loot.id,death.id);summary='A searchable test body and visible loot appeared at '+location.name+'.';effects=[effect(summary,body.id)];
+   }
+   validateState(s);return {result:{command:input.command,summary,createdEntityIds},effects,characterId:character.id,turnText:'/dev '+input.command};
+  });
+ }
  async previewDeveloperRepair(actor:Actor,id:string){
   const {t}=await this.developerAccess(actor,id),state=await this.load(id);validateState(state);const stored=new Set((await this.store.all<{entity_id:string;target_id:string}>('SELECT entity_id,target_id FROM entity_links WHERE timeline_id=?',id)).map(row=>row.entity_id+':'+row.target_id)),expected=new Set(state.entities.flatMap(entity=>refs(entity).map(target=>entity.id+':'+target))),missing=[...expected].filter(link=>!stored.has(link)),stale=[...stored].filter(link=>!expected.has(link)),plan={version:1,operation:'rebuild-projections',missingLinks:missing,staleLinks:stale,entityCount:state.entities.length,factCount:state.facts.length},token=randomUUID(),createdAt=now(),expiresAt=new Date(Date.now()+30*60*1000).toISOString();await this.store.run('INSERT INTO developer_operation_previews VALUES (?,?,?,?,?,?,?,?,?,?,NULL)',token,id,actor.id,'repair',JSON.stringify(plan),checksum(plan),checksum(state),t.revision,createdAt,expiresAt);return {valid:true,dryRun:true,persisted:false,token,expiresAt,expectedRevision:t.revision,confirmation:'REPAIR '+token,issues:{missingLinks:missing,staleLinks:stale},plan,warning:'Repair rebuilds derived projections only. Immutable events and saves are never rewritten.'};
  }
@@ -522,6 +560,7 @@ export class Game {
    const s=await run('state-load',()=>this.load(id)),beforeState=structuredClone(s),eventId=randomUUID(),seed=randomBytes(32).toString('hex');
    const beforeDeath=(s.settings.campaign?.saveBehavior.branchOnDeath??true)?structuredClone(s):null;
    const action=await run('deterministic-simulation',()=>fn(s,eventId,seed,access.role),{eventId,seedDigest:checksum(seed)});
+   maintainAutomaticStoryCards(beforeState,s,eventId,action.effects??[]);
    await run('state-projection',()=>this.persist(id,s));
    const revision=t.revision+1,nextCursor=randomUUID();
    const timelineUpdate=await this.store.run('UPDATE timelines SET revision=? WHERE id=? AND revision=?',revision,id,t.revision);ensure(timelineUpdate.rowsAffected===1,409,'revision_conflict');

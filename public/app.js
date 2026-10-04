@@ -258,8 +258,10 @@ function chronicleContent(){
   rebuild:(...args)=>rebuildNarration(...args).catch(error=>notify(error.message)),
   openRoster:()=>{S.character=null;S.deathTransition=null;S.page='Chronicle';return render();},
   loadDeathBranch:async()=>{const timelines=await api('/game/campaigns/'+S.campaign.id+'/timelines'),branch=timelines.find(row=>row.id===S.deathTransition?.branchId);if(!branch)throw new Error('Protected branch is unavailable.');S.timeline=branch;S.deathTransition=null;await render();},
+  developerCommand:(command,status)=>run(async()=>{status.textContent='Running '+command+' test command…';const result=await api(endpoint('developer/test-command'),{revision:S.view.timeline.revision,characterId:S.character.id,command});notify(result.summary);await render();}),
   submit:(text,status)=>run(async()=>{
    try{
+    if(/^\/dev\b/i.test(text.trim())){if(!(S.mode==='developer'&&S.developerAllowed&&['creator','admin'].includes(S.campaign?.role))){status.textContent='Developer test commands require Developer Mode.';return;}const raw=text.trim().toLowerCase().replace(/^\/dev\s*/,''),command=raw==='search'?'loot':['combat','loot','end-combat'].includes(raw)?raw:null;if(!command){status.textContent='Unknown Developer command. Open Developer test commands below for the supported list.';return;}status.textContent='Running '+command+' test command…';const result=await api(endpoint('developer/test-command'),{revision:S.view.timeline.revision,characterId:S.character.id,command});sessionRemove(draftKey());notify(result.summary);await render();return;}
     status.textContent='Reading your story…';
     const resolved=await api(endpoint('story/resolve'),{characterId:S.character.id,text,provider:S.narrator??'grounded'});
     if(!resolved.action){status.textContent=resolved.clarification??'Which person or place did you mean?';return;}
