@@ -1,6 +1,17 @@
 import {proposeIntent} from './intent.ts';
 import {observerView} from './epistemics.ts';
 import type {Action,State} from './model.ts';
+
+const nonEnacted=/\b(?:don't|didn't|doesn't|never|not|would|could|might|if)\b|\?/i;
+
+// Mechanical-looking prose must not silently become a flavor-only story turn.
+// The caller can surface this clarification without committing any world change.
+export function storyActionClarification(text:string){
+ const enacted=text.trim();
+ if(nonEnacted.test(enacted)||!/\b(?:fight|fought|attack|attacked|punch|punched|hit|strike|struck|grapple|grappled|shove|shoved)\b/i.test(enacted))return null;
+ if(/\s(?:;|then|and)\s/i.test(enacted))return 'That describes multiple actions. Choose the first action: travel to a known place, or start a fight with a named person who is here. Nothing has happened yet.';
+ return 'Name the person you want to fight. They must be present at your current location. Nothing has happened yet.';
+}
 // A fast path for ordinary roleplay. Unknown mechanical targets are clarified, never invented.
 export function storyIntent(s:State,characterId:string,text:string):Action|null{
  const view=observerView(s,characterId),self=view.entities.find(e=>e.id===characterId)!;
@@ -8,7 +19,7 @@ export function storyIntent(s:State,characterId:string,text:string):Action|null{
  let line=original.replace(new RegExp('^(?:I|they|he|she|'+name+')\\s+','i'),'').replace(/[.!]+$/,'').trim();
  const quoted=/^(?:say|said|says)\s+["“]([\s\S]+)["”]$/i.exec(line)??/^["“]([\s\S]+)["”]$/.exec(original);
  if(quoted)return {type:'say',text:quoted[1]!};
- if(/\b(?:don't|didn't|doesn't|never|not|would|could|might|if)\b|\?/i.test(line))return null;
+ if(nonEnacted.test(line))return null;
  const verbs:Record<string,string>={looked:'look',looks:'look',searched:'search',searches:'search',walked:'go',walks:'go',went:'go',headed:'go',took:'take',takes:'take',equipped:'equip',unequipped:'unequip',ate:'consume',drank:'consume',waited:'wait',slept:'sleep',said:'say'};
  line=line.replace(/^\w+/,v=>verbs[v.toLowerCase()]??v).replace(/^look(?:ed)? around$/i,'look').replace(/^search (?:this |the )?(?:location|room|place)$/i,'search').replace(/^go to /i,'go ').replace(/^pick(?:ed)? up /i,'take ').replace(/^put on /i,'equip ').replace(/^take off /i,'unequip ');
  const parsed=proposeIntent(s,characterId,line);if(parsed.action)return parsed.action;
@@ -24,8 +35,11 @@ export function storyIntent(s:State,characterId:string,text:string):Action|null{
  const greet=/^(?:greet|greeted) (.+)$/i.exec(line);
  if(greet){const person=named('character',greet[1]!);if(person)return {type:'social',targetId:person.id,intent:'greet',consent:false};}
  if(/^(?:raise (?:my|their|his|her) guard|raised (?:my|their|his|her) guard|block|blocked)$/i.test(line))return {type:'defend',defense:'block'};
- const hit=/^(?:attack|attacked|punch|punched|hit|strike|struck)\s+(.+)$/i.exec(line);
- if(hit){const targets=view.entities.filter(e=>e.kind==='character'&&e.id!==characterId&&e.name.toLowerCase()===hit[1]!.toLowerCase());if(targets.length===1)return {type:'attack',targetId:targets[0]!.id,weaponId:null,bodyPart:'torso'};}
+ const hit=/^(?:attack|attacked|punch|punched|hit|strike|struck|fight|fought|start(?:ed)? a fight with|engage(?:d)? in a fight with)\s+(.+)$/i.exec(line);
+ if(hit){
+  const targets=view.entities.filter(e=>e.kind==='character'&&e.id!==characterId&&e.name.toLowerCase()===hit[1]!.toLowerCase());
+  if(targets.length===1){const combat=view.entities.find(e=>e.kind==='combat'&&e.data.active&&(e.data.participants as string[]).includes(characterId));return combat?{type:'attack',targetId:targets[0]!.id,weaponId:null,bodyPart:'torso'}:{type:'combat',targetId:targets[0]!.id};}
+ }
  const flee=/^(?:flee|fled|run|ran) to (.+)$/i.exec(line);
  if(flee){const targets=view.entities.filter(e=>e.kind==='location'&&e.name.toLowerCase()===flee[1]!.toLowerCase());if(targets.length===1)return {type:'flee',destinationId:targets[0]!.id};}
  return null;

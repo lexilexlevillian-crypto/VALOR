@@ -4,7 +4,7 @@ import {randomUUID} from 'node:crypto';
 import {fixture,key,login} from './helpers.ts';
 import {Game} from '../src/game/engine.ts';
 import {validateEntity,data} from '../src/game/model.ts';
-import {storyIntent} from '../src/game/story-intent.ts';
+import {storyActionClarification,storyIntent} from '../src/game/story-intent.ts';
 import {grantStarterEssentials} from '../src/game/starter-items.ts';
 import {NarrativeGateway,validateStoryVoice} from '../src/game/ai.ts';
 import {GeminiProvider} from '../src/game/gemini.ts';
@@ -50,10 +50,25 @@ test('roleplay parser understands enacted prose without treating quotes, guesses
   await game.bulkEdit(f.creator,t.id,{revision:1,entities:[room,pc,npc]},key());const state=await game.load(t.id);
   for(const text of ['I looked around.','Alex looked around.','Look around'])assert.deepEqual(storyIntent(state,pc.id,text),{type:'look'});
   assert.deepEqual(storyIntent(state,pc.id,'Alex greeted Maya.'),{type:'social',targetId:npc.id,intent:'greet',consent:false});
-  assert.deepEqual(storyIntent(state,pc.id,'Alex punched Maya.'),{type:'attack',targetId:npc.id,weaponId:null,bodyPart:'torso'});
+  assert.deepEqual(storyIntent(state,pc.id,'Alex punched Maya.'),{type:'combat',targetId:npc.id});
+  assert.deepEqual(storyIntent(state,pc.id,'Alex started a fight with Maya.'),{type:'combat',targetId:npc.id});
   assert.deepEqual(storyIntent(state,pc.id,'Alex said "Hello."'),{type:'say',text:'Hello.'});
   assert.deepEqual(storyIntent(state,pc.id,`Alex said "I don't want to leave."`),{type:'say',text:"I don't want to leave."});
   for(const text of ["I didn't attack Maya.",'I might attack Maya.','I remember punching Maya.','What if I attack Maya?','I attack someone unknown.'])assert.equal(storyIntent(state,pc.id,text),null);
+  assert.match(storyActionClarification("She went to her neighbor's apartment and engaged in a fight.")!,/multiple actions/);
+  assert.match(storyActionClarification('Alex attacked someone unknown.')!,/Name the person/);
+  assert.equal(storyActionClarification("Alex didn't fight Maya."),null);
+ }finally{await f.close();}
+});
+
+test('unresolved violent prose asks for clarification instead of narrating that no fight occurred',async()=>{
+ const f=await fixture(),game=new Game(f.store);
+ try{
+  const t=await game.initialize(f.creator,f.campaign.id),room=validateEntity({id:key(),kind:'location',name:'Hallway',visibility:'campaign',data:{}}),pc=validateEntity({id:key(),kind:'character',name:'Taylor',visibility:'owner',data:{playable:true,controllerUserId:f.player.id,locationId:room.id}});
+  await game.bulkEdit(f.creator,t.id,{revision:1,entities:[room,pc]},key());const auth=await login(f,'player@example.test'),text="She went to her neighbor's apartment and engaged in a fight.";
+  const response=await f.app.inject({method:'POST',url:'/game/timelines/'+t.id+'/story/resolve',headers:{cookie:auth.cookie,origin:f.settings.origin,'x-csrf-token':auth.csrf},payload:{characterId:pc.id,text,provider:'grounded'}});
+  assert.equal(response.statusCode,200);assert.equal(response.json().action,null);assert.match(response.json().clarification,/multiple actions/);
+  assert.equal((await game.access(f.player,t.id)).t.revision,2);
  }finally{await f.close();}
 });
 

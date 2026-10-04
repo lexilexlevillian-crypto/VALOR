@@ -10,9 +10,10 @@ import {NarrativeGateway,GroundedProvider,JsonGatewayProvider} from './ai.ts';
 import type {NarrativeProvider} from './ai.ts';
 import {Readable} from 'node:stream';
 import {directProviderIds,directProvidersFromEnvironment,preferredDirectProvider,preferredDirectProviderId} from './direct-provider.ts';
-import {storyIntent} from './story-intent.ts';
+import {storyActionClarification,storyIntent} from './story-intent.ts';
 import {IntentGateway} from './ai-intent.ts';
 import {simulationTiers} from './simulation.ts';
+import {listMasterBank} from './master-bank.ts';
 export function gameRoutes(app:FastifyInstance,game:Game,actor:(r:object)=>Actor,key:(headers:Record<string,unknown>)=>string){
  const world=new SharedWorld(game);
  app.get('/game/lives',async r=>world.lives(actor(r)));
@@ -41,6 +42,7 @@ export function gameRoutes(app:FastifyInstance,game:Game,actor:(r:object)=>Actor
  const bodyRevision=z.number().int().positive();
  const wrap=async(fn:()=>unknown)=>{try{return await fn();}catch(error){if(error instanceof Fault||error instanceof z.ZodError)throw error;if(error instanceof Error&&/^[a-z_]+$/.test(error.message))throw new Fault(400,error.message);throw error;}};
  app.get('/game/catalog',async r=>{actor(r);return {kinds,schemas:Object.fromEntries(kinds.map(k=>[k,z.toJSONSchema(dataSchemas[k])])),settings:z.toJSONSchema(settingsSchema),actions:actionSchema.options.map(option=>z.toJSONSchema(option)),simulationTiers,providers:providers.map(p=>p.id),defaultProvider:preferredProvider?.id??'grounded'};});
+ app.get('/game/master-bank',async r=>{actor(r);const q=z.strictObject({q:z.string().max(200).optional(),kind:z.enum(['item','weapon','vehicle']).optional(),category:z.string().max(80).optional(),offset:z.coerce.number().int().min(0).max(100000).optional(),limit:z.coerce.number().int().min(1).max(100).optional()}).parse(r.query);return listMasterBank(q);});
  app.get('/game/campaigns/:id/timelines',async r=>(await game.list(actor(r),timeline(r))));
  app.post('/game/campaigns/:id/timelines',async r=>(await game.initialize(actor(r),timeline(r))));
  app.get('/game/timelines/:id/roster',async r=>(await game.roster(actor(r),timeline(r))));
@@ -122,6 +124,7 @@ export function gameRoutes(app:FastifyInstance,game:Game,actor:(r:object)=>Actor
    try{const proposal=await intent.propose(a,tid,b.characterId,b.text,b.provider);if(proposal.action)return {action:proposal.action};}
    catch(error){if(!(error instanceof Error)||!['provider_unavailable','provider_circuit_open','narration_busy','context_limit','ai_budget_exceeded','ai_user_budget_exceeded'].includes(error.message))throw error;interpretationWarning='AI interpretation is unavailable or its allowance is exhausted. Only recognized actions can change the world.';}
   }
+  const clarification=storyActionClarification(b.text);if(clarification)return {action:null,clarification};
   // Any unmatched roleplay can continue. A story turn does not execute the alleged action.
   return {action:{type:'story',text:b.text},...(interpretationWarning?{interpretationWarning}:{})};
  }));
@@ -152,6 +155,7 @@ export function gameRoutes(app:FastifyInstance,game:Game,actor:(r:object)=>Actor
  app.get('/game/timelines/:id/templates',async r=>(await game.templates(actor(r),timeline(r))));
  app.post('/game/timelines/:id/templates/use',async r=>{const b=z.strictObject({templateId:id,name}).parse(r.body);return wrap(async ()=>(await game.instantiateTemplate(actor(r),timeline(r),b.templateId,b.name)));});
  app.post('/game/timelines/:id/catalog',async r=>{const b=z.strictObject({revision:bodyRevision}).parse(r.body);return (await game.installCatalog(actor(r),timeline(r),b.revision,key(r.headers)));});
+ app.post('/game/timelines/:id/master-bank/import',async r=>{const b=z.strictObject({revision:bodyRevision,bankId:z.string().min(1).max(200)}).parse(r.body);return wrap(()=>game.importMasterBankEntry(actor(r),timeline(r),b,key(r.headers)));});
  app.post('/game/timelines/:id/traits/generate',async r=>{const b=z.strictObject({revision:bodyRevision,characterId:id,templateId:id,seed:z.string().min(1).max(200)}).parse(r.body);return wrap(()=>game.generateNpcTraits(actor(r),timeline(r),b,key(r.headers)));});
  app.get('/game/timelines/:id/history',async r=>(await game.history(actor(r),timeline(r))));
  const retrievalFilterSchema=z.strictObject({entityIds:z.array(id).max(100).optional(),tags:z.array(z.string().max(80)).max(100).optional(),from:z.iso.datetime().nullable().optional(),until:z.iso.datetime().nullable().optional(),placeIds:z.array(id).max(100).optional(),personIds:z.array(id).max(100).optional(),relationshipIds:z.array(id).max(100).optional(),eventIds:z.array(id).max(100).optional(),evidenceIds:z.array(id).max(100).optional(),factionIds:z.array(id).max(100).optional(),kinds:z.array(z.enum(['lore','storycard','canon'])).max(3).optional()});
