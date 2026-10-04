@@ -38,6 +38,7 @@ import {listNpcs,mergeNpcData,mergePayload,mergePayloadForChecksum,npcDerived,np
 import type {NpcFilters} from './npcs.ts';
 import {developerSocialGraph,playerRelationships,recordReputation} from './social.ts';
 import {inventoryView} from './items.ts';
+import {instantiateMasterBankEntry,masterBankEntry} from './master-bank.ts';
 type Timeline={id:string;campaign_id:string;parent_id:string|null;parent_save_id:string|null;name:string;revision:number;clock:string;settings_json:string};
 type Mutation<T>={result:T;effects?:Effect[];draws?:number;checks?:CheckRecord[];characterId?:string;turnText?:string};
 const now=()=>new Date().toISOString();
@@ -834,6 +835,12 @@ export class Game {
    addTemplate('Police-background traits',{description:'Weighted NPC characterization for an explicitly authored police background.',backgroundTags:['police','firearms'],categoryWeights:{physical:2,personality:3,experience:2,social:2},requiredTraitIds:[traitIds.get('Police training')!],minTraits:5,maxTraits:8,budget:0,categoryCaps:{physical:3,personality:3,experience:2,social:2},tagCaps});
    return {result:{created:count,upgraded}};
   }));
+ }
+ async importMasterBankEntry(actor:Actor,id:string,input:{revision:number;bankId:string},key:string){
+  return this.mutate(actor,id,input.revision,key,{...input,type:'master-bank.import'},'creator.master-bank.import',true,s=>{
+   const source=masterBankEntry(input.bankId),entity=instantiateMasterBankEntry(input.bankId);s.entities.push(entity);
+   return {result:{entity,bankId:source.id,price2012Cents:source.price2012Cents,priceBasis:source.priceBasis}};
+  });
  }
  async generateNpcTraits(actor:Actor,id:string,input:{revision:number;characterId:string;templateId:string;seed:string},key:string){
   return this.mutate(actor,id,input.revision,key,input,'creator.traits.generate',true,async s=>{
