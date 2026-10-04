@@ -133,7 +133,8 @@ export function reviewMechanicalClaims(text:string,effects:Effect[]=[]){
 
 export function reviewNarrativeOutput(text:string,controls:NarrativeControls,repetition:RepetitionTracker,requiredPhrases:string[]=[],effects:Effect[]=[]){
  const flags:Array<{kind:string;value:string}>=[...repetition.review(text,requiredPhrases),...reviewMechanicalClaims(text,effects)];for(const excluded of controls.safety.excludedContent)if(normalize(text).includes(normalize(excluded)))flags.push({kind:'safety',value:excluded});
- // Reusing a broad beat (quiet, a glance, a question) is normal conversation, not a failed turn.
- const blocking=flags.filter(flag=>flag.kind!=='beat');
+ // A broad beat or one short phrase overlap is normal continuity. Reject only substantial
+ // phrase reuse (three overlapping six-word windows), exact repeated questions, or hard rules.
+ const phraseCount=flags.filter(flag=>flag.kind==='phrase').length,blocking=flags.filter(flag=>flag.kind!=='beat'&&(flag.kind!=='phrase'||phraseCount>=3));
  return {accepted:blocking.length===0,decision:blocking.length?'retry' as const:'accept' as const,flags};
 }

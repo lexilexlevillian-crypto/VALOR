@@ -63,6 +63,19 @@ test('unsafe, duplicate, indoor and retry additions cannot mutate the world',asy
   const response=await new NarrativeGateway(game,[provider]).narrate(f.player,t.id,turn.eventId,provider.id,undefined,'story');assert.equal(response.status,'grounded-fallback');assert.equal((await game.load(t.id)).entities.length,state.entities.length);
  }finally{await f.close();}
 });
+
+test('failed private-scene narration retries are prose-only and cannot propose a new NPC',async()=>{
+ const {f,game,t,pc,place,turn}=await setup();
+ try{
+  const state=await game.load(t.id),privatePlace=state.entities.find(e=>e.id===place.id)!;privatePlace.data.ownerId=pc.id;
+  await game.edit(f.creator,t.id,{revision:4,entity:privatePlace},key());const expansionStates:boolean[]=[];
+  const provider:NarrativeProvider={id:'private-retry',arrange:async context=>{expansionStates.push(Boolean(context.allowExpansion));return context.allowExpansion?{additions:[{kind:'npc',name:'Uninvited stranger',description:'An adult stranger.'}],paragraphs:[{sourceIds:context.fragments.map(f=>f.id),text:'Alex remained in the private room.'}]}:{additions:[],paragraphs:[{sourceIds:context.fragments.map(f=>f.id),text:'Alex stayed in the room as the moment settled.'}]};}};
+  const gateway=new NarrativeGateway(game,[provider]),first=await gateway.narrate(f.player,t.id,turn.eventId,provider.id,undefined,'story');
+  assert.equal(first.status,'grounded-fallback');assert.equal('failureCode'in first?first.failureCode:null,'story_addition_not_allowed');assert.deepEqual(expansionStates,[true,true]);
+  const retried=await gateway.narrate(f.player,t.id,turn.eventId,provider.id,undefined,'story');assert.equal(retried.status,'validated');assert.deepEqual(expansionStates,[true,true,false]);
+  assert.ok(!(await game.load(t.id)).entities.some(e=>e.name==='Uninvited stranger'));
+ }finally{await f.close();}
+});
 test('a stale narration cannot add entities after another turn commits',async()=>{
  const {f,game,t,pc,turn}=await setup();
  try{

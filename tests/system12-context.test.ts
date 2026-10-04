@@ -33,6 +33,7 @@ test('System 12 repetition review flags phrases, beats, and questions but exempt
  const repeated='The rain tapped against the narrow window while the guard waited. What happens next?',fixture=contextState(),controls=buildContextManifest(fixture.state,fixture.observer.id,'').controls,tracker=new RepetitionTracker([repeated]);
  const review=reviewNarrativeOutput(repeated,controls,tracker);assert.equal(review.accepted,false);assert.equal(review.decision,'retry');assert.ok(review.flags.some(flag=>flag.kind==='phrase'));assert.ok(review.flags.some(flag=>flag.kind==='question'));
  const required=reviewNarrativeOutput(repeated,controls,tracker,[repeated]);assert.equal(required.accepted,true);
+ const shortOverlap=reviewNarrativeOutput('The rain tapped against the narrow window before the guard moved.',controls,tracker);assert.equal(shortOverlap.accepted,true);assert.ok(shortOverlap.flags.some(flag=>flag.kind==='phrase'));
  const quiet=reviewNarrativeOutput('The surrounding quiet offered a brief pause.',controls,new RepetitionTracker(['A quiet avenue stretched beyond the shop.']));assert.equal(quiet.accepted,true);assert.ok(quiet.flags.some(flag=>flag.kind==='beat'));
 });
 

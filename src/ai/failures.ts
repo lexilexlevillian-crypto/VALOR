@@ -6,7 +6,7 @@ const safeCodes=new Set([
  'tool_not_allowed','fact_not_authorized','interpretation_not_authorized','narrative_source_not_authorized','command_proposal_not_authorized','command_candidate_not_authorized','duplicate_tool_call',
  'invalid_narrative_sources','incomplete_narrative_sources','player_dialogue_not_preserved','player_agency_violation','narration_too_large','story_requires_third_person','story_requires_past_tense','invalid_proposal_choice',
  'narrative_control_retry','narrative_mechanical_claim_rejected','narrative_repetition_rejected','narrative_content_rejected',
- 'story_retry_cannot_expand','story_location_required','story_world_limit','story_name_already_exists','story_detail_already_exists','story_npc_requires_public_scene','story_place_requires_public_outdoors',
+ 'story_retry_cannot_expand','story_addition_not_allowed','story_location_required','story_world_limit','story_name_already_exists','story_detail_already_exists','story_npc_requires_public_scene','story_place_requires_public_outdoors',
  'narrative_context_unavailable','intent_context_unavailable','creator_assistance_not_configured',
  ...['deepinfra','gemini','provider'].flatMap(provider=>['request_failed','empty_response','response_too_large','invalid_response','incomplete_response','invalid_output','invalid_json','route_mismatch'].map(code=>provider+'_'+code))
 ]);
