@@ -111,7 +111,7 @@ test('iPad shell, keyboard login, Creator form, long prose, reduced motion and o
   const beforeProposal=(await game.access(f.creator,timeline.id)).t.revision;
   const draft='I pause at the window.\nI listen for footsteps.';await page.getByLabel('Continue the story',{exact:true}).fill(draft);
   await page.getByRole('button',{name:'Open phone',exact:true}).click();
-  await page.locator('[data-pocket-app="Inventory"]').click();await page.getByRole('heading',{name:'Inventory.'}).waitFor();
+  await page.locator('[data-pocket-app="Inventory"]').click();await page.locator('[data-native-app="Inventory"]').waitFor();
   await page.getByRole('button',{name:'Put away ↘'}).click();
   assert.equal(await page.getByLabel('Continue the story',{exact:true}).inputValue(),draft);
   assert.equal(await page.getByRole('button',{name:'Ask Gemini to interpret',exact:true}).count(),0);
@@ -133,11 +133,11 @@ test('iPad shell, keyboard login, Creator form, long prose, reduced motion and o
    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true,'Chronicle fits '+width);
    await page.getByRole('button',{name:'Open phone',exact:true}).click();
    await page.getByRole('dialog',{name:'Your phone'}).waitFor();
-   assert.equal(await page.locator('.pocket-app').count(),15);
+   assert.equal(await page.locator('.pocket-app').count(),22);
    assert.deepEqual((await new AxeBuilder({page}).analyze()).violations.map(v=>v.id),[]);
    await page.screenshot({path:'artifacts/phone-'+width+'.png'});
    await page.locator('[data-pocket-app="Character"]').click();
-   await page.getByRole('heading',{name:'Character.',exact:true}).waitFor();
+   await page.locator('[data-native-app="Character"]').waitFor();
    const phoneFit=await page.locator('.pocket-content').evaluate(node=>node.scrollWidth<=node.clientWidth+1);
    assert.equal(phoneFit,true,'Character app fits phone at '+width);
    await page.getByRole('button',{name:'Put away ↘'}).click();

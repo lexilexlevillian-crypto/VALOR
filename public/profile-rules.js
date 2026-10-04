@@ -25,6 +25,7 @@ export function syncAppearanceTraits(character,entities){
 }
 const extra=['North Crowns','South Crowns','First Harbor','Ashmont','Terminal','Gateway','North Works','South Works','Saltwork','Moody','Hudson','Tracked','Dockside','Yard District','Civic Landing','Northeast','Northwest','Southeast','Southwest','Low End'];
 export const NEIGHBORHOODS=[...new Set([...CITY_PARAGRAPHS.slice(22,132).filter(p=>p.startsWith('☆')&&!p.includes('HOT SPOTS')).map(p=>p.replace(/^☆\s*┇\s*/,'').replace(/:$/,'')),...extra])].sort((a,b)=>a.localeCompare(b));
+export const PLAYER_NEIGHBORHOODS=['Langley','Court District','First Harbor','Chinatown','North Crowns','South Crowns','Sparrow Ward','Low End'];
 const names={'North Crowns':'The Sync','South Crowns':'City Lights Reserve','Langley':'Riflerange Apartments','Court District':'The Soverighn','First Harbor':'First Harbor Flats','Chinatown':'The Crane Apartments','Sparrow Ward':'Visonary Apartments','Low End':'The Hampton Collection','Lowend Market':'The Hampton Collection','Gateway':'Gateway Apartments'};
 export function residencePlan(neighborhood,overrides={}){
  if(!NEIGHBORHOODS.includes(neighborhood))return null;

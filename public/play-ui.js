@@ -30,10 +30,13 @@ export function chronicleSurface({$,button,S,formatMoment,draft,saveDraft,submit
 export const phoneApps=[
  ['Character','My character','person'],['Health','Health','heart'],['Inventory','Inventory','bag'],['Journal / Cases','Journal','journal'],
  ['Jobs / Money','Jobs & money','jobs'],['Relationships','People','people'],['Skills / Traits','Skills & traits','star'],['Vehicles','Vehicles','car'],
- ['Phone','Calls & messages','phone'],['Map','Map','map'],['Lore','City guide','city'],['Save / Load','Save / load','save'],
+ ['Phone','Phone','phone'],['Messages','Messages','message'],['Contacts','Contacts','people'],['Weather','Weather','weather'],['News','News','news'],['Mail','Mail','message'],['Photos','Photos','star'],['Social','Social','people'],['Map','Map','map'],['Lore','City guide','city'],['Save / Load','Save / load','save'],
  ['Equipment','Equipment','bag'],['Search / Loot','Nearby items','map'],['Settings','Settings','jobs']
 ];
 const glyphs={
+ message:'<path d="M2 3h20v14H9l-5 5v-5H2Z"/>',
+ weather:'<circle cx="9" cy="9" r="5"/><path d="M9 1v2M1 9h2M15 3l-1 1M8 18a4 4 0 0 1 0-8 6 6 0 0 1 11 2 3 3 0 0 1 0 6Z"/>',
+ news:'<path d="M3 2h18v20H3zM6 5h12M6 9h5v5H6zM14 9h4M14 13h4M6 18h12"/>',
  person:'<circle cx="12" cy="7" r="4"/><path d="M4 22v-3a8 8 0 0 1 16 0v3"/>',
  heart:'<path d="M20 5c-3-3-7-1-8 1-2-3-6-4-9-1-5 5 4 12 9 16 5-4 13-11 8-16Z"/>',
  bag:'<rect x="4" y="7" width="16" height="15" rx="2"/><path d="M8 8V6a4 4 0 0 1 8 0v2M8 13h8"/>',

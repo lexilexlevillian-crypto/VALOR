@@ -5,6 +5,7 @@ export const SKIN_COLORS:string[];
 export const ETHNICITIES:string[];
 export const APPEARANCE_TRAITS:string[];
 export const NEIGHBORHOODS:string[];
+export const PLAYER_NEIGHBORHOODS:string[];
 export type ResidencePlan={neighborhood:string;name:string;floors:number;unitsPerFloor:number};
 export function automaticTraitNames(character:any):string[];
 export function syncAppearanceTraits(character:any,entities:any[]):void;

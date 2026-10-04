@@ -79,3 +79,14 @@ Story narration uses source-anchored prose: the provider rewrites the committed 
 New lives receive one-time everyday essentials: a wallet, clothes, a working phone when communications are enabled, and keys when a home exists. Authored equipment takes precedence. Pickups and other validated inventory actions persist before narration; prose alone never awards money, weapons, or arbitrary items. Dropping or consuming equipment does not respawn it.
 
 Creator/admin Settings includes **Test DeepSeek connection**. The server also makes one small synthetic check of the selected provider after startup and logs `<provider>.startup_check` with status and latency, never credentials or player content. Set `AI_STARTUP_CHECK=off` to disable that check. Provider availability does not override zero or exhausted world/user budgets.
+
+
+## Lives and phone apps
+
+Load Life includes Delete life for your own private lives. Deletion is a recoverable archive of the whole life, including its timeline branches; Deleted lives offers Restore life. Shared authoring worlds and other users’ lives cannot be deleted through this control. Characters, checkpoints, and audit history are retained.
+
+The summoned phone has dedicated app screens, including Weather, News, SMS conversations, Contacts, and a dialer. Contacts can be saved only after the character learns a phone number. Weather shows in-game conditions and authored forecasts; News shows observer-permitted notifications, not invented headlines. Phone Settings links to the current life’s settings without selecting the master world.
+
+New playable characters can choose only the eight documented Union apartment neighborhoods: Langley, Court District, First Harbor, Chinatown, North Crowns, South Crowns, Sparrow Ward, and Low End. NPC authoring retains the wider geography; unchanged legacy player residences are preserved.
+
+For the isolated three-viewport phone smoke test, run `node tests/phone-ui.browser.mjs`. The authenticated creation, phone navigation, and delete/restore tests are included in `npm test`.

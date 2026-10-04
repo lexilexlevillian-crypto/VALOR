@@ -8,7 +8,7 @@ import type {Entity} from '../src/game/model.ts';
 
 const characterData=(locationId:string|null,controllerUserId:string|null,extra:Record<string,unknown>={})=>({
  playable:!!controllerUserId,controllerUserId,locationId,legalName:'Alex Morgan',aliases:['Lex'],dob:'1990-02-03',ageYears:22,sex:'',gender:'nonbinary',pronouns:'they/them',
- identity:{display:'Alex'},nationality:'American',cultureContext:'Authored family context',ethnicityContext:'Authored and optional',originLocationId:locationId,originNeighborhood:'Riverside',classContext:'working class',
+ identity:{display:'Alex'},nationality:'American',cultureContext:'Authored family context',ethnicityContext:'Authored and optional',originLocationId:locationId,originNeighborhood:controllerUserId?'North Crowns':'Riverside',classContext:'working class',
  appearance:{style:'worn denim'},appearanceDescription:'A prose portrait with authored detail.',heightCm:175,build:'lean',hair:'brown',eyes:'green',complexion:'olive',features:['freckles'],scars:['left wrist'],tattoos:['small star'],disabilities:[],
  presentation:'quiet streetwear',socialPresentation:{context:'trusted by neighbors'},attractivenessContext:'Often read as approachable in this neighborhood.',background:{childhood:'Authored history'},familyBackground:'A complicated family history.',
  employerOccupation:'Night clerk',education:'Community college',beliefsContext:'Personal beliefs authored by Creator',voice:'Low and measured',notes:'Creator note',

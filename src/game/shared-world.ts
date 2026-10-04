@@ -33,6 +33,21 @@ export class SharedWorld {
   return this.describe(actor);
  });}
  private async audit(actor:Actor,campaignId:string,action:string,target:string){await this.store.run('INSERT INTO audit_log(id,actor_id,campaign_id,action,target_id,created_at,request_id,reason) VALUES (?,?,?,?,?,?,?,?)',randomUUID(),actor.id,campaignId,action,target,new Date().toISOString(),actor.requestId??null,action);}
+ async lives(actor:Actor){
+  await this.game.domain.active(actor);
+  return this.store.all<{id:string;name:string;archivedAt:string|null}>('SELECT c.id,c.name,c.archived_at AS archivedAt FROM player_lives p JOIN campaigns c ON c.id=p.campaign_id WHERE p.user_id=? ORDER BY p.created_at DESC',actor.id);
+ }
+ async setLifeDeleted(actor:Actor,campaignId:string,deleted:boolean){return this.store.transaction(async()=>{
+  await this.game.domain.active(actor);
+  const life=await this.store.get<{id:string;archived_at:string|null}>('SELECT c.id,c.archived_at FROM player_lives p JOIN campaigns c ON c.id=p.campaign_id JOIN memberships m ON m.campaign_id=c.id AND m.user_id=p.user_id WHERE p.user_id=? AND p.campaign_id=?',actor.id,campaignId);
+  ensure(life,404,'life_not_found');
+  ensure(!await this.store.get('SELECT w.id FROM shared_world w JOIN timelines t ON t.id=w.timeline_id WHERE t.campaign_id=?',campaignId),409,'world_authoring_only');
+  if(Boolean(life.archived_at)!==deleted){
+   await this.store.run('UPDATE campaigns SET archived_at=? WHERE id=?',deleted?new Date().toISOString():null,campaignId);
+   await this.audit(actor,campaignId,deleted?'player-life.deleted':'player-life.restored',campaignId);
+  }
+  return {id:campaignId,deleted,recoverable:true};
+ });}
  async enter(actor:Actor,requestKey:string){return this.store.transaction(async()=>{
   await this.game.domain.active(actor);ensure(/^[A-Za-z0-9_-]{16,128}$/.test(requestKey),400,'invalid_idempotency_key');
   const response=async(campaignId:string,timelineId:string)=>{await this.game.access(actor,timelineId);return {campaign:await this.store.get<{id:string;name:string;timezone:string;sourceWorldId:string;role:string}>('SELECT c.id,c.name,c.timezone,c.source_world_id AS sourceWorldId,m.role FROM campaigns c JOIN memberships m ON m.campaign_id=c.id WHERE c.id=? AND m.user_id=? AND c.archived_at IS NULL',campaignId,actor.id),timeline:await this.store.get<{id:string;name:string;revision:number;clock:string}>('SELECT id,name,revision,clock FROM timelines WHERE id=? AND archived_at IS NULL',timelineId)};};
@@ -42,7 +57,7 @@ export class SharedWorld {
   // Reuse an unfinished, current-version creation screen. Never overwrite a life.
   const draft=await this.store.get<{campaign_id:string;id:string}>('SELECT p.campaign_id,t.id FROM player_lives p JOIN campaigns c ON c.id=p.campaign_id JOIN timelines t ON t.campaign_id=c.id WHERE p.user_id=? AND p.source_timeline_id=? AND p.source_revision=? AND c.archived_at IS NULL AND t.archived_at IS NULL AND NOT EXISTS (SELECT 1 FROM campaign_start_packages sp WHERE sp.campaign_id=? AND sp.updated_at>p.created_at) AND NOT EXISTS (SELECT 1 FROM campaign_theme_settings ts WHERE ts.campaign_id=? AND ts.updated_at>p.created_at) AND NOT EXISTS (SELECT 1 FROM game_entities e WHERE e.timeline_id=t.id AND e.kind=\'character\' AND json_extract(e.data_json,\'$.playable\')=1) ORDER BY p.created_at DESC LIMIT 1',actor.id,source.timeline_id,source.revision,source.campaign_id,source.campaign_id);
   if(draft){await this.store.run('INSERT INTO life_entry_receipts VALUES (?,?,?,?)',actor.id,requestKey,draft.campaign_id,draft.id);return response(draft.campaign_id,draft.id);}
-  const count=await this.store.get<{n:number}>('SELECT count(*) n FROM player_lives WHERE user_id=?',actor.id);ensure((count?.n??0)<100,409,'life_limit_reached');
+  const count=await this.store.get<{n:number}>('SELECT count(*) n FROM player_lives p JOIN campaigns c ON c.id=p.campaign_id WHERE p.user_id=? AND c.archived_at IS NULL',actor.id);ensure((count?.n??0)<100,409,'life_limit_reached');
   const state=await this.game.load(source.timeline_id);
   ensure(!state.entities.some(e=>e.kind==='character'&&(e.data.playable||e.data.controllerUserId)),409,'world_source_contains_player_lives');
   const packages=await this.store.all<{slug:string;name:string;description:string;kind:string;definition_json:string;schema_version:number;revision:number}>("SELECT * FROM campaign_start_packages WHERE campaign_id=? AND status='published' AND visibility='campaign' AND archived_at IS NULL",source.campaign_id);

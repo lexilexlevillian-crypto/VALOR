@@ -15,6 +15,9 @@ import {IntentGateway} from './ai-intent.ts';
 import {simulationTiers} from './simulation.ts';
 export function gameRoutes(app:FastifyInstance,game:Game,actor:(r:object)=>Actor,key:(headers:Record<string,unknown>)=>string){
  const world=new SharedWorld(game);
+ app.get('/game/lives',async r=>world.lives(actor(r)));
+ app.post('/game/lives/:id/delete',async r=>{const p=z.strictObject({id}).parse(r.params);z.strictObject({confirmed:z.literal(true)}).parse(r.body);return world.setLifeDeleted(actor(r),p.id,true);});
+ app.post('/game/lives/:id/restore',async r=>{const p=z.strictObject({id}).parse(r.params);z.strictObject({}).parse(r.body);return world.setLifeDeleted(actor(r),p.id,false);});
  app.get('/game/geography',async r=>{await game.domain.active(actor(r));return wrap(()=>geography(r.query));});
  app.get('/game/world',async r=>world.describe(actor(r)));
  app.post('/game/world/setup',async r=>{const b=z.strictObject({timelineId:id.optional()}).parse(r.body);return world.setup(actor(r),b.timelineId);});

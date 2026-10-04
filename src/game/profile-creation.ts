@@ -1,7 +1,7 @@
 import {randomUUID} from 'node:crypto';
 import {validateEntity,data} from './model.ts';
 import type {State,Data,Entity} from './model.ts';
-import {automaticTraitNames,syncAppearanceTraits,residencePlan,playerFloors,apartmentNumber} from '../../public/profile-rules.js';
+import {automaticTraitNames,syncAppearanceTraits,residencePlan,PLAYER_NEIGHBORHOODS,playerFloors,apartmentNumber} from '../../public/profile-rules.js';
 import {stockTrait} from '../../public/creation-rules.js';
 export function prepareAppearance(s:State,character:Data<'character'>,previous?:Data<'character'>){
  const changed=!previous||character.heightCm!==previous.heightCm||character.build!==previous.build;
@@ -21,6 +21,7 @@ export function prepareAppearance(s:State,character:Data<'character'>,previous?:
 }
 export function assignResidence(s:State,entity:Entity,previous?:Data<'character'>){
  const c=data(entity,'character'),choice=c.residence;
+ if(c.playable&&c.originNeighborhood&&(!previous||!previous.playable||previous.originNeighborhood!==c.originNeighborhood||JSON.stringify(previous.residence)!==JSON.stringify(choice))&&!PLAYER_NEIGHBORHOODS.includes(c.originNeighborhood))throw new Error('player_union_residence_required');
  if(!choice)return;
  const plan=residencePlan(c.originNeighborhood,s.settings.residencePlans);
  if(!plan||choice.neighborhood!==c.originNeighborhood)throw new Error('residence_does_not_match_neighborhood');

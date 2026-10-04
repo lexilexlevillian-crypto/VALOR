@@ -1,4 +1,4 @@
-import {HEIGHTS,BUILDS,EYE_COLORS,SKIN_COLORS,ETHNICITIES,APPEARANCE_TRAITS,NEIGHBORHOODS,automaticTraitNames,syncAppearanceTraits,residencePlan,playerFloors,apartmentNumber} from './profile-rules.js';
+import {HEIGHTS,BUILDS,EYE_COLORS,SKIN_COLORS,ETHNICITIES,APPEARANCE_TRAITS,NEIGHBORHOODS,PLAYER_NEIGHBORHOODS,automaticTraitNames,syncAppearanceTraits,residencePlan,playerFloors,apartmentNumber} from './profile-rules.js';
 import {stockTrait} from './creation-rules.js';
 import {changeSelection} from './creation-pools.js';
 const el=(tag,text='',cls='')=>{const n=document.createElement(tag);n.textContent=text;if(cls)n.className=cls;return n;};
@@ -53,8 +53,9 @@ export function profileControls(character,entities,onchange,settings={},lookup=a
  birthState.addEventListener('change',loadCities);search.addEventListener('input',()=>{clearTimeout(timer);timer=setTimeout(loadCities,180);});
  birthCity.addEventListener('change',()=>{const city=cities.find(row=>row.id===birthCity.value);if(!city)return;update(()=>{character.birthplace=[city.name,states.find(row=>row.code===birthState.value)?.name,countryName()].filter(Boolean).join(', ').slice(0,160);character.identity={...character.identity,birthCountryCode:birthCountry.value,birthStateCode:birthState.value,birthCityCode:city.id,birthLatitude:String(city.latitude),birthLongitude:String(city.longitude)};});});
  lookup('/game/geography').then(result=>{countries=result.countries;options(nationality,[...countries.map(row=>({value:(row.nationality||row.name)+' ('+row.name+')',label:(row.nationality||row.name)+' ('+row.name+')'})),...['Dual / multiple nationalities','Stateless','Other / self-described'].map(value=>({value,label:value}))],character.nationality??'','Not specified');options(birthCountry,countries.map(row=>({value:row.code,label:row.name})),'','Choose a country');}).catch(()=>{nationalityField.append(el('p','Country lookup unavailable. Use your description below.'));nationalityCustom.hidden=false;});
- const neighborhood=el('select');options(neighborhood,NEIGHBORHOODS.map(value=>({value,label:value})),character.originNeighborhood??'','Not specified');
- const neighborhoodField=labeled('Neighborhood',neighborhood);identity.append(neighborhoodField,residence);
+ const neighborhood=el('select');options(neighborhood,(character.playable?PLAYER_NEIGHBORHOODS:NEIGHBORHOODS).map(value=>({value,label:value})),character.originNeighborhood??'','Choose a neighborhood');
+ if(character.playable)for(const option of neighborhood.options)if(option.value&&!PLAYER_NEIGHBORHOODS.includes(option.value))option.disabled=true;
+ const neighborhoodField=labeled('Neighborhood',neighborhood,character.playable?'Union apartments only. Choose a neighborhood to see its documented residence.':'');identity.append(neighborhoodField,residence);
  const drawResidence=()=>{
   residence.replaceChildren(el('h4','Residence'));const plan=residencePlan(character.originNeighborhood,settings.residencePlans);
   if(!plan){residence.append(el('p','Choose a listed neighborhood to assign a residence. Saved custom neighborhood names are preserved.'));return;}
