@@ -15,7 +15,9 @@ import {FoundationAuthority} from './foundation-authority.ts';
 export function buildApp(store:Store,settings:Config,logging:boolean|{write(chunk:string):void}=true) {
   const domain=new Domain(store),auth=new Auth(store,settings),foundation=new FoundationAuthority(store);
   const app=Fastify({
-    bodyLimit:32768,requestTimeout:15000,connectionTimeout:10000,
+    // AI processing can take two 12-second attempts plus authorization and commits.
+    // Keep the request-upload limit separate from the processing/socket timeout.
+    bodyLimit:32768,requestTimeout:15000,connectionTimeout:60000,
     trustProxy:false,requestIdHeader:false,genReqId:()=>randomUUID(),logController:new LogController({disableRequestLogging:true}),
     logger:logging?{level:'info',...(typeof logging==='object'?{stream:logging}:{}),redact:{paths:['password','token','csrfToken','secret','contacts','req.url','req.query','req.headers.cookie','req.headers.authorization','req.headers.x-csrf-token','req.body'],censor:'[REDACTED]'}}:false
   });

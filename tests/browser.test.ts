@@ -113,6 +113,8 @@ test('iPad shell, keyboard login, Creator form, long prose, reduced motion and o
   await page.getByRole('button',{name:'Open phone',exact:true}).click();
   await page.locator('[data-pocket-app="Inventory"]').click();await page.locator('[data-native-app="Inventory"]').waitFor();
   await page.getByRole('button',{name:'Put away ↘'}).click();
+  // Closing the phone reloads the view; do not type into its outgoing composer.
+  await page.getByRole('dialog',{name:'Your phone'}).waitFor({state:'detached'});
   assert.equal(await page.getByLabel('Continue the story',{exact:true}).inputValue(),draft);
   assert.equal(await page.getByRole('button',{name:'Ask Gemini to interpret',exact:true}).count(),0);
   assert.equal(await page.getByRole('button',{name:'Confirm this action',exact:true}).count(),0);

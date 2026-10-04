@@ -1,4 +1,5 @@
 import {chronicleSurface,phoneOverlay,phoneLauncher} from './play-ui.js';
+import {requestJson,readJsonResponse} from './http.js';
 import {nativePhoneApp,nativePhonePages} from './phone-apps.js';
 import {THEMES,THEME_IDS,ACCESSIBILITY_MODES,themeById,applyTheme,applyAccessibilityMode,applyDecorations} from './theme.js';
 import {helpTip,sheetSection,moreDetails,ratingControl,ratingMap,readable,characterFieldGuide} from './studio.js';
@@ -26,8 +27,7 @@ const labels={player_union_residence_required:'Choose a Union neighborhood with 
 Object.assign(labels,{current_consent_request_required:'That advance is no longer current. Wait for or make a new contextual request.',age_or_legal_eligibility_required:'Campaign safety rules require authored legal-age eligibility for both characters.',consent_requires_conscious_participants:'Consent requires conscious participants.',consent_not_voluntary:'Consent cannot be given under restraint or coercion.',consent_invalid_while_intoxicated:'The campaign safety threshold blocks consent while intoxicated.',consent_context_changed:'The context changed; make a new request.',romance_filtered:'A participant has romance turned off.',content_filtered:'A participant’s content filter blocks that advance.',explicit_consent_required:'Choose an explicit consent response before continuing.',boundary_declined:'That action conflicts with an authored boundary.',romance_disabled:'Romance is disabled for this campaign.',intimacy_disabled:'Intimacy is disabled for this campaign.'});
 async function api(path,body,method=body?'POST':'GET',retryKey=crypto.randomUUID()){
  if(!navigator.onLine)throw new Error('Offline. The shell remains available; changes need a connection.');
- const response=await fetch(path,{method,credentials:'same-origin',cache:'no-store',headers:{...(body?{'content-type':'application/json','x-csrf-token':S.csrf,'idempotency-key':retryKey}:{})},...(body?{body:JSON.stringify(body)}:{})});
- const result=await response.json();if(!response.ok)throw new Error(labels[result.error]??String(result.error??'Request failed').replaceAll('_',' '));return result;
+ return requestJson(path,{method,credentials:'same-origin',cache:'no-store',headers:{...(body?{'content-type':'application/json','x-csrf-token':S.csrf,'idempotency-key':retryKey}:{})},...(body?{body:JSON.stringify(body)}:{})},labels);
 }
 function button(text,handler,primary=false){return $('button',{type:'button',class:primary?'primary':'',onclick:()=>run(handler)},text);}
 async function run(fn){if(S.busy)return;S.busy=true;document.documentElement.setAttribute('aria-busy','true');try{await fn();}catch(e){notify(e.message);}finally{S.busy=false;document.documentElement.removeAttribute('aria-busy');}}
@@ -243,7 +243,7 @@ async function rebuildNarration(turn,text,provider,rebuild,cancel,status){
  const controller=new AbortController();S.streamController=controller;rebuild.disabled=true;cancel.hidden=false;status.textContent='Rebuilding narration… You can cancel without showing a partial result.';
  try{
   const response=await fetch(endpoint('narrate/stream'),{method:'POST',credentials:'same-origin',signal:controller.signal,headers:{'content-type':'application/json','x-csrf-token':S.csrf},body:JSON.stringify({turnId:turn.id,provider:provider.value,style:'story'})});
-  if(!response.ok){const error=await response.json();throw new Error(String(error.error??'Narration unavailable').replaceAll('_',' '));}
+  if(!response.ok)await readJsonResponse(response,{method:'POST',labels});
   if(!response.body)throw new Error('Narration stream unavailable.');
   const reader=response.body.getReader(),decoder=new TextDecoder();let pending='',paragraphs=[],complete=false,completionStatus='';
   while(true){const chunk=await reader.read();pending+=decoder.decode(chunk.value??new Uint8Array(),{stream:!chunk.done});const lines=pending.split('\n');pending=lines.pop()??'';if(chunk.done&&pending)lines.push(pending);for(const line of lines){if(!line)continue;const event=JSON.parse(line);if(event.type==='paragraph')paragraphs.push(event.text);if(event.type==='complete'){complete=true;completionStatus=event.status;}}if(chunk.done)break;}
