@@ -9,7 +9,7 @@ import type {Actor} from '../contracts.ts';
 import {NarrativeGateway,GroundedProvider,JsonGatewayProvider} from './ai.ts';
 import type {NarrativeProvider} from './ai.ts';
 import {Readable} from 'node:stream';
-import {geminiFromEnvironment} from './gemini.ts';
+import {directProviderIds,directProvidersFromEnvironment,preferredDirectProvider,preferredDirectProviderId} from './direct-provider.ts';
 import {storyIntent} from './story-intent.ts';
 import {IntentGateway} from './ai-intent.ts';
 import {simulationTiers} from './simulation.ts';
@@ -20,18 +20,19 @@ export function gameRoutes(app:FastifyInstance,game:Game,actor:(r:object)=>Actor
  app.post('/game/world/setup',async r=>{const b=z.strictObject({timelineId:id.optional()}).parse(r.body);return world.setup(actor(r),b.timelineId);});
  app.post('/game/world/life',async r=>{z.strictObject({}).parse(r.body);return world.enter(actor(r),key(r.headers));});
  const providers:NarrativeProvider[]=[new GroundedProvider(),...(process.env.AI_GATEWAY_URL&&process.env.AI_GATEWAY_SECRET?[new JsonGatewayProvider(process.env.AI_GATEWAY_URL,process.env.AI_GATEWAY_SECRET)]:[])];
- const gemini=geminiFromEnvironment();if(gemini)providers.push(gemini);
+ const directProviders=directProvidersFromEnvironment(),preferredProvider=preferredDirectProvider(directProviders);providers.push(...directProviders);
  app.post('/game/ai/health',async r=>{
   const user=await game.domain.active(actor(r));if(!['creator','admin'].includes(user.role))throw new Fault(403,'forbidden');
-  z.strictObject({}).parse(r.body);if(!gemini)return {status:'unconfigured',provider:'gemini'};
-  const started=performance.now();try{return {...await gemini.healthCheck(AbortSignal.timeout(12000)),latencyMs:Math.round(performance.now()-started)};}catch{return {status:'unavailable',provider:'gemini',latencyMs:Math.round(performance.now()-started),message:'Gemini did not complete a valid test response. Check the server key, model, provider quota and connectivity.'};}
+  const b=z.strictObject({provider:z.enum(directProviderIds).optional()}).parse(r.body),selected=b.provider?directProviders.find(provider=>provider.id===b.provider):preferredProvider,providerId=b.provider??preferredDirectProviderId(directProviders);
+  if(!selected)return {status:'unconfigured',provider:providerId};
+  const started=performance.now();try{return {...await selected.healthCheck(AbortSignal.timeout(12000)),latencyMs:Math.round(performance.now()-started)};}catch{return {status:'unavailable',provider:selected.id,latencyMs:Math.round(performance.now()-started),message:'The AI provider did not complete a valid test response. Check the server key, model, provider quota and connectivity.'};}
  });
  const ai=new NarrativeGateway(game,providers);
- const intent=new IntentGateway(game,gemini?[gemini]:[],ai.inflight);
+ const intent=new IntentGateway(game,directProviders,ai.inflight);
  const timeline=(r:FastifyRequest)=>z.object({id}).parse(r.params).id;
  const bodyRevision=z.number().int().positive();
  const wrap=async(fn:()=>unknown)=>{try{return await fn();}catch(error){if(error instanceof Fault||error instanceof z.ZodError)throw error;if(error instanceof Error&&/^[a-z_]+$/.test(error.message))throw new Fault(400,error.message);throw error;}};
- app.get('/game/catalog',async r=>{actor(r);return {kinds,schemas:Object.fromEntries(kinds.map(k=>[k,z.toJSONSchema(dataSchemas[k])])),settings:z.toJSONSchema(settingsSchema),actions:actionSchema.options.map(option=>z.toJSONSchema(option)),simulationTiers,providers:providers.map(p=>p.id)};});
+ app.get('/game/catalog',async r=>{actor(r);return {kinds,schemas:Object.fromEntries(kinds.map(k=>[k,z.toJSONSchema(dataSchemas[k])])),settings:z.toJSONSchema(settingsSchema),actions:actionSchema.options.map(option=>z.toJSONSchema(option)),simulationTiers,providers:providers.map(p=>p.id),defaultProvider:preferredProvider?.id??'grounded'};});
  app.get('/game/campaigns/:id/timelines',async r=>(await game.list(actor(r),timeline(r))));
  app.post('/game/campaigns/:id/timelines',async r=>(await game.initialize(actor(r),timeline(r))));
  app.get('/game/timelines/:id/roster',async r=>(await game.roster(actor(r),timeline(r))));
@@ -105,11 +106,11 @@ export function gameRoutes(app:FastifyInstance,game:Game,actor:(r:object)=>Actor
   return wrap(async ()=>(await game.epistemic(actor(r),timeline(r),b.revision,b,key(r.headers))));
  });
  app.post('/game/timelines/:id/story/resolve',async r=>wrap(async()=>{
-  const b=z.strictObject({characterId:id,text:z.string().trim().min(1).max(1000),provider:z.enum(['grounded','gemini']).default('grounded')}).parse(r.body),a=actor(r),tid=timeline(r);
+  const b=z.strictObject({characterId:id,text:z.string().trim().min(1).max(1000),provider:z.enum(['grounded',...directProviderIds]).default('grounded')}).parse(r.body),a=actor(r),tid=timeline(r);
   await game.authorizeCharacter(a,tid,b.characterId);const state=await game.load(tid),direct=storyIntent(state,b.characterId,b.text);
   if(direct)return {action:direct};
   let interpretationWarning:string|undefined;
-  if(b.provider==='gemini'&&!/\b(?:don't|didn't|doesn't|never|not|would|could|might|if|consider|remember)\b|\?/i.test(b.text)){
+  if(b.provider!=='grounded'&&!/\b(?:don't|didn't|doesn't|never|not|would|could|might|if|consider|remember)\b|\?/i.test(b.text)){
    try{const proposal=await intent.propose(a,tid,b.characterId,b.text,b.provider);if(proposal.action)return {action:proposal.action};}
    catch(error){if(!(error instanceof Error)||!['provider_unavailable','provider_circuit_open','narration_busy','context_limit','ai_budget_exceeded','ai_user_budget_exceeded'].includes(error.message))throw error;interpretationWarning='AI interpretation is unavailable or its allowance is exhausted. Only recognized actions can change the world.';}
   }
@@ -118,7 +119,7 @@ export function gameRoutes(app:FastifyInstance,game:Game,actor:(r:object)=>Actor
   return {action:{type:'story',text:b.text},...(interpretationWarning?{interpretationWarning}:{})};
  }));
  app.post('/game/timelines/:id/parse',async r=>{const b=z.strictObject({characterId:id,text:z.string().min(1).max(1000)}).parse(r.body);return wrap(async ()=>(await game.parse(actor(r),timeline(r),b.characterId,b.text)));});
- app.post('/game/timelines/:id/interpret',async r=>{const b=z.strictObject({characterId:id,text:z.string().min(1).max(1000),provider:z.literal('gemini')}).parse(r.body);return intent.propose(actor(r),timeline(r),b.characterId,b.text,b.provider);});
+ app.post('/game/timelines/:id/interpret',async r=>{const b=z.strictObject({characterId:id,text:z.string().min(1).max(1000),provider:z.enum(directProviderIds)}).parse(r.body);return intent.propose(actor(r),timeline(r),b.characterId,b.text,b.provider);});
  app.post('/game/timelines/:id/turns',async r=>{const b=z.strictObject({revision:bodyRevision,cursor:z.string().min(16).max(128),characterId:id,action:actionSchema,text:z.string().max(1000).optional()}).parse(r.body);return wrap(async ()=>(await game.turn(actor(r),timeline(r),b,key(r.headers))));});
  app.post('/game/timelines/:id/narrate',async r=>{const b=z.strictObject({turnId:id,provider:z.string().max(100).default('grounded'),style:z.literal('story').optional()}).parse(r.body);return (await ai.narrate(actor(r),timeline(r),b.turnId,b.provider,undefined,b.style));});
  app.post('/game/timelines/:id/narrate/stream',async(r,reply)=>{

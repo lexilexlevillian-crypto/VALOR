@@ -8,7 +8,7 @@ try{
  const discovered=files.length?files:readdirSync(resolve('tests')).filter(file=>file.endsWith('.test.ts')).sort().map(file=>resolve('tests',file));
  let exitCode=0;
  for(const file of discovered){
-  const result=spawnSync(process.execPath,['--test','--test-concurrency=1',file],{stdio:'inherit',env:{...process.env,TMP:root,TEMP:root,TMPDIR:root,VALOR_TEST_ROOT:root,GEMINI_API_KEY:'',GOOGLE_API_KEY:'',AI_GATEWAY_URL:'',AI_GATEWAY_SECRET:''}});
+  const result=spawnSync(process.execPath,['--test','--test-concurrency=1',file],{stdio:'inherit',env:{...process.env,TMP:root,TEMP:root,TMPDIR:root,VALOR_TEST_ROOT:root,AI_PROVIDER:'',DEEPINFRA_API_KEY:'',DEEPINFRA_TOKEN:'',GEMINI_API_KEY:'',GOOGLE_API_KEY:'',AI_GATEWAY_URL:'',AI_GATEWAY_SECRET:''}});
   if((result.status??1)!==0)exitCode=result.status??1;
  }
  process.exitCode=exitCode;

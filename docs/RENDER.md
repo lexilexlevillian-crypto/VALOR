@@ -48,9 +48,9 @@ For a new game, no import is needed. Startup creates the schema. Provision the f
 
 Back up from that operator computer with `npm run backup -- ./backups/valor-UNIQUE.sqlite` and protect the result off-host. A backup inside Render's ephemeral filesystem is not durable. See [operations](OPERATIONS.md) for restore rehearsals.
 
-## Optional Gemini narration
+## Optional AI narration
 
-Keep your existing API key private in Render as `GEMINI_API_KEY` or `GOOGLE_API_KEY`. `GEMINI_MODEL` optionally selects a model; see [Gemini setup and limits](SYSTEMS_EXPANSION.md). Never copy the real key into source or chat. Both campaign and user AI budgets default to zero and must be deliberately configured in Settings before paid requests are allowed. Chronicle selects Gemini automatically when configured, with a grounded opt-out and failure fallback. The server currently accepts only ordering of approved fragments, not arbitrary generated prose.
+Keep the DeepInfra token private in Render as `DEEPINFRA_API_KEY` or `DEEPINFRA_TOKEN`. The default model is `deepseek-ai/DeepSeek-V4-Pro`; override it with `DEEPINFRA_MODEL` only when using another exact DeepInfra model ID. Set `AI_PROVIDER=deepinfra` when multiple direct providers are configured. Existing `GEMINI_API_KEY`/`GOOGLE_API_KEY` support remains available. Never copy a real key into source or chat. Both campaign and user AI budgets default to zero and must be deliberately configured in Settings before paid requests are allowed. Chronicle selects the configured provider automatically, with a grounded opt-out and failure fallback.
 
 ## Deployment acceptance
 
@@ -62,4 +62,4 @@ Keep your existing API key private in Render as `GEMINI_API_KEY` or `GOOGLE_API_
 
 Free Render services can sleep and have usage limits; local files are ephemeral, and free instances do not provide shell access. That is why account provisioning and backups run from a trusted computer connected to Turso. See [free-service limitations](https://render.com/docs/free). External database persistence does not guarantee unlimited free hosting or production-grade availability.
 
-No live credentials, service settings or paid resources were changed by this implementation. Code pushes to the configured branch automatically deploy and apply awaited forward migrations. Public health/deploy checks do not substitute for authenticated account/save persistence, remote restore rehearsal or real Gemini usage acceptance.
+No live credentials, service settings or paid resources were changed by this implementation. Code pushes to the configured branch automatically deploy and apply awaited forward migrations. Public health/deploy checks do not substitute for authenticated account/save persistence, remote restore rehearsal or real provider usage acceptance.

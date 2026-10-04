@@ -1,20 +1,20 @@
-# Systems expansion and Gemini setup
+# Systems expansion and AI provider setup
 
 This is an implementation checkpoint, not a claim that all 18 systems are production-complete.
 
 Historical checkpoint: several gaps below were subsequently implemented in [LIFECYCLE_SYSTEMS.md](LIFECYCLE_SYSTEMS.md). Use that guide and IMPLEMENTATION_STATUS.md for the current feature and acceptance matrix.
 
-## Gemini on the existing Render service
+## DeepInfra and Gemini on the existing Render service
 
-VALOR reads `GEMINI_API_KEY` (preferred) or `GOOGLE_API_KEY` from the server environment. If the key is already in Render under either name, do not copy it into source or chat. `GEMINI_MODEL` selects the model; the default is `gemini-3.8-flash`. The client receives only the provider ID, never the key. The adapter uses Google's documented [GenerateContent structured-output API](https://ai.google.dev/gemini-api/docs/generate-content/structured-output?hl=en) and [model identifier](https://ai.google.dev/gemini-api/docs/models).
+VALOR reads `DEEPINFRA_API_KEY` (preferred) or `DEEPINFRA_TOKEN` from the server environment. `DEEPINFRA_MODEL` selects the model; the default is `deepseek-ai/DeepSeek-V4-Pro`. The adapter uses DeepInfra's OpenAI-compatible `/v1/openai/chat/completions` endpoint and JSON response mode. Existing Gemini configuration through `GEMINI_API_KEY` or `GOOGLE_API_KEY` remains supported. When both are configured, DeepInfra is preferred unless `AI_PROVIDER=gemini`. The client receives only provider IDs, never keys.
 
-In campaign Settings, set both `tokenBudget` and `userTokenBudget` above zero to permit external AI. These are conservative application allowances, not a currency limit or a claim about Google's billing. They default to zero. Gemini reserves request-byte-based input estimates plus the output cap for two attempts before sending anything; rejected or failed attempts are not refunded automatically.
+In campaign Settings, set both `tokenBudget` and `userTokenBudget` above zero to permit external AI. These are conservative application allowances, not a currency limit or a claim about provider billing. They default to zero. The selected provider reserves request-byte-based input estimates plus the output cap before sending anything; rejected or failed attempts are not refunded automatically.
 
-When available, Gemini is selected for new web-client turns. The user explicitly authorized automatically sending observer-permitted turn context to their Gemini account. Choose grounded in Chronicle to opt out for that session. The simulation commits first; provider failure or exhausted budgets retain grounded narration without replaying mechanics. Rebuild narration can also be requested explicitly for an existing turn.
+When available, the preferred direct provider is selected for new web-client turns. Choose grounded in Chronicle to opt out for that session. The simulation commits first; provider failure or exhausted budgets retain grounded narration without replaying mechanics. Rebuild narration can also be requested explicitly for an existing turn.
 
-Important current boundary: grounded narration still orders source-verified simulation fragments by default. Creator may opt into source-anchored prose: Gemini returns paragraphs with source IDs, every committed simulation fragment must be covered, protected player dialogue must be preserved exactly, and invalid output falls back to grounded text. The model still cannot author canonical facts, mechanics, consent, feelings or voluntary actions. Observer context includes bounded, source-labeled known facts, beliefs, memories and lore; deterministic local semantic retrieval supplements authored vectors. Structured provider output is checked locally before text is committed or streamed. HTTP paragraph streaming begins only after validation, not with unvalidated model tokens.
+Important current boundary: grounded narration still orders source-verified simulation fragments by default. Creator may opt into source-anchored prose: the provider returns paragraphs with source IDs, every committed simulation fragment must be covered, protected player dialogue must be preserved exactly, and invalid output falls back to grounded text. The model still cannot author canonical facts, mechanics, consent, feelings or voluntary actions. Observer context includes bounded, source-labeled known facts, beliefs, memories and lore; deterministic local semantic retrieval supplements authored vectors. Structured provider output is checked locally before text is committed or streamed. HTTP paragraph streaming begins only after validation, not with unvalidated model tokens.
 
-No live Gemini request, Render environment change, or live database access was used to develop these changes. Transport tests are mocked, and the test runner clears inherited AI credentials. Live key/model access still needs a deployment check.
+No live provider request, Render environment change, or live database access was used to develop these changes. Transport tests are mocked, and the test runner clears inherited AI credentials. Live key/model access still needs a deployment check.
 
 ## Delivered features
 
@@ -44,4 +44,4 @@ New record types, fields and actions are exposed through Creator forms and the e
 
 Rich generative narration and language-model intent proposals need a separately tested agency/continuity design. Full NPC travel and segmentation-invariant planning, complex family/economic relationship consequences, media assets, EMS/estate/funeral flows, detailed traffic/chases, supply/production economics, optional reproductive-health simulation, police dispatch/court sentencing, broad authored quest branches/AI proposals, save compaction/version-upgrade tooling and advanced admin repair remain incomplete.
 
-Physical Safari/VoiceOver testing, a multi-day soak, independent privacy/security review, live Turso/Gemini/Render restart acceptance, off-host backup scheduling and external monitoring are not certified by local tests. No new paid resources were provisioned. See IMPLEMENTATION_STATUS.md for the per-system matrix.
+Physical Safari/VoiceOver testing, a multi-day soak, independent privacy/security review, live Turso/provider/Render restart acceptance, off-host backup scheduling and external monitoring are not certified by local tests. No new paid resources were provisioned. See IMPLEMENTATION_STATUS.md for the per-system matrix.

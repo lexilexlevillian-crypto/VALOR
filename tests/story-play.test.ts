@@ -77,12 +77,12 @@ test('story narration uses the real Gemini adapter contract within a 2000-token 
  }finally{await f.close();}
 });
 
-test('Gemini health endpoint is authenticated, role checked, and secret-free',async()=>{
+test('AI health endpoint is authenticated, role checked, and secret-free',async()=>{
  const f=await fixture();
  try{
   assert.equal((await f.app.inject({method:'POST',url:'/game/ai/health',headers:{origin:f.settings.origin},payload:{}})).statusCode,401);
   const player=await login(f,'player@example.test'),creator=await login(f);
   const request=(auth:typeof player)=>f.app.inject({method:'POST',url:'/game/ai/health',headers:{origin:f.settings.origin,cookie:auth.cookie,'x-csrf-token':auth.csrf},payload:{}});
-  assert.equal((await request(player)).statusCode,403);assert.deepEqual((await request(creator)).json(),{status:'unconfigured',provider:'gemini'});
+  assert.equal((await request(player)).statusCode,403);assert.deepEqual((await request(creator)).json(),{status:'unconfigured',provider:'deepinfra'});
  }finally{await f.close();}
 });

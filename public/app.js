@@ -115,7 +115,7 @@ async function render(){
  if(!S.character)return roster();
  S.view=await api(endpoint('view')+'?characterId='+S.character.id);
  if(!S.catalog)S.catalog=await api('/game/catalog');
- if(!S.narrator){const saved=stored('valor.narrator.'+S.user.id,'');S.narrator=S.catalog.providers.includes(saved)?saved:S.catalog.providers.includes('gemini')?'gemini':'grounded';}
+ if(!S.narrator){const saved=stored('valor.narrator.'+S.user.id,''),preferred=S.catalog.defaultProvider??(S.catalog.providers.includes('deepinfra')?'deepinfra':S.catalog.providers.includes('gemini')?'gemini':'grounded');S.narrator=S.catalog.providers.includes(saved)?saved:preferred;}
  if(S.page==='Chronicle')return chronicle();
  if(S.page==='Phone Home')return frame($('div',{}));
  if(S.page==='Relationships')return relationshipsScreen();
@@ -253,7 +253,7 @@ function chronicleContent(){
   submit:(text,status)=>run(async()=>{
    try{
     status.textContent='Reading your story…';
-    const resolved=await api(endpoint('story/resolve'),{characterId:S.character.id,text,provider:S.narrator==='gemini'?'gemini':'grounded'});
+    const resolved=await api(endpoint('story/resolve'),{characterId:S.character.id,text,provider:S.narrator??'grounded'});
     if(!resolved.action){status.textContent=resolved.clarification??'Which person or place did you mean?';return;}
     if(resolved.interpretationWarning)notify(resolved.interpretationWarning);
     status.textContent='Saving the turn and writing its continuation…';
@@ -269,7 +269,7 @@ function chronicle(){
   const key='valor.opening.'+last.id;
   if(!sessionStored(key,'')){sessionSave(key,'requested');S.openingBusy=true;const status=document.querySelector('.composer-status');if(status)status.textContent='Writing the opening scene…';
    api(endpoint('narrate'),{turnId:last.id,provider:S.narrator,style:'story'}).then(result=>{
-    S.openingBusy=false;if(result.status==='grounded-fallback')notify('The opening was saved, but Gemini could not write it. You can retry from Story tools.');
+    S.openingBusy=false;if(result.status==='grounded-fallback')notify('The opening was saved, but the AI narrator could not write it. You can retry from Story tools.');
     if(S.page==='Chronicle'&&S.view.turns.at(-1)?.id===last.id)return render();
    }).catch(error=>{S.openingBusy=false;if(status?.isConnected)status.textContent='Opening saved. Narration unavailable: '+error.message;});
   }
@@ -805,11 +805,13 @@ async function settings(){
  content.append(panel('ACCESSIBILITY / INDEPENDENT OVERRIDE','Display safety',$('p',{},'These device-level controls sit above your saved palette. Emergency mode never replaces your account theme or the Creator recommendation.'),$('div',{class:'display-options'},field('Contrast override',accessibility),field('Show small decorative accents',decorations)),$('div',{class:'status-key','aria-label':'Status colors remain differentiated by label and color'},$('span',{},$('i',{style:'--key-color:var(--success)'}),'Success'),$('span',{},$('i',{style:'--key-color:var(--warning)'}),'Warning'),$('span',{},$('i',{style:'--key-color:var(--danger)'}),'Danger'))));
  content.append(panel('APPEARANCE / PALETTE','Choose your surface',$('p',{},'Choose a readable surface for your own account. Campaign restrictions are enforced by the server. Campaign recommendation: '+THEMES[policy.recommendedThemeId].label+'.'),themeChoices(S.theme,policy.allowedThemes,async id=>{const saved=await api('/me/theme',{themeId:id,expectedRevision:S.themeRevision});S.themeRevision=saved.revision;S.theme=applyTheme(id,policy.allowedThemes);await settings();})));
  content.append(backgroundControls());
- const narration=$('select',{},...S.catalog.providers.map(id=>$('option',{value:id,selected:id===S.narrator},id==='grounded'?'Grounded results (no AI calls)':id==='gemini'?'Gemini story narration':id)));
+ const providerName=id=>id==='deepinfra'?'DeepInfra · DeepSeek V4 Pro':id==='gemini'?'Google Gemini':id;
+ const narration=$('select',{},...S.catalog.providers.map(id=>$('option',{value:id,selected:id===S.narrator},id==='grounded'?'Grounded results (no AI calls)':providerName(id)+' story narration')));
  narration.addEventListener('change',()=>{S.narrator=narration.value;try{localStorage.setItem('valor.narrator.'+S.user.id,S.narrator);}catch{}});
- content.append(panel('STORY','Narration',field('Story narrator',narration),$('p',{},'Gemini writes third-person, past-tense continuations using your world’s AI allowance. Grounded mode keeps play available without sending your story to an AI provider.')));
+ content.append(panel('STORY','Narration',field('Story narrator',narration),$('p',{},'AI narration writes third-person, past-tense continuations using your world’s allowance. Grounded mode keeps play available without sending your story to an AI provider.')));
  if(!creatorRole){content.append($('section',{class:'empty'},$('h3',{},'Developer controls are not loaded.'),$('p',{},['creator','admin'].includes(S.campaign.role)?'Enter Developer Mode to load campaign policy, validation, and mutation tools. Player Mode keeps that state out of memory.':'Campaign settings are controlled by an authorized Creator.')));frame(content);return;}
- content.append(panel('AI CONNECTION','Gemini',button('Test Gemini connection',async()=>{const result=await api('/game/ai/health',{});notify(result.status==='ok'?'Gemini responded successfully in '+(result.latencyMs/1000).toFixed(1)+' seconds.':result.message??'Gemini is not configured on this server.');}),$('p',{},'Runs a small synthetic API test. No player story or secret key is shown.')));
+ const testProvider='deepinfra';
+ content.append(panel('AI CONNECTION','DeepSeek V4 Pro',button('Test DeepSeek connection',async()=>{const result=await api('/game/ai/health',{provider:testProvider});notify(result.status==='ok'?'DeepSeek V4 Pro responded successfully in '+(result.latencyMs/1000).toFixed(1)+' seconds.':result.message??'DeepSeek V4 Pro is not configured on this server.');}),$('p',{},'Runs a small synthetic DeepInfra API test. No player story or secret key is shown.')));
  const recommended=$('select',{},...THEME_IDS.map(id=>$('option',{value:id,selected:id===policy.recommendedThemeId},THEMES[id].label)));
  const allowedBox=$('div',{class:'theme-grid','aria-label':'Campaign allowed palettes'});
  for(const id of THEME_IDS){const checkbox=$('input',{type:'checkbox',checked:policy.allowedThemes.includes(id)});allowedBox.append(field(THEMES[id].label,checkbox));}
