@@ -1,3 +1,4 @@
+import {ensureCityAtlas} from './city-geography.ts';
 import {randomUUID} from 'node:crypto';
 import {validateEntity,data} from './model.ts';
 import type {State,Data,Entity} from './model.ts';
@@ -42,13 +43,14 @@ export function assignResidence(s:State,entity:Entity,previous?:Data<'character'
   const created=validateEntity({id:randomUUID(),kind:'location',name,visibility:ownerId?'owner':'campaign',data:{category,parentId,tags:[tag],ownerId,description:category==='room'?'Assigned residence. Rent and contracts are authored separately.':'Residential location.'}});s.entities.push(created);return created;
  };
  const city=s.entities.find(e=>e.kind==='location'&&!e.archived&&e.name==='Valor'&&e.data.category==='city')??make('Valor','city',null,'residence-city:Valor',null);
- const district=s.entities.find(e=>e.kind==='location'&&!e.archived&&e.name===plan.neighborhood&&e.data.category==='district')??make(plan.neighborhood,'district',city.id,'residence-district:'+plan.neighborhood,null);
+ const district=s.entities.find(e=>e.kind==='location'&&!e.archived&&e.name===plan.neighborhood&&['district','neighborhood'].includes(String(e.data.category)))??make(plan.neighborhood,'district',city.id,'residence-district:'+plan.neighborhood,null);
  const building=make(plan.name+' · Building 1','building',district.id,'residence-building:'+plan.neighborhood,null);
  const home=make(plan.name+' · Building 1 · Apartment '+apartment,'room',building.id,'residence-unit:'+plan.neighborhood+':'+apartment,entity.id);
  // Reassign a vacated unit without exposing the former occupant's private home.
  home.data.ownerId=entity.id;
  const connect=(from:Entity,to:Entity)=>{const d=data(from,'location');if(!d.exits.some(e=>e.to===to.id)){d.exits.push({to:to.id,minutes:1,modes:['walk'],locked:false,keyId:null,fare:0,interruption:null,terrainPenalty:0,trafficPenalty:0});from.data=d;}};
  connect(city,district);connect(district,city);connect(district,building);connect(building,district);connect(building,home);connect(home,building);
+ ensureCityAtlas(s);
  if(!previous||!c.locationId||c.locationId===previous.homeId)c.locationId=home.id;
  c.homeId=home.id;entity.data=c;
 }

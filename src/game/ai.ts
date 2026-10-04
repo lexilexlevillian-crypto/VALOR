@@ -1,3 +1,4 @@
+import {applyStoryAdditions,storyAdditionsSchema,storyScene,type StoryAddition} from './story-world.ts';
 import {randomUUID} from 'node:crypto';
 import {performance} from 'node:perf_hooks';
 import {z} from 'zod';
@@ -15,7 +16,7 @@ import {makeAiRequest,responseContract,untrustedDataInstruction,type AiProviderA
 import {TurnTraceRecorder,failureReason,persistTurnTrace} from './turn-pipeline.ts';
 
 export type NarrativeMode='grounded'|'anchored-prose';
-export type NarrativeContext={promptVersion:string;instructions:string;mode?:NarrativeMode;protectedIds?:string[];fragments:{id:string;text:string}[];dossier?:ReturnType<typeof contextBrief>};
+export type NarrativeContext={promptVersion:string;instructions:string;mode?:NarrativeMode;allowExpansion?:boolean;protectedIds?:string[];fragments:{id:string;text:string}[];dossier?:ReturnType<typeof contextBrief>};
 export interface NarrativeProvider {id:string;estimateInputTokens?(request:AiRequest):number;arrange?(context:NarrativeContext,signal:AbortSignal):Promise<unknown>;complete?(request:AiRequest,signal:AbortSignal):Promise<unknown>;identity?(purpose:AiPurpose):ModelIdentity;estimateTokens?(context:NarrativeContext):number;}
 export class GroundedProvider implements NarrativeProvider {
  id='grounded';
@@ -30,7 +31,7 @@ export class JsonGatewayProvider implements NarrativeProvider {
  complete(request:AiRequest,signal:AbortSignal){return this.adapter.complete(request,signal);}
 }
 const output=z.strictObject({order:z.array(z.uuid()).max(200)});
-const anchoredOutput=z.strictObject({paragraphs:z.array(z.strictObject({sourceIds:z.array(z.uuid()).min(1).max(50),text:z.string().min(1).max(4000)})).max(200)});
+const anchoredOutput=z.strictObject({additions:storyAdditionsSchema.optional(),paragraphs:z.array(z.strictObject({sourceIds:z.array(z.uuid()).min(1).max(50),text:z.string().min(1).max(4000)})).max(200)});
 export function validateAnchoredNarration(raw:unknown,context:NarrativeContext){
  const result=anchoredOutput.parse(raw),allowed=new Map(context.fragments.map(f=>[f.id,f.text])),used=new Set<string>();
  const paragraphs=result.paragraphs.map(paragraph=>{for(const id of paragraph.sourceIds){ensure(allowed.has(id),400,'invalid_narrative_sources');used.add(id);}return paragraph.text.trim();});
@@ -38,6 +39,7 @@ export function validateAnchoredNarration(raw:unknown,context:NarrativeContext){
  const narration=paragraphs.join('\n\n');
  for(const id of context.protectedIds??[]){const text=allowed.get(id);ensure(text!==undefined&&narration.includes(text),400,'player_dialogue_not_preserved');}
  let connective=narration;for(const text of allowed.values())connective=connective.replaceAll(text,'');
+ connective=connective.replace(/["“][^"”]*["”]/g,'');
  ensure(!/\b(?:you|your|yourself|i|we|our)\b/i.test(connective),400,'player_agency_violation');
  ensure(Buffer.byteLength(narration)<=24000,400,'narration_too_large');return narration;
 }
@@ -55,7 +57,7 @@ export function validateNarration(raw:unknown,context:NarrativeContext){
  return result.order.map(id=>context.fragments.find(f=>f.id===id)!.text).join('\n\n');
 }
 const narrativeJsonSchema=(context:NarrativeContext):Record<string,unknown>=>context.mode==='anchored-prose'?{
- type:'object',properties:{paragraphs:{type:'array',maxItems:200,items:{type:'object',properties:{sourceIds:{type:'array',items:{type:'string'},minItems:1,maxItems:50},text:{type:'string',maxLength:4000}},required:['sourceIds','text'],additionalProperties:false}}},required:['paragraphs'],additionalProperties:false
+ type:'object',properties:{additions:{type:'array',maxItems:context.allowExpansion?3:0,items:{type:'object',properties:{kind:{type:'string',enum:['npc','street','place','detail']},name:{type:'string',minLength:2,maxLength:80},description:{type:'string',minLength:1,maxLength:600}},required:['kind','name','description'],additionalProperties:false}},paragraphs:{type:'array',maxItems:200,items:{type:'object',properties:{sourceIds:{type:'array',items:{type:'string'},minItems:1,maxItems:50},text:{type:'string',maxLength:4000}},required:['sourceIds','text'],additionalProperties:false}}},required:['paragraphs'],additionalProperties:false
 }:{type:'object',properties:{order:{type:'array',items:{type:'string'},minItems:context.fragments.length,maxItems:context.fragments.length}},required:['order'],additionalProperties:false};
 
 export class NarrativeGateway {
@@ -71,17 +73,23 @@ export class NarrativeGateway {
  async narrate(actor:Actor,timelineId:string,turnId:string,providerId='grounded',externalSignal?:AbortSignal,style?:'story'){
   if(externalSignal?.aborted)throw new Error('narration_canceled');
   const {t}=await this.game.access(actor,timelineId);
-  const turn=await this.game.store.get<{user_id:string;character_id:string;input_text:string;permitted_json:string;narration:string}>('SELECT * FROM story_turns WHERE id=? AND timeline_id=?',turnId,timelineId);
+  const turn=await this.game.store.get<{user_id:string;character_id:string;input_text:string;permitted_json:string;narration:string;narration_status:string}>('SELECT * FROM story_turns WHERE id=? AND timeline_id=?',turnId,timelineId);
   ensure(turn&&turn.user_id===actor.id,404,'turn_unavailable');await this.game.authorizeCharacter(actor,timelineId,turn.character_id);
   const parentTrace=await this.game.store.get<{trace_id:string}>('SELECT trace_id FROM turn_traces WHERE event_id=? AND timeline_id=?',turnId,timelineId),turnTrace=parentTrace?new TurnTraceRecorder(parentTrace.trace_id):undefined,contextStarted=performance.now();
   const provider=this.providers.get(providerId);ensure(provider,400,'provider_unavailable');const s=await this.game.load(timelineId),effects=JSON.parse(turn.permitted_json) as Effect[],mode=style==='story'?'anchored-prose':s.settings.narrationMode,prompt=mode==='anchored-prose'?anchoredNarrationPrompt:narrationPrompt;
-  const context:NarrativeContext={promptVersion:prompt.version,instructions:prompt.instructions,mode,protectedIds:effects.filter(f=>f.type==='player.dialogue'&&f.subjectId===turn.character_id).map(f=>f.id),fragments:effects.map(f=>({id:f.id,text:f.text}))};
+  const latest=await this.game.store.get<{id:string}>('SELECT id FROM story_turns WHERE timeline_id=? ORDER BY rowid DESC LIMIT 1',timelineId);
+  const allowExpansion=style==='story'&&providerId!=='grounded'&&latest?.id===turnId&&turn.narration_status!=='validated'&&!await this.game.store.get('SELECT timeline_id FROM shared_world WHERE timeline_id=?',timelineId);
+  let additions:StoryAddition[]=[];
+  const context:NarrativeContext={allowExpansion,promptVersion:prompt.version,instructions:prompt.instructions,mode,protectedIds:effects.filter(f=>f.type==='player.dialogue'&&f.subjectId===turn.character_id).map(f=>f.id),fragments:effects.map(f=>({id:f.id,text:f.text}))};
   const recent=(await this.game.store.all<{id:string;input_text:string;narration:string}>('SELECT id,input_text,narration FROM story_turns WHERE timeline_id=? AND character_id=? AND id<>? ORDER BY rowid DESC LIMIT 8',timelineId,turn.character_id,turnId)).reverse().map(row=>({id:row.id,input:row.input_text,narration:row.narration}));
+  const scene=storyScene(s,turn.character_id),sceneText=JSON.stringify(scene),compactSceneText=JSON.stringify({...scene,people:scene.people.map(p=>({name:p.name})),details:[],knownNames:[],place:scene.place?{...scene.place,description:''}:null});
+  if(style==='story')context.instructions+=' '+(allowExpansion?'Up to 3 additions {kind,name,description}: npc (adult bystander here only if allowNewPeople), street/place (public outdoors only), detail (mundane lasting scene fact). Register every new named person/place or lasting fact; reuse existing ones. No invented grants, money, injuries, permissions or major canon.':'additions must be []; rewrite only, no new lasting facts.')+' Untrusted scene: '+sceneText;
   const contextBytes=s.settings.contextTokens*(style==='story'?2:1),envelopeBytes=style==='story'?1536+Buffer.byteLength(turn.input_text):528;
   const preliminaryRoom=contextBytes-Buffer.byteLength(JSON.stringify(context))-envelopeBytes,manifest=buildContextManifest(s,turn.character_id,'',{maxTokens:Math.max(64,Math.floor(Math.max(preliminaryRoom,256)/4)),currentEvents:effects,recentConversation:recent});
   if(style==='story')manifest.controls.pov='third-person-limited';
   context.instructions+=' Validated narrative controls: POV '+manifest.controls.pov+'; pacing '+manifest.controls.pacing+'; tone '+manifest.controls.tone+'; tension '+manifest.controls.tension+'; spotlight '+manifest.controls.spotlightId+'; excluded content '+JSON.stringify(manifest.controls.safety.excludedContent)+'. Server truth, player agency, and consent remain mandatory.';
   const room=contextBytes-Buffer.byteLength(JSON.stringify(context))-envelopeBytes;if(room>=256)context.dossier=contextBrief(s,turn.character_id,'',Math.min(room,2000),{currentEvents:effects,recentConversation:recent});
+  if(style==='story'&&Math.ceil(Buffer.byteLength(JSON.stringify(context))/2)+512>s.settings.contextTokens){delete context.dossier;context.instructions=context.instructions.replace(sceneText,compactSceneText);}
   const contextSize=Math.ceil(Buffer.byteLength(JSON.stringify(context))/(style==='story'?2:1))+512;ensure(contextSize<=s.settings.contextTokens,400,'context_limit');
   let estimated=provider.estimateTokens?.(context)??contextSize;ensure(!this.inflight.has(timelineId),409,'narration_busy');
   const failure=this.failures.get(providerId);ensure(!failure||failure.until<Date.now(),503,'provider_circuit_open');
@@ -95,6 +103,7 @@ export class NarrativeGateway {
   if(style==='story'&&provider.estimateInputTokens){
    // Trim optional background before sacrificing required event sources or exceeding the allowance.
    if(provider.estimateInputTokens(request)>request.budget.maxInputTokens&&context.dossier){delete context.dossier;request.context.provenance=request.context.provenance.filter(entry=>entry.id!=='dossier');}
+   if(provider.estimateInputTokens(request)>request.budget.maxInputTokens)request.prompt.instructions=request.prompt.instructions.replace(sceneText,compactSceneText);
    const inputTokens=provider.estimateInputTokens(request);ensure(inputTokens<=request.budget.maxInputTokens,400,'context_limit');estimated=request.budget.maxInputTokens+request.budget.maxOutputTokens;
   }
   turnTrace?.mark('context-build','succeeded',{eventId:turnId,manifestIncluded:context.dossier!==undefined},undefined,performance.now()-contextStarted);
@@ -107,14 +116,14 @@ export class NarrativeGateway {
     if(providerId!=='grounded'){ensure(used+estimated*request.budget.maxAttempts<=current.settings.tokenBudget,429,'ai_budget_exceeded');ensure(userUsed+estimated*request.budget.maxAttempts<=current.settings.userTokenBudget,429,'ai_user_budget_exceeded');}
     await this.game.store.run('INSERT INTO ai_usage (id,timeline_id,user_id,turn_id,provider,reserved_tokens,used_tokens,status,created_at) VALUES (?,?,?,?,?,?,?,?,?)',traceId,timelineId,actor.id,turnId,providerId,providerId==='grounded'?0:estimated*request.budget.maxAttempts,0,'pending',new Date().toISOString());
    });
-   const repetition=new RepetitionTracker(recent.map(row=>row.narration)),execute=()=>this.runtime.execute({request,validate:raw=>{const narration=validateNarration(raw,context);if(style==='story')validateStoryVoice(narration,context);const review=reviewNarrativeOutput(narration,manifest.controls,repetition,context.fragments.map(fragment=>fragment.text),effects);ensure(review.accepted,400,'narrative_control_retry');return narration;},fallback:()=>turn.narration,signal:externalSignal,toolAuthorization:{narrativeSourceIds:new Set(context.fragments.map(fragment=>fragment.id))}}),result=turnTrace?await turnTrace.run('narration-attempts',execute,{eventId:turnId,retryScope:'narration-only',mechanicsRerolled:false}):await execute();
+   const repetition=new RepetitionTracker(recent.map(row=>row.narration)),execute=()=>this.runtime.execute({request,validate:raw=>{const narration=validateNarration(raw,context);additions=mode==='anchored-prose'?anchoredOutput.parse(raw).additions??[]:[];ensure(allowExpansion||additions.length===0,400,'story_retry_cannot_expand');if(additions.length)applyStoryAdditions(structuredClone(s),turn.character_id,turnId,additions);if(style==='story')validateStoryVoice(narration,context);const review=reviewNarrativeOutput(narration,manifest.controls,repetition,context.fragments.map(fragment=>fragment.text),effects);ensure(review.accepted,400,'narrative_control_retry');return narration;},fallback:()=>turn.narration,signal:externalSignal,toolAuthorization:{narrativeSourceIds:new Set(context.fragments.map(fragment=>fragment.id))}}),result=turnTrace?await turnTrace.run('narration-attempts',execute,{eventId:turnId,retryScope:'narration-only',mechanicsRerolled:false}):await execute();
    turnTrace?.mark('output-validation',result.status==='fallback'?'fallback':'succeeded',{eventId:turnId,attempts:result.attempts,sameEventBundle:true,mechanicsRerolled:false},result.failureReason);
    if(result.status==='fallback'){
     const prior=this.failures.get(providerId)?.count??0;this.failures.set(providerId,{count:prior+1,until:prior>=2?Date.now()+60000:0});await this.game.store.run('UPDATE ai_usage SET status=? WHERE id=?','failed',traceId);
     if(turnTrace)await persistTurnTrace(this.game.store,turnTrace.traceId,turnTrace.steps,'fallback',turnId,result.failureReason);
     return {narration:turn.narration,status:'grounded-fallback',promptVersion:context.promptVersion,traceId,fallbackMessage:result.fallbackMessage,recovery:{mechanicsPreserved:true,rerolled:false,message:'Narration assistance failed. The committed deterministic result is unchanged.'}};
    }
-   const commitNarration=()=>this.game.store.transaction(async()=>{await this.game.authorizeCharacter(actor,timelineId,turn.character_id);ensure(!externalSignal?.aborted,409,'narration_canceled');await this.game.store.run('UPDATE story_turns SET narration=?,narration_status=?,prompt_version=? WHERE id=?',result.output,'validated',context.promptVersion,turnId);await this.game.store.run('UPDATE ai_usage SET used_tokens=?,status=? WHERE id=?',providerId==='grounded'?0:result.usage.inputTokens+result.usage.outputTokens,'succeeded',traceId);});
+   const commitNarration=()=>this.game.store.transaction(async()=>{await this.game.authorizeCharacter(actor,timelineId,turn.character_id);ensure(!externalSignal?.aborted,409,'narration_canceled');if(additions.length)await this.game.expandStory(actor,timelineId,t.revision,turnId,turn.character_id,additions,result.output,context.promptVersion);await this.game.store.run('UPDATE story_turns SET narration=?,narration_status=?,prompt_version=? WHERE id=?',result.output,providerId==='grounded'?'grounded':'validated',context.promptVersion,turnId);await this.game.store.run('UPDATE ai_usage SET used_tokens=?,status=? WHERE id=?',providerId==='grounded'?0:result.usage.inputTokens+result.usage.outputTokens,'succeeded',traceId);});
    if(turnTrace)await turnTrace.run('narration-commit',commitNarration,{eventId:turnId,mechanicsChanged:false});else await commitNarration();
    if(turnTrace)await persistTurnTrace(this.game.store,turnTrace.traceId,turnTrace.steps,'validated',turnId);
    this.failures.delete(providerId);return {narration:result.output,status:'validated',promptVersion:context.promptVersion,traceId,recovery:{mechanicsPreserved:true,rerolled:false}};

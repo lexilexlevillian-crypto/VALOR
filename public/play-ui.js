@@ -2,14 +2,16 @@
 export function chronicleSurface({$,button,S,formatMoment,draft,saveDraft,submit,rebuild,openRoster,loadDeathBranch}){
  const view=S.view,pc=view.entities.find(e=>e.id===S.character.id),location=view.entities.find(e=>e.id===pc?.data.locationId);
  const root=$('section',{class:'story-strip','aria-label':'Chronicle transcript'},$('div',{class:'story-heading'},$('h1',{},'Chronicle'),$('span',{},location?.name??'Valor'),$('time',{datetime:view.clock},formatMoment(view.clock))));
- const transcript=$('div',{class:'story-text'});
+ const actionNames=new Set(['start.character','look','story','wait','say',...(S.catalog?.actions??[]).map(schema=>schema.properties?.type?.const)]);
+ const transcript=$('div',{class:'story-text'}),systemRows=[];let latestNarrative=null;
  for(const [index,turn] of view.turns.entries()){
-  const text=$('div',{class:'prose turn-narrative'},turn.narration),status=$('p',{class:'turn-status',role:'status'}),retry=$('button',{type:'button'},'Rebuild narration without rerolling'),cancel=$('button',{type:'button',hidden:true},'Cancel rebuild');
-  retry.addEventListener('click',()=>rebuild(turn,text,{value:S.narrator},retry,cancel,status));cancel.addEventListener('click',()=>S.streamController?.abort());
-  const tools=$('details',{class:'story-tools'},$('summary',{},'Story tools'),$('div',{class:'turn-controls'},retry,cancel));
-  if(turn.notices?.length)tools.append($('ul',{},...turn.notices.map(n=>$('li',{},n.label+': '+n.detail))));
-  const input=turn.input_text&&!['start.character','look','story','wait','say'].includes(turn.input_text)?$('p',{class:'story-input'},turn.input_text):null;
-  transcript.append($('article',{class:'turn','aria-label':'Story turn '+(index+1)},input,text,tools,status));
+  const generated=turn.narration_status==='validated',lines=String(turn.narration??'').split('\n'),systemLine=line=>/^(?:Arrival:|Arrived at\b|Picked up\b|Phone call\b|Time advanced\b|Items? (?:acquired|removed):|The action resolved\b|No observer-visible\b)/i.test(line.trim()),prose=lines.filter(line=>!systemLine(line)).join('\n');
+  if(generated)for(const line of lines.filter(systemLine))systemRows.push($('li',{},'Turn '+(index+1)+' · '+line));
+  const text=$('div',{class:'prose turn-narrative'},generated?prose:''),status=$('p',{class:'turn-status',role:'status'});latestNarrative=text;
+  if(!generated&&turn.narration)systemRows.push($('li',{},'Turn '+(index+1)+' · '+turn.narration));
+  for(const notice of turn.notices??[])systemRows.push($('li',{},'Turn '+(index+1)+' · '+notice.label+': '+notice.detail));
+  const input=turn.input_text&&!actionNames.has(turn.input_text)?$('p',{class:'story-input'},turn.input_text):null;
+  transcript.append($('article',{class:'turn','aria-label':'Story turn '+(index+1)},input,text,status));
  }
  if(!view.turns.length)transcript.append($('p',{class:'story-empty'},'A new life waited in Valor. Write what happened next.'));
  root.append(transcript);
@@ -19,13 +21,20 @@ export function chronicleSurface({$,button,S,formatMoment,draft,saveDraft,submit
  const composer=$('textarea',{id:'chronicle-action',maxlength:1000,rows:3,placeholder:'Continue the story… actions, dialogue, anything that happened next.','aria-describedby':'story-help'});
  composer.value=draft();composer.addEventListener('input',()=>saveDraft(composer.value));
  const status=$('p',{class:'composer-status',role:'status','aria-live':'polite'}),send=$('button',{type:'submit',class:'primary',disabled:!S.online},'Continue ↗');
+ const retry=$('button',{type:'button',disabled:!S.online||!view.turns.length,title:'Rewrite the latest response without changing outcomes or creating duplicates'},'Retry'),cancel=$('button',{type:'button',hidden:true},'Cancel');
+ retry.addEventListener('click',async()=>{if(S.busy||S.openingBusy||send.disabled)return;send.disabled=true;try{await rebuild(view.turns.at(-1),latestNarrative,{value:S.narrator},retry,cancel,status);}finally{send.disabled=!S.online;}});cancel.addEventListener('click',()=>S.streamController?.abort());
  const form=$('form',{class:'composer story-composer',onsubmit:async e=>{
-  e.preventDefault();if(S.busy||S.openingBusy||send.disabled||!composer.value.trim())return;
-  send.disabled=true;status.textContent='Continuing the story…';
-  try{await submit(composer.value,status);}finally{if(send.isConnected)send.disabled=!S.online;}
- }},$('label',{for:'chronicle-action',class:'sr-only'},'Continue the story'),composer,$('div',{class:'story-compose-footer'},$('small',{id:'story-help'},'Enter to continue · Shift + Enter for a new line'),send),status);
+  e.preventDefault();if(send.disabled||S.storyQueued||!composer.value.trim())return;
+  const passage=composer.value,characterId=S.character.id,timelineId=S.timeline.id,deadline=Date.now()+15000;
+  S.storyQueued=true;send.disabled=true;status.textContent='Continuing the story…';
+  try{while(S.busy||S.openingBusy||S.streamController){status.textContent='Finishing the previous operation…';if(Date.now()>deadline){status.textContent='Still busy. Your draft is saved; try Continue again shortly.';return;}await new Promise(resolve=>setTimeout(resolve,50));}
+   if(S.character?.id!==characterId||S.timeline?.id!==timelineId||S.page!=='Chronicle')return;
+   await submit(passage,status);
+  }finally{S.storyQueued=false;if(send.isConnected)send.disabled=!S.online;}
+ }},$('label',{for:'chronicle-action',class:'sr-only'},'Continue the story'),composer,$('div',{class:'story-compose-footer'},$('small',{id:'story-help'},'Enter to continue · Shift + Enter for a new line'),$('div',{class:'story-actions'},retry,cancel,send)),status);
  composer.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();form.requestSubmit();}});
- root.append(form);return root;
+ const log=$('details',{class:'story-system-log'},$('summary',{},'Game updates · time, items & calls'),systemRows.length?$('ul',{},...systemRows):$('p',{},'No game updates yet.'));log.open=Boolean(S.showSystemLog);log.addEventListener('toggle',()=>{S.showSystemLog=log.open;});
+ root.append(form,log);return root;
 }
 export const phoneApps=[
  ['Character','My character','person'],['Health','Health','heart'],['Inventory','Inventory','bag'],['Journal / Cases','Journal','journal'],

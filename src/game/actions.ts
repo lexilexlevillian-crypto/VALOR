@@ -1,3 +1,4 @@
+import {ensureCityAtlas,mappedRoute} from './city-geography.ts';
 import {randomUUID} from 'node:crypto';
 import {data,getEntity} from './model.ts';
 import type {Action,Data,Entity,State} from './model.ts';
@@ -28,6 +29,7 @@ import {correctRumor,spreadRumor} from './factions.ts';
 import {applyEventAction} from './events.ts';
 const assert=(ok:unknown,code:string)=>{if(!ok)throw new Error(code);};
 export function resolveAction(s:State,actorId:string,action:Action,eventId:string,seed:string){
+ ensureCityAtlas(s);
  enforceActionPolicy(s,action);
  const actor=getEntity(s,actorId,'character');let pc=data(actor,'character');const effects:Effect[]=[];
  const rng=randomSource(seed);let minutes=0;let arrivalId:string|null=null;
@@ -116,7 +118,7 @@ export function resolveAction(s:State,actorId:string,action:Action,eventId:strin
  };
  const vehicleEvidence=(vehicle:Entity,name:string,description:string)=>add(s,'evidence',name,{description,medium:'trace',evidenceType:'vehicle',locationId:pc.locationId,sourceLocationId:pc.locationId,sourceAt:s.clock,objectId:vehicle.id,sourceEventId:eventId,discoveredBy:[actorId]},'knowledge');
  switch(action.type){
- case 'story':say(actor.name+' remained in the current scene. No new possession, movement, or mechanical outcome was established by this passage.','story.continued');break;
+ case 'story':say(actor.name+' remained nearby as the moment passed.','story.continued');minutes=1;break;
  case 'event-action':{const authoredEvent=getEntity(s,action.eventId,'quest');assert(visible(s,authoredEvent,actorId),'event_unknown');applyEventAction(s,authoredEvent.id,actorId,{outcomeId:action.outcomeId,actionTags:action.actionTags,reason:action.reason,causeEventId:eventId});say('Your action changes the situation: '+action.reason,'event.action',authoredEvent.id);minutes=1;break;}
  case 'look':{
   const place=pc.locationId?getEntity(s,pc.locationId,'location'):null;
@@ -177,7 +179,7 @@ export function resolveAction(s:State,actorId:string,action:Action,eventId:strin
   const location=data(getEntity(s,pc.locationId!,'location'),'location'),destination=getEntity(s,action.destinationId,'location');
   assert(visible(s,destination,actorId)||data(destination,'location').discoverable,'destination_unknown');
   const mode=action.type==='travel'?action.mode:'walk';
-  const transit=mode==='transit'||mode==='taxi'?transitOption(s,pc.locationId!,destination.id,mode):null,abstraction=action.type==='flee'?'exact':s.settings.campaign?.travelAbstraction??'route',exit=location.exits.find(e=>e.to===destination.id&&e.modes.includes(mode));
+  const transit=mode==='transit'||mode==='taxi'?transitOption(s,pc.locationId!,destination.id,mode):null,abstraction=action.type==='flee'?'exact':s.settings.campaign?.travelAbstraction??'route',authoredExit=location.exits.find(e=>e.to===destination.id&&e.modes.includes(mode)),mapped=!location.exits.some(e=>e.to===destination.id)&&action.type!=='flee'&&(mode==='walk'||mode==='drive')?mappedRoute(s,getEntity(s,pc.locationId!,'location'),destination,mode):null,exit=authoredExit??(mapped?{to:destination.id,minutes:mapped.minutes,modes:[mode],locked:false,keyId:null,fare:0,interruption:null,terrainPenalty:0,trafficPenalty:0,distanceKm:mapped.distanceKm,weatherPenalties:{}}:undefined);
   if(mode==='transit'||mode==='taxi')assert(transit&&visible(s,transit.service,actorId),'transport_service_unavailable');else if(abstraction!=='abstract')assert(exit,'route_unavailable');
   if(exit?.locked)assert(exit.keyId&&s.entities.some(e=>e.id===exit.keyId&&e.kind==='item'&&carriedBy(s,e,actorId)),'route_locked');
   const destinationData=data(destination,'location');assert(locationAllowed(destinationData),'destination_access_denied');

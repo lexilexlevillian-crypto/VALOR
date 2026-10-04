@@ -67,6 +67,7 @@ const vehicleRules=z.strictObject({fuelPerMinute:z.number().min(0).max(100).defa
 export const settingsSchema=z.strictObject({
  campaign:campaignConfigSchema.nullable().default(null),
  residencePlans:z.record(z.string().max(160),z.strictObject({floors:z.number().int().min(3).max(60),unitsPerFloor:z.number().int().min(2).max(40)})).default({}),
+ weatherSimulation:z.enum(['island-county','authored']).default('island-county'),
  needs:z.boolean().default(false),fuel:z.boolean().default(false),weather:z.enum(weatherTypes).default('clear'),narrationMode:z.enum(['grounded','anchored-prose']).default('grounded'),
  romance:z.boolean().default(false),intimacy:z.enum(matureContentModes).default('off'),
  intensity:z.enum(['restrained','grounded']).default('restrained'),difficulty:z.enum(['custom','narrative']).default('custom'),

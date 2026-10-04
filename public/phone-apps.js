@@ -1,3 +1,4 @@
+import {phoneMap} from './phone-map.js';
 import {skillStatus} from './creation-rules.js';
 // Dedicated phone screens. Inputs come only from authorized, observer-filtered APIs.
 export const nativePhonePages=new Set(['Character','Health','Inventory','Equipment','Journal / Cases','Jobs / Money','Relationships','Skills / Traits','Vehicles','Phone','Messages','Contacts','Weather','News','Map','Lore','Save / Load','Search / Loot','Settings','Mail','Photos','Social']);
@@ -32,7 +33,7 @@ export async function nativePhoneApp({$,S,api,endpoint,act,run,navigate,formatMo
  const rating=(label,value,max=100)=>$('div',{class:'mobile-rating'},row(human(label),String(value)), $('progress',{max:Math.max(max,Number(value)),value:Number(value),'aria-label':human(label)}));
  if(S.page==='Weather'){
   root.classList.add('mobile-weather');const weather=view.weather??{actual:view.settings.weather,forecast:[]},symbols={clear:'☀',rain:'☂',overcast:'☁',snow:'❄',fog:'≋'};
-  root.append(text(pc?.data.originNeighborhood||'Valor','weather-city'),$('div',{class:'weather-symbol','aria-hidden':'true'},symbols[weather.actual]??'☁'),$('h2',{},human(weather.actual)),text(formatMoment(view.clock),'weather-time'),heading('Forecast'),group(...list(weather.forecast??[],f=>row(formatMoment(f.at),human(f.weather)),'No forecast has been issued.')),text('In-game weather · Pacific time. Temperature is not tracked.'));return root;
+  root.append(text(pc?.data.originNeighborhood||'Valor','weather-city'),$('div',{class:'weather-symbol','aria-hidden':'true'},symbols[weather.actual]??'☁'),$('h2',{},human(weather.actual)),text(formatMoment(view.clock),'weather-time'),heading('Forecast'),group(...list(weather.forecast??[],f=>row(formatMoment(f.at),human(f.weather)),'No forecast has been issued.')),group(row('Temperature',weather.temperatureC==null?'Not recorded':Math.round(weather.temperatureC*9/5+32)+'°F · '+weather.temperatureC+'°C'),row('Wind',weather.windKph==null?'Not recorded':Math.round(weather.windKph/1.609)+' mph'),row('Sunrise / sunset',(weather.sunrise??'—')+' / '+(weather.sunset??'—'))),text((weather.source??'In-game weather')+' · Pacific time. Simulated, not live weather.'));return root;
  }
  if(['Phone','Messages','Contacts','Mail','Photos','Social','News'].includes(S.page)){
   const phone=await api(endpoint('phone')+'?characterId='+encodeURIComponent(S.character.id)),devices=phone.phones;
@@ -110,10 +111,7 @@ export async function nativePhoneApp({$,S,api,endpoint,act,run,navigate,formatMo
  if(S.page==='Journal / Cases'){
   root.classList.add('mobile-journal');root.append(heading('Notebook'),...list(view.journal??[],e=>$('details',{class:'journal-entry'},$('summary',{},e.name),text(e.premise,'mobile-body'),text(e.status),...e.objectives.map(o=>row(o.title,o.status)),...e.entries.map(n=>text(n.text,'mobile-body'))),'No journal entries yet.'),heading('Case files'),...list(view.caseFiles??[],e=>$('details',{class:'journal-entry'},$('summary',{},e.name),...['proven','discovered','suspected','rumored'].map(key=>group(heading(human(key)),...(e[key]??[]).map(n=>text(n.text,'mobile-body'))))),'No open case files.'),heading('Memories'),...(view.memories??[]).slice(-20).map(m=>text(m.text,'mobile-body')),heading('Beliefs'),...(view.beliefs??[]).map(b=>text(b.proposition,'mobile-body')));return root;
  }
- if(S.page==='Map'){
-  const current=entities.find(e=>e.id===pc.data.locationId),exits=new Set((current?.data.exits??[]).map(e=>e.to));root.classList.add('mobile-map');
-  root.append($('div',{class:'phone-map-canvas'},$('figure',{class:'phone-map-image'},$('img',{src:'/city-map.png',alt:'Map of Valor',width:960,height:1280}))),group(row('You are here',current?.name??'Unknown location')),heading('Directions'),group(...list(kind('location').filter(e=>exits.has(e.id)),e=>row(e.name,'Walk from your current location',()=>act({type:'travel',destinationId:e.id,mode:'walk',vehicleId:null})),'No known walking exits.')),heading('Known places'),group(...records(kind('location'))));return root;
- }
+ if(S.page==='Map'){root.append(phoneMap({$,view,pc,button,row,group,heading,text,act}));return root;}
  if(S.page==='Jobs / Money'){
   root.append($('header',{class:'wallet-balance'},text('CASH ON HAND'),$('h2',{},money(pc.data.cash))),heading('Accounts'),group(...kind('account').map(e=>row(e.name,money(e.data.balanceCents)))),heading('Work'),group(...records(kind('job'))),heading('Bills & rent'),group(...records([...kind('bill'),...kind('housing')])),heading('Receipts'),group(...records(kind('receipt'))));return root;
  }

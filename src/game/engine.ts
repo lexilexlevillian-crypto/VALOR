@@ -1,3 +1,5 @@
+import {syncWeather} from './island-weather.ts';
+import {applyStoryAdditions,type StoryAddition} from './story-world.ts';
 import {createHash,randomBytes,randomUUID} from 'node:crypto';
 import {z} from 'zod';
 import {Store} from '../db.ts';
@@ -129,7 +131,7 @@ export class Game {
   const beliefs=(await this.store.all<Record<string,unknown>>('SELECT * FROM character_beliefs WHERE timeline_id=?',id)).map(r=>beliefSchema.parse({id:r.id,observerId:r.observer_id,proposition:r.proposition,subjectId:r.subject_id,predicate:r.predicate,objectId:r.object_id,value:JSON.parse(String(r.value_json)),qualifiers:JSON.parse(String(r.qualifiers_json)),confidence:r.confidence,source:r.source,truthStatus:r.truth_status,audience:JSON.parse(String(r.audience_json)),observedAt:r.observed_at,validFrom:r.valid_from,validUntil:r.valid_until,eventIds:JSON.parse(String(r.event_ids_json)),evidenceIds:JSON.parse(String(r.evidence_ids_json)),tags:JSON.parse(String(r.tags_json)),at:r.updated_at,correctedBy:r.corrected_by}));
   const memories=(await this.store.all<Record<string,unknown>>('SELECT * FROM character_memories WHERE timeline_id=?',id)).map(r=>memorySchema.parse({id:r.id,observerId:r.observer_id,text:r.text,interpretation:r.interpretation,salience:r.salience,decayPerDay:r.decay_per_day,eventId:r.source_event_id,eventRefs:JSON.parse(String(r.event_refs_json)),at:r.created_at,private:!!r.private,privacy:r.privacy,recallConditions:JSON.parse(String(r.recall_conditions_json)),lastRefreshedAt:r.last_refreshed_at,refreshCount:r.refresh_count,expiresAt:r.expires_at,tags:JSON.parse(String(r.tags_json))}));
   const inherited=await this.store.get<{history_json:string}>('SELECT history_json FROM timeline_world_history WHERE timeline_id=?',id),currentEvents=await this.store.all<{id:string}>('SELECT id FROM game_events WHERE timeline_id=? ORDER BY revision',id),eventIds=[...new Set([...(inherited?JSON.parse(inherited.history_json).map((row:{eventId:string})=>row.eventId):[]),...currentEvents.map(row=>row.id)])];
-  return {canon:await this.canon(id),clock:t.clock,settings:settingsSchema.parse(JSON.parse(t.settings_json)),entities,facts,knowledge,beliefs,memories,eventIds};
+  const state={canon:await this.canon(id),clock:t.clock,settings:settingsSchema.parse(JSON.parse(t.settings_json)),entities,facts,knowledge,beliefs,memories,eventIds};syncWeather(state);return state;
   },'read');
  }
  async persist(id:string,s:State){
@@ -658,7 +660,20 @@ export class Game {
    if(input.layer==='refresh-memory'){const memory=s.memories.find(m=>m.id===input.recordId&&m.observerId===input.subjectId);ensure(memory,400,'memory_required');memory.at=s.clock;memory.lastRefreshedAt=s.clock;memory.refreshCount=(memory.refreshCount??0)+1;memory.salience=input.salience??memory.salience;memory.decayPerDay=input.decayPerDay??memory.decayPerDay;if(input.expiresAt!==undefined)memory.expiresAt=input.expiresAt;if(input.interpretation!==undefined)memory.interpretation=input.interpretation;recordId=memory.id;}
    return {result:{recordId}};
   }));
- } async turn(actor:Actor,id:string,input:{revision:number;characterId:string;action:Action;text?:string;cursor?:string},key:string){
+ }
+ async expandStory(actor:Actor,id:string,revision:number,turnId:string,characterId:string,additions:StoryAddition[],narration:string,promptVersion:string){
+  await this.authorizeCharacter(actor,id,characterId);
+  return this.mutate(actor,id,revision,'story-expansion-'+turnId,{turnId,additions},'story.expanded',false,async s=>{
+   await this.authorizeCharacter(actor,id,characterId);
+   ensure(!await this.store.get('SELECT timeline_id FROM shared_world WHERE timeline_id=?',id),403,'world_authoring_only');
+   const latest=await this.store.get<{id:string;user_id:string;character_id:string;narration_status:string}>('SELECT id,user_id,character_id,narration_status FROM story_turns WHERE timeline_id=? ORDER BY rowid DESC LIMIT 1',id);
+   ensure(latest?.id===turnId&&latest.user_id===actor.id&&latest.character_id===characterId&&latest.narration_status!=='validated',409,'story_expansion_stale');
+   const entityIds=applyStoryAdditions(s,characterId,turnId,additions);
+   await this.store.run('UPDATE story_turns SET narration=?,narration_status=?,prompt_version=? WHERE id=?',narration,'validated',promptVersion,turnId);
+   return {result:{entityIds},effects:[]};
+  });
+ }
+ async turn(actor:Actor,id:string,input:{revision:number;characterId:string;action:Action;text?:string;cursor?:string},key:string){
   keySchema.parse(key);const action=actionSchema.parse(input.action),body={...input,action},authorizationStarted=Date.now();
   // Authorization precedes trace creation so an unauthorized caller cannot write into another tenant's trace ledger.
   await this.authorizeCharacter(actor,id,input.characterId);
@@ -670,7 +685,7 @@ export class Game {
     const resolved=resolveAction(s,input.characterId,action,eventId,seed);
     const permitted=resolved.effects.filter(e=>e.observers.includes(input.characterId));
     const narration=permitted.map(e=>e.text).join('\n\n')||'The action resolved. No observer-visible change was recorded.';
-    return {result:{narration,permitted,checks:resolved.checks??[],time:resolved.time},effects:resolved.effects,draws:resolved.draws,checks:resolved.checks,characterId:input.characterId,turnText:input.text??action.type};
+    return {result:{narration,permitted,checks:resolved.checks??[],time:resolved.time},effects:resolved.effects,draws:resolved.draws,checks:resolved.checks,characterId:input.characterId,turnText:input.text??''};
    },{recorder,expectedCursor:input.cursor}),{rollbackOnFailure:true});
    const typed=result as {eventId:string};await persistTurnTrace(this.store,trace.traceId,recorder.steps,'committed',typed.eventId);return {...result,traceId:trace.traceId};
   }catch(error){await persistTurnTrace(this.store,trace.traceId,recorder.steps,'failed',undefined,failureReason(error)).catch(()=>{});throw error;}

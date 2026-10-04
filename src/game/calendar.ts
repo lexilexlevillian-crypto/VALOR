@@ -1,3 +1,4 @@
+import {islandWeather,islandClimateEnabled,islandForecast} from './island-weather.ts';
 import type {Action,State} from './model.ts';
 
 const formatters=new Map<string,Intl.DateTimeFormat>();
@@ -9,8 +10,9 @@ export function localTime(at:string,timezone:string){
 }
 
 export function calendarView(s:State){
+ const climate=islandClimateEnabled(s)?islandWeather(s.clock):null;
  const time=localTime(s.clock,s.settings.timezone),rule=s.settings.calendar,seasons=['winter','spring','summer','autumn'],index=Math.floor(time.month%12/3);
- return {year:time.year,month:time.month,day:time.dayOfMonth,hour:time.hour,minute:time.minute,date:time.date,timezone:s.settings.timezone,holidays:s.settings.holidays.filter(holiday=>holiday.date===time.date).map(holiday=>holiday.label),season:rule?seasons[(index+(rule.hemisphere==='south'?2:0))%4]:null,daylight:rule?(rule.sunriseHour<rule.sunsetHour?time.hour>=rule.sunriseHour&&time.hour<rule.sunsetHour:time.hour>=rule.sunriseHour||time.hour<rule.sunsetHour):null};
+ return {year:time.year,month:time.month,day:time.dayOfMonth,hour:time.hour,minute:time.minute,date:time.date,timezone:s.settings.timezone,holidays:s.settings.holidays.filter(holiday=>holiday.date===time.date).map(holiday=>holiday.label),season:climate?.season??(rule?seasons[(index+(rule.hemisphere==='south'?2:0))%4]:null),daylight:climate?.daylight??(rule?(rule.sunriseHour<rule.sunsetHour?time.hour>=rule.sunriseHour&&time.hour<rule.sunsetHour:time.hour>=rule.sunriseHour||time.hour<rule.sunsetHour):null)};
 }
 
 type Hours={opens:number;closes:number;days?:number[];closedOnHolidays?:boolean};
@@ -29,7 +31,8 @@ export function weatherView(s:State){
  const now=Date.parse(s.clock),entries=s.settings.weatherSchedule.slice().sort((left,right)=>left.at.localeCompare(right.at));
  const actual=entries.filter(entry=>entry.status==='actual'&&Date.parse(entry.at)<=now).at(-1);
  const forecast=entries.filter(entry=>entry.status==='forecast'&&Date.parse(entry.at)>now).map(entry=>({at:entry.at,weather:entry.weather,issuedAt:entry.issuedAt}));
- return {actual:s.settings.weather,actualSince:actual?.at??null,forecast};
+ const climate=islandClimateEnabled(s)?islandWeather(s.clock):null;
+ return {actual:actual?.weather??climate?.weather??s.settings.weather,actualSince:actual?.at??null,forecast:forecast.length?forecast:climate&&!actual?islandForecast(s):[],temperatureC:actual?null:climate?.temperatureC??null,windKph:actual?null:climate?.windKph??null,sunrise:climate?.sunrise??null,sunset:climate?.sunset??null,source:actual?'authored':climate?'Island County seasonal simulation':'authored'};
 }
 
 export type TimeScale='negligible'|'short'|'scene'|'travel'|'shift'|'overnight';

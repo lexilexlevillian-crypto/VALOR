@@ -1,4 +1,5 @@
 import {skillStatus} from '../../public/creation-rules.js';
+import {syncWeather} from './island-weather.ts';
 import {createHash,randomUUID} from 'node:crypto';
 import {data,getEntity,validateEntity} from './model.ts';
 import type {Data,Entity,State} from './model.ts';
@@ -146,7 +147,7 @@ function advanceStep(s:State,minutes:number,eventId:string,effects:Effect[],play
  if(shifted.length)for(let at=start+60000;at<=end;at+=60000){const parts=timeParts(new Date(at).toISOString(),s.settings.timezone);for(const entity of shifted){const job=data(entity,'job'),shift=job.shift;if(!shift||parts.minute!==shift.endMinute||!shift.days.includes(parts.day)||job.attendance.some(row=>row.date===parts.date))continue;job.attendance.push({id:deterministicUuid(entity.id+'|absence|'+parts.date),date:parts.date,scheduledAt:new Date(at).toISOString(),startedAt:null,endedAt:null,status:'absent',minutes:0,wageCents:0,tipCents:0,transactionId:null,eventId,note:job.absencePolicy.description});job.warnings++;if(job.absencePolicy.terminateAfter>0&&job.warnings>=job.absencePolicy.terminateAfter)job.status='terminated';else if(job.absencePolicy.warningAfter>0&&job.warnings>=job.absencePolicy.warningAfter)job.status='suspended';entity.data=job as Entity['data'];}}
  for(const relation of s.entities.filter(entity=>entity.kind==='relationship'&&!entity.archived))expireConsentRequests(s,relation);
  const weather=s.settings.weatherSchedule.filter(w=>w.status==='actual'&&Date.parse(w.at)<=end).sort((a,b)=>a.at.localeCompare(b.at)).at(-1);
- if(weather)s.settings.weather=weather.weather;
+ if(weather)s.settings.weather=weather.weather;else syncWeather(s);
  const weatherMood=s.settings.weatherMood[s.settings.weather];
  if(weatherMood)for(const character of s.entities.filter(entity=>entity.kind==='character'&&!entity.archived&&entity.data.locationId)){const location=s.entities.find(entity=>entity.kind==='location'&&entity.id===character.data.locationId&&!entity.archived);if(location?.data.weatherExposed)character.data.mood=weatherMood;}
  for(const entity of s.entities.filter(e=>e.kind==='message'&&!e.archived&&e.data.callState==='ringing')){

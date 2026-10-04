@@ -85,8 +85,26 @@ Creator/admin Settings includes **Test DeepSeek connection**. The server also ma
 
 Load Life includes Delete life for your own private lives. Deletion is a recoverable archive of the whole life, including its timeline branches; Deleted lives offers Restore life. Shared authoring worlds and other users’ lives cannot be deleted through this control. Characters, checkpoints, and audit history are retained.
 
-The summoned phone has dedicated app screens, including Weather, News, SMS conversations, Contacts, and a dialer. Contacts can be saved only after the character learns a phone number. Weather shows in-game conditions and authored forecasts; News shows observer-permitted notifications, not invented headlines. Phone Settings links to the current life’s settings without selecting the master world.
+The summoned phone has dedicated app screens, including Weather, News, SMS conversations, Contacts, and a dialer. Contacts can be saved only after the character learns a phone number. Weather shows simulated or authored in-game conditions and forecasts; News shows observer-permitted notifications, not invented headlines. Phone Settings links to the current life’s settings without selecting the master world.
 
 New playable characters can choose only the eight documented Union apartment neighborhoods: Langley, Court District, First Harbor, Chinatown, North Crowns, South Crowns, Sparrow Ward, and Low End. NPC authoring retains the wider geography; unchanged legacy player residences are preserved.
 
 For the isolated three-viewport phone smoke test, run `node tests/phone-ui.browser.mjs`. The authenticated creation, phone navigation, and delete/restore tests are included in `npm test`.
+
+### Descriptive stories and game updates
+
+Story-mode AI may propose up to three ordinary adult NPCs, nearby public streets/storefronts, or lasting scene details per new turn. Strict structured validation rejects extra fields, duplicate names, private-home NPC spawning, indoor street creation, stale revisions, and more than 500 generated records per life. It cannot write arbitrary stats, grant money/items, change permissions, or override resolved mechanics. Valid additions and prose commit together through the existing event/revision/save pipeline. Generated places have local walking exits; generated people are real observer-visible NPCs. This is life-local content, not a change to the shared authoring source. The existing starter-item system remains responsible for essential possessions.
+
+Retry beside Continue rewrites the latest narration; a previously validated turn cannot create more entities or reroll its outcome. A failed initial narration can still finish its first expansion once. Grounded system summaries and notices appear in the collapsible Game updates section below the composer, not the story text. Ordinary non-mechanical story turns advance the game clock by one minute.
+
+### Island County climate and interactive phone map
+
+Pacific-time lives default to deterministic seasonal Island County weather (`weatherSimulation: island-county`). The saved game clock drives conditions, temperature, wind, daylight and a three-hourly forecast. This is fictional simulation, not live weather or a historical 2012 weather reconstruction. Authored actual-weather entries override automatic weather; their temperature/wind remain unspecified. Choose “Only my authored weather” in friendly world settings to disable automatic conditions. Other timezones retain authored weather.
+
+Climate reference: [Island County Surface Water](https://www.islandcountywa.gov/545/Surface-Water), including the Olympic rain shadow and regional rainfall differences. Map scale reference: [US Navy / NAS Whidbey Island](https://cnrnw.cnic.navy.mil/Installations/NAS-Whidbey-Island/About/Contact-Us/), approximately 60 km north–south in a straight line and 89 km along roads. These constrain the scale; Valor's supplied fictional map governs the neighborhood layout.
+
+The phone map supports pins, destination selection, zoom/pan, route previews and an explicit Travel control. Interior/locked/private access still follows authored exits and engine authorization. Public neighborhood routes use land corridors and **provisional fictional** Holiday–Centennial (Eastend–Collision), Lee Way–Midland (Dockside–Prescott), and Gateway–Industrial (First Harbor–Southwest) bridges. Bridge anchors/corridors are maintained in `src/game/city-geography.ts`; explicit authored exits take precedence. They are not claims about real roads or bridges. The old automatically generated “Valor” city-container shortcuts are removed, without deleting any location.
+
+Estimated defaults: walking 4.8 km/h; urban driving 32 km/h, or 20 km/h at 07–10 and 16–19 local time; longer trips in rain, snow, or driving fog. The displayed estimate is the same duration used by the travel action. Driving requires a usable vehicle and permission; transit/taxi require existing services. No routes cross water except the explicit fictional bridge edges. Map discovery remains observer-filtered. The public atlas is seeded for residential Pacific-time worlds at character assignment or the next committed turn.
+
+Regression coverage: `tests/story-world.test.ts`, `tests/island-world.test.ts`, and `node tests/phone-ui.browser.mjs` (map controls and Chronicle log/Retry included).

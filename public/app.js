@@ -245,10 +245,11 @@ async function rebuildNarration(turn,text,provider,rebuild,cancel,status){
   const response=await fetch(endpoint('narrate/stream'),{method:'POST',credentials:'same-origin',signal:controller.signal,headers:{'content-type':'application/json','x-csrf-token':S.csrf},body:JSON.stringify({turnId:turn.id,provider:provider.value,style:'story'})});
   if(!response.ok){const error=await response.json();throw new Error(String(error.error??'Narration unavailable').replaceAll('_',' '));}
   if(!response.body)throw new Error('Narration stream unavailable.');
-  const reader=response.body.getReader(),decoder=new TextDecoder();let pending='',paragraphs=[],complete=false;
-  while(true){const chunk=await reader.read();pending+=decoder.decode(chunk.value??new Uint8Array(),{stream:!chunk.done});const lines=pending.split('\n');pending=lines.pop()??'';if(chunk.done&&pending)lines.push(pending);for(const line of lines){if(!line)continue;const event=JSON.parse(line);if(event.type==='paragraph')paragraphs.push(event.text);if(event.type==='complete')complete=true;}if(chunk.done)break;}
+  const reader=response.body.getReader(),decoder=new TextDecoder();let pending='',paragraphs=[],complete=false,completionStatus='';
+  while(true){const chunk=await reader.read();pending+=decoder.decode(chunk.value??new Uint8Array(),{stream:!chunk.done});const lines=pending.split('\n');pending=lines.pop()??'';if(chunk.done&&pending)lines.push(pending);for(const line of lines){if(!line)continue;const event=JSON.parse(line);if(event.type==='paragraph')paragraphs.push(event.text);if(event.type==='complete'){complete=true;completionStatus=event.status;}}if(chunk.done)break;}
   if(!complete)throw new Error('Narration ended before validation completed.');
-  const narration=paragraphs.join('\n\n');text.textContent=narration;turn.narration=narration;status.textContent='Narration updated. Mechanics and state were not rerolled.';
+  if(completionStatus!=='validated'||provider.value==='grounded'){status.textContent='The AI did not return a new story. Existing writing is unchanged; game details remain in Game updates.';return;}
+  const narration=paragraphs.join('\n\n');text.textContent=narration;turn.narration=narration;turn.narration_status='validated';status.textContent='Narration updated. Outcomes were not rerolled.';await render();
  }catch(error){if(error.name==='AbortError'||controller.signal.aborted){status.textContent='Narration rebuild canceled. The previous prose remains displayed.';return;}status.textContent='Narration rebuild failed. The previous prose remains displayed.';throw error;
  }finally{if(S.streamController===controller)S.streamController=null;rebuild.disabled=false;cancel.hidden=true;}
 }
@@ -276,7 +277,7 @@ function chronicle(){
   const key='valor.opening.'+last.id;
   if(!sessionStored(key,'')){sessionSave(key,'requested');S.openingBusy=true;const status=document.querySelector('.composer-status');if(status)status.textContent='Writing the opening scene…';
    api(endpoint('narrate'),{turnId:last.id,provider:S.narrator,style:'story'}).then(result=>{
-    S.openingBusy=false;if(result.status==='grounded-fallback')notify('The opening was saved, but the AI narrator could not write it. You can retry from Story tools.');
+    S.openingBusy=false;if(result.status==='grounded-fallback')notify('The opening was saved, but the AI narrator could not write it. Use Retry beside Continue to try again.');
     if(S.page==='Chronicle'&&S.view.turns.at(-1)?.id===last.id)return render();
    }).catch(error=>{S.openingBusy=false;if(status?.isConnected)status.textContent='Opening saved. Narration unavailable: '+error.message;});
   }
