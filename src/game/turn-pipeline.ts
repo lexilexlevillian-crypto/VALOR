@@ -1,5 +1,5 @@
 import {performance} from 'node:perf_hooks';
-import {randomUUID} from 'node:crypto';
+import {randomUUID,randomBytes} from 'node:crypto';
 import {Fault,ensure} from '../contracts.ts';
 import type {Store} from '../db.ts';
 
@@ -25,14 +25,14 @@ export class TurnTraceRecorder {
  }
 }
 
-type TraceRow={trace_id:string;body_hash:string;status:TurnTraceStatus;event_id:string|null};
-export async function beginTurnTrace(store:Store,input:{timelineId:string;actorId:string;requestKey:string;bodyHash:string;originalText:string;expectedRevision:number;expectedCursor?:string}){
+type TraceRow={trace_id:string;body_hash:string;status:TurnTraceStatus;event_id:string|null;rng_seed:string|null};
+export async function beginTurnTrace(store:Store,input:{timelineId:string;actorId:string;requestKey:string;bodyHash:string;originalText:string;expectedRevision:number;expectedCursor?:string;seed?:string}){
  return store.transaction(async()=>{
-  const existing=await store.get<TraceRow>('SELECT trace_id,body_hash,status,event_id FROM turn_traces WHERE timeline_id=? AND actor_id=? AND request_key=?',input.timelineId,input.actorId,input.requestKey);
-  if(existing){ensure(existing.body_hash===input.bodyHash,409,'idempotency_conflict');return {traceId:existing.trace_id,existing};}
+  const existing=await store.get<TraceRow>('SELECT trace_id,body_hash,status,event_id,rng_seed FROM turn_traces WHERE timeline_id=? AND actor_id=? AND request_key=?',input.timelineId,input.actorId,input.requestKey);
+  if(existing){ensure(existing.body_hash===input.bodyHash,409,'idempotency_conflict');const seed=existing.rng_seed??input.seed??randomBytes(32).toString('hex');if(!existing.rng_seed)await store.run('UPDATE turn_traces SET rng_seed=? WHERE trace_id=?',seed,existing.trace_id);return {traceId:existing.trace_id,existing,seed};}
   const traceId=randomUUID(),at=new Date().toISOString();
   await store.run("INSERT INTO turn_traces(trace_id,timeline_id,actor_id,request_key,body_hash,original_text,expected_revision,expected_cursor,event_id,status,failure_reason,created_at,completed_at) VALUES (?,?,?,?,?,?,?,?,?,'running',NULL,?,NULL)",traceId,input.timelineId,input.actorId,input.requestKey,input.bodyHash,input.originalText,input.expectedRevision,input.expectedCursor??null,null,at);
-  return {traceId,existing:null};
+  const seed=input.seed??randomBytes(32).toString('hex');await store.run('UPDATE turn_traces SET rng_seed=? WHERE trace_id=?',seed,traceId);return {traceId,existing:null,seed};
  });
 }
 

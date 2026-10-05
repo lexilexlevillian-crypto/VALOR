@@ -6,6 +6,7 @@ export function proposeIntent(s:State,characterId:string,text:string):IntentProp
  const input=text.trim(),view=observerView(s,characterId);
  const propose=(action:unknown):IntentProposal=>({action:actionSchema.parse(action),requiresConfirmation:true,originalText:text,classification:'proposal'});
  const unclear=(message='Choose an explicit action and target. No action has been taken.',alternatives?:Action[]):IntentProposal=>({action:null,requiresConfirmation:true,originalText:text,classification:'clarification',...(alternatives?.length?{alternatives}:{}),clarification:message});
+ const spoken=/^say\s+([\s\S]+)$/i.exec(input);if(spoken)return propose({type:'say',text:spoken[1]});
  const pieces=input.split(/\s*(?:;|\bthen\b|\band\b)\s*/i).filter(Boolean);
  if(pieces.length>1){
   const candidates=pieces.map(piece=>proposeIntent(s,characterId,piece)).filter(candidate=>candidate.action!==null).map(candidate=>candidate.action!);

@@ -14,7 +14,7 @@ test('narration contract only advertises event UUIDs, not background labels, and
   try{validateAnchoredNarration({paragraphs:[{sourceIds:[bad],text:'Alex waited.'}]},context);assert.fail('invalid reference accepted');}
   catch(error){assert.equal(safeAiFailure(error,'output'),'ai_output_schema_invalid_source_ids');}
  }
- assert.equal(validateAnchoredNarration({paragraphs:[{sourceIds:context.fragments.map(f=>f.id),text:'Alex waited.'}]},context),'Alex waited.');
+ assert.equal(validateAnchoredNarration({paragraphs:[{sourceIds:context.fragments.map(f=>f.id),text:context.fragments.map(f=>f.text).join(' ')}]},context),context.fragments.map(f=>f.text).join(' '));
 });
 
 test('field diagnostics include only fixed structural names, not model keys, values, or issue messages',()=>{
@@ -36,7 +36,7 @@ test('DeepInfra startup probe uses the production contract with non-citable back
   assert.ok(Math.ceil(Buffer.byteLength(JSON.stringify(body))/2)<=2000);
   assert.equal(body.max_tokens,256);assert.doesNotMatch(String(options?.body),/test-secret/);
   const sourceIds=payload.context.provenance.filter((p:{source:string})=>p.source==='simulation').map((p:{id:string})=>p.id);
-  return Response.json({choices:[{finish_reason:'stop',message:{content:JSON.stringify({paragraphs:[{sourceIds,text:'Alex waited beside the door.'}],additions:[]})}}],usage:{prompt_tokens:1000,completion_tokens:30}});
+  return Response.json({choices:[{finish_reason:'stop',message:{content:JSON.stringify({paragraphs:[{sourceIds,text:'Alex waited by the door.'}],additions:[]})}}],usage:{prompt_tokens:1000,completion_tokens:30}});
  });
  assert.equal((await provider.healthCheck(AbortSignal.timeout(1000))).status,'ok');assert.equal(calls,1);
 });

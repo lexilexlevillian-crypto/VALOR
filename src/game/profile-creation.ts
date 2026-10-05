@@ -1,5 +1,5 @@
 import {ensureCityAtlas} from './city-geography.ts';
-import {randomUUID} from 'node:crypto';
+import {simulationId as randomUUID} from './turn-runtime.ts';
 import {validateEntity,data} from './model.ts';
 import type {State,Data,Entity} from './model.ts';
 import {automaticTraitNames,syncAppearanceTraits,residencePlan,PLAYER_NEIGHBORHOODS,playerFloors,apartmentNumber} from '../../public/profile-rules.js';

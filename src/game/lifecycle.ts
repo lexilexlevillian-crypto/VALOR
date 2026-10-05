@@ -1,4 +1,4 @@
-import {randomUUID} from 'node:crypto';
+import {simulationId as randomUUID} from './turn-runtime.ts';
 import {data,getEntity} from './model.ts';
 import type {Data,Entity,State} from './model.ts';
 import {fact} from './epistemics.ts';

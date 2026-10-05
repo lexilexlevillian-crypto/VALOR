@@ -1,3 +1,4 @@
+import {installResponseTiming} from './game/response-timing.ts';
 import Fastify, { LogController } from 'fastify';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
@@ -21,6 +22,7 @@ export function buildApp(store:Store,settings:Config,logging:boolean|{write(chun
     trustProxy:false,requestIdHeader:false,genReqId:()=>randomUUID(),logController:new LogController({disableRequestLogging:true}),
     logger:logging?{level:'info',...(typeof logging==='object'?{stream:logging}:{}),redact:{paths:['password','token','csrfToken','secret','contacts','req.url','req.query','req.headers.cookie','req.headers.authorization','req.headers.x-csrf-token','req.body'],censor:'[REDACTED]'}}:false
   });
+  installResponseTiming(app);
   const cookieName=settings.production?'__Host-valor_session':'valor_session';
   const cookie=(token:string,maxAge:number)=>cookieName+'='+token+'; Path=/; HttpOnly; SameSite=Strict; Max-Age='+maxAge+(settings.production?'; Secure':'');
   const tokenFrom=(header:string|undefined)=>header?.split(';').map(s=>s.trim()).find(s=>s.startsWith(cookieName+'='))?.slice(cookieName.length+1);
@@ -90,7 +92,7 @@ export function buildApp(store:Store,settings:Config,logging:boolean|{write(chun
     return {name:'VALOR',version:'0.2.0-alpha',status:'integrated-alpha',playable:true,client:'/app'};
   });
   app.get('/healthz',async()=>{(await store.get('SELECT 1'));return {status:'ok'};});
-  app.get('/readyz',async()=>{const schema=await store.get<{version:number}>('SELECT max(version) version FROM schema_migrations');ensure(schema?.version===44,503,'schema_not_ready');return {status:'ready',schemaVersion:schema.version};});
+  app.get('/readyz',async()=>{const schema=await store.get<{version:number}>('SELECT max(version) version FROM schema_migrations');ensure(schema?.version===46,503,'schema_not_ready');return {status:'ready',schemaVersion:schema.version};});
   app.post('/auth/login',async(request,reply)=>{
     const input=credentials.parse(request.body);
     (await auth.limit('login-account',input.email,settings.loginLimit,900000));

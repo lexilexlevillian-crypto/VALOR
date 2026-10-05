@@ -42,21 +42,21 @@ test('Gemini rejects errors, oversized or incomplete output and cannot introduce
 test('anchored prose cites every simulation fragment and preserves player dialogue',()=>{
  const dialogue={id:randomUUID(),text:'I stay right here.'},consequence={id:randomUUID(),text:'Time passes.'};
  const anchored={mode:'anchored-prose' as const,promptVersion:'anchored-prose-v1',instructions:'',protectedIds:[dialogue.id],fragments:[dialogue,consequence]};
- const raw={paragraphs:[{sourceIds:[consequence.id],text:'The minute passes.'},{sourceIds:[dialogue.id],text:'I stay right here.'}]};
- assert.equal(validateAnchoredNarration(raw,anchored),'The minute passes.\n\nI stay right here.');
- assert.throws(()=>validateAnchoredNarration({paragraphs:[{sourceIds:[consequence.id],text:'The minute passes.'}]},anchored),/incomplete_narrative_sources/);
- assert.throws(()=>validateAnchoredNarration({paragraphs:[{sourceIds:[consequence.id],text:'The minute passes.'},{sourceIds:[dialogue.id],text:'You decide to leave.'}]},anchored),/player_dialogue_not_preserved/);
+ const raw={paragraphs:[{sourceIds:[consequence.id],text:'Time passes.'},{sourceIds:[dialogue.id],text:'I stay right here.'}]};
+ assert.equal(validateAnchoredNarration(raw,anchored),'Time passes.\n\nI stay right here.');
+ assert.throws(()=>validateAnchoredNarration({paragraphs:[{sourceIds:[consequence.id],text:'Time passes.'}]},anchored),/incomplete_narrative_sources/);
+ assert.throws(()=>validateAnchoredNarration({paragraphs:[{sourceIds:[consequence.id],text:'Time passes.'},{sourceIds:[dialogue.id],text:'You decide to leave.'}]},anchored),/player_dialogue_not_preserved/);
  const noDialogueProtection={...anchored,protectedIds:[]};
  assert.throws(()=>validateAnchoredNarration({paragraphs:[{sourceIds:[consequence.id],text:'Time passes.'},{sourceIds:[dialogue.id],text:'You decide to leave.'}]},noDialogueProtection),/player_agency_violation/);
 });
 
-test('Gemini live-probe validates third-person past-tense output',async()=>{
+test('Gemini live-probe validates source-preserving third-person past-tense output',async()=>{
  const id='00000000-0000-4000-8000-000000000001';
  const provider=(text:string)=>new GeminiProvider('test-secret','gemini-3.8-flash',async(url)=>{
   assert.match(String(url),/gemini-3.8-flash:generateContent$/);
   return Response.json({candidates:[{finishReason:'STOP',content:{parts:[{text:JSON.stringify({paragraphs:[{sourceIds:[id],text}]})}]}}]});
  });
  assert.equal((await provider('Alex waited by the door.').healthCheck(AbortSignal.timeout(1000))).status,'ok');
- await assert.rejects(()=>provider('Alex is waiting by the door.').healthCheck(AbortSignal.timeout(1000)),/past_tense/);
+ await assert.rejects(()=>provider('Alex is waiting by the door.').healthCheck(AbortSignal.timeout(1000)),/narrative_unsupported_claim/);
  await assert.rejects(()=>provider('You waited by the door.').healthCheck(AbortSignal.timeout(1000)),/agency_violation|third_person/);
 });

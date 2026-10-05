@@ -17,15 +17,15 @@ const changed=(a:unknown,b:unknown)=>JSON.stringify(a)!==JSON.stringify(b);
 
 // Both sides are projected through the same observer before comparison. A notice
 // can therefore never disclose data that the character could not see at that turn.
-export function chroniclePresentation(before:State,after:State,observerId:string):{scene:ChronicleScene;notices:ChronicleNotice[]}{
- const afterView=observerView(after,observerId),afterById=entities(afterView),self=afterById.get(observerId);
+export function chroniclePresentation(before:State,after:State,observerId:string,projection?:ReturnType<typeof observerView>):{scene:ChronicleScene;notices:ChronicleNotice[]}{
+ const afterView=projection??observerView(after,observerId),afterById=entities(afterView),self=afterById.get(observerId);
  const locationId=typeof self?.data.locationId==='string'?self.data.locationId:null;
  const scene=chronicleSceneSchema.parse({clock:afterView.clock,locationId,locationName:locationId?afterById.get(locationId)?.name??null:null});
  if(!before.entities.some(entity=>entity.id===observerId&&entity.kind==='character'&&!entity.archived))return {scene,notices:[]};
  const beforeView=observerView(before,observerId),beforeById=entities(beforeView),oldSelf=beforeById.get(observerId),notices:ChronicleNotice[]=[];
  const add=(category:ChronicleNotice['category'],label:string,detail:string)=>notices.push({category,label,detail});
 
- if(beforeView.clock!==afterView.clock){
+ if(Date.parse(afterView.clock)-Date.parse(beforeView.clock)>=10*60000){
   const minutes=Math.round((Date.parse(afterView.clock)-Date.parse(beforeView.clock))/60000);
   add('time','Time advanced',`${minutes>=0?'+':''}${minutes} min · ${new Date(afterView.clock).toLocaleString('en-US')}`);
  }
@@ -34,11 +34,12 @@ export function chroniclePresentation(before:State,after:State,observerId:string
 
  const owned=(rows:Entity[],id:string)=>rows.filter(entity=>entity.kind==='item'&&((entity.data.possessorId??entity.data.ownerId)===id||typeof entity.data.containerId==='string'&&rows.some(container=>container.id===entity.data.containerId&&(container.data.possessorId??container.data.ownerId)===id)));
  const oldItems=owned(beforeView.entities,observerId),newItems=owned(afterView.entities,observerId),oldItemIds=new Set(oldItems.map(item=>item.id)),newItemIds=new Set(newItems.map(item=>item.id));
- const acquired=newItems.filter(item=>!oldItemIds.has(item.id)),lost=oldItems.filter(item=>!newItemIds.has(item.id));
+ const acquired=newItems.filter(item=>!oldItemIds.has(item.id)&&item.data.noticePolicy!=='abundant'),lost=oldItems.filter(item=>!newItemIds.has(item.id)&&item.data.noticePolicy!=='abundant');
  if(acquired.length)add('items','Items acquired',names(acquired));
  if(lost.length)add('items','Items removed',names(lost));
- for(const item of newItems){const old=beforeById.get(item.id);if(old&&changed({quantity:old.data.quantity,equipped:old.data.equipped,condition:old.data.condition},{quantity:item.data.quantity,equipped:item.data.equipped,condition:item.data.condition}))add('items',item.name,'Quantity, equipment, or condition changed');}
+ for(const item of newItems){const old=beforeById.get(item.id);if(old&&item.data.noticePolicy!=='abundant'&&changed({quantity:old.data.quantity,equipped:old.data.equipped,condition:old.data.condition},{quantity:item.data.quantity,equipped:item.data.equipped,condition:item.data.condition}))add('items',item.name,'Quantity, equipment, or condition changed');}
 
+ for(const item of afterView.entities.filter(e=>e.kind==='item'&&e.data.mechanism)){const old=beforeById.get(item.id);if(old&&old.data.locked===true&&item.data.locked===false)add('items',item.name+' unlocked','The opening is now unlocked.');}
  if(oldSelf&&self){
   const oldCash=Number(oldSelf.data.cash??0)+Number(oldSelf.data.bank??0),newCash=Number(self.data.cash??0)+Number(self.data.bank??0);
   if(oldCash!==newCash)add('money','Funds changed',`${newCash-oldCash>=0?'+':''}${amount(newCash-oldCash)} · ${amount(newCash)} total`);

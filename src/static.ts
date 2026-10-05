@@ -3,7 +3,7 @@ import type {FastifyInstance} from 'fastify';
 const files:Record<string,[string,string]>={
  '/app':['index.html','text/html; charset=utf-8'],'/app.js':['app.js','text/javascript; charset=utf-8'],
  '/style.css':['style.css','text/css; charset=utf-8'],
- '/http.js':['http.js','text/javascript; charset=utf-8'],
+ '/http.js':['http.js','text/javascript; charset=utf-8'],'/turn-client.js':['turn-client.js','text/javascript; charset=utf-8'],
  '/phone-map.js':['phone-map.js','text/javascript; charset=utf-8'],
  '/phone-apps.js':['phone-apps.js','text/javascript; charset=utf-8'],
  '/play-ui.css':['play-ui.css','text/css; charset=utf-8'],'/play-ui.js':['play-ui.js','text/javascript; charset=utf-8'],

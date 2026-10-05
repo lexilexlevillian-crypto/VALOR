@@ -1,5 +1,5 @@
 import {readFileSync} from 'node:fs';
-import {randomUUID} from 'node:crypto';
+import {simulationId as randomUUID} from './turn-runtime.ts';
 import {validateEntity} from './model.ts';
 import type {Entity} from './model.ts';
 import {itemBank} from './master-bank-items.ts';

@@ -1,7 +1,10 @@
 // The play surface uses only observer-filtered state supplied by app.js.
-export function chronicleSurface({$,button,S,formatMoment,draft,saveDraft,submit,rebuild,openRoster,loadDeathBranch,developerCommand}){
+export function chronicleSurface({$,button,S,formatMoment,draft,saveDraft,submit,rebuild,openRoster,loadDeathBranch,developerCommand,switchMode,cancelPending,chooseAffordance,chooseClarification}){
  const view=S.view,pc=view.entities.find(e=>e.id===S.character.id),location=view.entities.find(e=>e.id===pc?.data.locationId);
  const root=$('section',{class:'story-strip','aria-label':'Chronicle transcript'},$('div',{class:'story-heading'},$('h1',{},'Chronicle'),$('span',{},location?.name??'Valor'),$('time',{datetime:view.clock},formatMoment(view.clock))));
+ if(switchMode)root.append(button(view.playMode==='GAME'?'Switch to Story Mode':'Switch to Game Mode',switchMode));
+ if(view.playMode==='GAME'&&chooseAffordance)root.append($('section',{'aria-label':'Suggested actions',class:'actions'},...(view.affordances??[]).map(choice=>button(choice.label,()=>chooseAffordance(choice.affordanceId))),$('p',{class:'muted'},'These are suggestions. You can also type an action below.')));
+ if(view.pendingDecision)root.append($('p',{role:'status'},view.pendingDecision.prompt),...(chooseClarification?(view.pendingDecision.options??[]).map(option=>button(option.label,()=>chooseClarification(option.id))):[]),...(cancelPending?[button('Cancel pending action',cancelPending)]:[]));
  const actionNames=new Set(['start.character','look','story','wait','say',...(S.catalog?.actions??[]).map(schema=>schema.properties?.type?.const)]);
  const transcript=$('div',{class:'story-text'}),systemRows=[];let latestNarrative=null;
  for(const [index,turn] of view.turns.entries()){
@@ -21,7 +24,7 @@ export function chronicleSurface({$,button,S,formatMoment,draft,saveDraft,submit
  const composer=$('textarea',{id:'chronicle-action',maxlength:1000,rows:3,placeholder:'Write naturally—dialogue, a question, a thought, or what your character tries next. No commands needed.','aria-describedby':'story-help'});
  composer.value=draft();composer.addEventListener('input',()=>saveDraft(composer.value));
  const status=$('p',{class:'composer-status',role:'status','aria-live':'polite'}),send=$('button',{type:'submit',class:'primary',disabled:!S.online},'Continue ↗');
- const retry=$('button',{type:'button',disabled:!S.online||!view.turns.length,title:'Rewrite the latest response without changing outcomes or creating duplicates'},'Retry'),cancel=$('button',{type:'button',hidden:true},'Cancel');
+ const retry=$('button',{type:'button',disabled:!S.online||!view.turns.length,title:'Rewrite the latest response without changing outcomes or creating duplicates'},'Retry'),cancel=$('button',{type:'button',hidden:true,'data-allow-busy':true},'Cancel');
  retry.addEventListener('click',async()=>{if(S.busy||S.openingBusy||send.disabled)return;send.disabled=true;try{await rebuild(view.turns.at(-1),latestNarrative,{value:S.narrator},retry,cancel,status);}finally{send.disabled=!S.online;}});cancel.addEventListener('click',()=>S.streamController?.abort());
  const form=$('form',{class:'composer story-composer',onsubmit:async e=>{
   e.preventDefault();if(send.disabled||S.storyQueued||!composer.value.trim())return;

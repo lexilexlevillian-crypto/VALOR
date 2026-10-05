@@ -1,5 +1,12 @@
+import {coreRulesetVersion} from './turn-rules.ts';
+import {withTurnRuntime} from './turn-runtime.ts';
+import {turnAffordances} from './turn-affordances.ts';
 import {syncWeather} from './island-weather.ts';
-import {applyStoryAdditions,type StoryAddition} from './story-world.ts';
+import {currentScene,updateScene} from './turn-scenes.ts';
+import {observerEffects} from './turn-visibility.ts';
+import {storyScene} from './story-world.ts';
+import {resolveTurnPlan,controlState} from './turn-resolution.ts';
+import type {TurnClause} from './turn-contracts.ts';
 import {createHash,randomBytes,randomUUID} from 'node:crypto';
 import {z} from 'zod';
 import {Store} from '../db.ts';
@@ -41,7 +48,7 @@ import {developerSocialGraph,playerRelationships,recordReputation} from './socia
 import {inventoryView} from './items.ts';
 import {instantiateMasterBankEntry,masterBankEntry} from './master-bank.ts';
 type Timeline={id:string;campaign_id:string;parent_id:string|null;parent_save_id:string|null;name:string;revision:number;clock:string;settings_json:string};
-type Mutation<T>={result:T;effects?:Effect[];draws?:number;checks?:CheckRecord[];characterId?:string;turnText?:string};
+type Mutation<T>={result:T;resolutionSteps?:unknown;effects?:Effect[];draws?:number;checks?:CheckRecord[];characterId?:string;turnText?:string};
 const now=()=>new Date().toISOString();
 const canonical=(v:unknown):string=>Array.isArray(v)?'['+v.map(canonical).join(',')+']':v&&typeof v==='object'?'{'+Object.entries(v).sort(([a],[b])=>a.localeCompare(b)).map(([k,x])=>JSON.stringify(k)+':'+canonical(x)).join(',')+'}':JSON.stringify(v);
 export const checksum=(v:unknown)=>createHash('sha256').update(canonical(v)).digest('hex');
@@ -90,6 +97,7 @@ export class Game {
   this.store=store;this.domain=new Domain(store);
   this.exportBytes=limits.exportBytes??8*1024*1024;this.importBytes=limits.importBytes??8*1024*1024;
  }
+ private async coreTurnSchemaReady(){return Boolean(await this.store.get<{ready:number}>("SELECT 1 ready FROM sqlite_master WHERE type='table' AND name='turn_resolution_batches'"));}
  private async recoverySchemaReady(){return Boolean(await this.store.get<{ready:number}>("SELECT 1 ready FROM sqlite_master WHERE type='table' AND name='save_manifests'"));}
  async access(actor:Actor,id:string,write=false){
   const t=(await this.store.get<Timeline>('SELECT * FROM timelines WHERE id=? AND archived_at IS NULL',id));ensure(t,404,'timeline_unavailable');
@@ -136,23 +144,26 @@ export class Game {
   const state={canon:await this.canon(id),clock:t.clock,settings:settingsSchema.parse(JSON.parse(t.settings_json)),entities,facts,knowledge,beliefs,memories,eventIds};syncWeather(state);return state;
   },'read');
  }
- async persist(id:string,s:State){
+ async persist(id:string,s:State,incremental=false){
   validateState(s);const timestamp=now();
   const statements:InStatement[]=[];
   const write=(sql:string,...args:InValue[])=>{statements.push({sql,args});};
   const previousRows=await this.store.all<{id:string;revision:number;name:string;visibility:string;data_json:string;archived_at:string|null}>('SELECT id,revision,name,visibility,data_json,archived_at FROM game_entities WHERE timeline_id=?',id);
-  const byId=new Map(previousRows.map(row=>[row.id,row]));
+  const byId=new Map(previousRows.map(row=>[row.id,row])),changedEntityIds=new Set<string>();
   const previousLinks=await this.store.all<{entity_id:string;target_id:string}>('SELECT entity_id,target_id FROM entity_links WHERE timeline_id=?',id),linksByEntity=new Map<string,Set<string>>();
   for(const link of previousLinks){let targets=linksByEntity.get(link.entity_id);if(!targets){targets=new Set();linksByEntity.set(link.entity_id,targets);}targets.add(link.target_id);}
   for(const e of s.entities){
    const previous=byId.get(e.id);
    const json=JSON.stringify(e.data),changed=!previous||previous.name!==e.name||previous.visibility!==e.visibility||previous.data_json!==json||!!previous.archived_at!==e.archived;
    e.revision=previous?previous.revision+(changed?1:0):e.revision;
+   if(changed)changedEntityIds.add(e.id);
    if(changed)write('INSERT INTO game_entities VALUES (?,?,?,?,?,?,?,NULL,?,?,?) ON CONFLICT(timeline_id,id) DO UPDATE SET name=excluded.name,visibility=excluded.visibility,data_json=excluded.data_json,revision=excluded.revision,updated_at=excluded.updated_at,archived_at=excluded.archived_at',
     id,e.id,e.kind,e.name,e.visibility,json,e.revision,timestamp,timestamp,e.archived?timestamp:null);
   }
   const currentIds=new Set(s.entities.map(entity=>entity.id));
   for(const e of s.entities){
+   // Unchanged canonical data has the same references as the persisted projection.
+   if(incremental&&!changedEntityIds.has(e.id))continue;
    const current=new Set(refs(e)),previous=linksByEntity.get(e.id)??new Set<string>();
    if(current.size===previous.size&&[...current].every(ref=>previous.has(ref)))continue;
    write('DELETE FROM entity_links WHERE timeline_id=? AND entity_id=?',id,e.id);
@@ -288,7 +299,9 @@ export class Game {
   });
  } async view(actor:Actor,id:string,characterId:string){return this.store.transaction(async()=>{const {t,access}=(await this.access(actor,id));const s=(await this.load(id));this.controlled(actor,s,characterId,access.role);
   const cursor=await this.store.get<{revision:number;cursor:string}>('SELECT revision,cursor FROM timeline_turn_cursors WHERE timeline_id=?',id);ensure(cursor&&cursor.revision===t.revision,409,'turn_cursor_desynchronized');
-  return {timeline:{id:t.id,name:t.name,revision:cursor.revision,turnCursor:cursor.cursor},...observerView(s,characterId),journal:journalView(s,characterId),caseFiles:s.entities.filter(entity=>entity.kind==='case'&&!entity.archived&&entity.data.investigatorId===characterId).map(entity=>caseFileView(s,entity.id,characterId)),checks:await this.checkHistory(id,characterId,false,s),turns:(await this.transcript(id)).filter(turn=>turn.character_id===characterId&&turn.user_id===actor.id).slice(-100).map(presentTranscript)};},'read');}
+  const inputState=await this.store.get<{mode:string;pending_json:string|null}>('SELECT mode,pending_json FROM turn_input_state WHERE timeline_id=? AND user_id=? AND character_id=?',id,actor.id,characterId);
+  const activeScene=await currentScene(this.store,id,characterId);
+  return {activeScene,affordances:turnAffordances(s,characterId,t.revision).map(({action,...safe})=>safe),playMode:inputState?.mode??'STORY',pendingDecision:inputState?.pending_json?JSON.parse(inputState.pending_json):null,timeline:{id:t.id,name:t.name,revision:cursor.revision,turnCursor:cursor.cursor},...observerView(s,characterId),control:inputState?.pending_json?{holder:'PLAYER',reasonCode:'CLARIFICATION_REQUIRED',actingEntityId:characterId}:activeScene?.sceneRevision===t.revision?activeScene.control:controlState(s,characterId),journal:journalView(s,characterId),caseFiles:s.entities.filter(entity=>entity.kind==='case'&&!entity.archived&&entity.data.investigatorId===characterId).map(entity=>caseFileView(s,entity.id,characterId)),checks:await this.checkHistory(id,characterId,false,s),turns:(await this.transcript(id)).filter(turn=>turn.character_id===characterId&&turn.user_id===actor.id).slice(-100).map(presentTranscript)};},'read');}
  async relationships(actor:Actor,id:string,characterId:string){const {access}=await this.access(actor,id),state=await this.load(id);this.controlled(actor,state,characterId,access.role);return playerRelationships(state,characterId);}
  async phone(actor:Actor,id:string,characterId:string){const {access}=await this.access(actor,id),state=await this.load(id);this.controlled(actor,state,characterId,access.role);return phoneView(state,characterId);}
  async inventory(actor:Actor,id:string,characterId:string,options:{sort?:'name'|'category'|'condition'|'quantity';category?:string;equipped?:boolean}){const {access}=await this.access(actor,id),state=await this.load(id);this.controlled(actor,state,characterId,access.role);return inventoryView(state,characterId,options);}
@@ -307,7 +320,7 @@ export class Game {
  } async checkHistory(id:string,characterId:string,revealSources=false,state?:State){
   const rows=(await this.store.all<Record<string,unknown>>('SELECT id,event_id,character_id,check_definition_id,attribute,skill_id,context,difficulty,die_value,attribute_value,skill_value,total,outcome,modifiers_json,provenance_json,created_at FROM check_records WHERE timeline_id=? AND character_id=? ORDER BY rowid DESC LIMIT 200',id,characterId)).map(row=>({...row,modifiers:JSON.parse(String(row.modifiers_json)) as Array<{kind?:string;name:string;value:number;sourceId?:string}>,provenance:JSON.parse(String(row.provenance_json)) as Record<string,unknown>}));
   if(revealSources)return rows;const snapshot=state??await this.load(id);
-  return rows.map(row=>({...row,modifiers:row.modifiers.map(modifier=>{if(!modifier.sourceId)return modifier;const source=snapshot.entities.find(entity=>entity.id===modifier.sourceId);return source&&visible(snapshot,source,characterId)?modifier:{kind:modifier.kind,name:'Private authored modifier',value:modifier.value};}),provenance:Object.fromEntries(Object.entries(row.provenance).filter(([key])=>!['requiredTraits','missingRequirements','traitEffectResolution'].includes(key)))}));
+  return rows.filter(row=>row.provenance.visibility!=='HIDDEN').map(row=>{if(row.provenance.visibility==='PARTIAL'||row.modifiers.some(modifier=>modifier.sourceId&&!snapshot.entities.some(source=>source.id===modifier.sourceId&&visible(snapshot,source,characterId))))return {modifiers:[],id:(row as Record<string,unknown>).id,event_id:(row as Record<string,unknown>).event_id,outcome:(row as Record<string,unknown>).outcome};const {modifiers_json,provenance_json,provenance,...safe}=row as typeof row&Record<string,unknown>;return {...safe,modifiers:row.modifiers.filter(modifier=>!modifier.sourceId||snapshot.entities.some(source=>source.id===modifier.sourceId&&visible(snapshot,source,characterId))),provenance:{formula:provenance.formula,resolutionReason:provenance.resolutionReason}};});
  } async creator(actor:Actor,id:string){const {t}=(await this.access(actor,id,true));return {timeline:t,...(await this.load(id)),references:(await this.store.all('SELECT entity_id,target_id FROM entity_links WHERE timeline_id=?',id))};}
  async characterProfileTemplates(actor:Actor,id:string){
   const {t}=await this.access(actor,id,true),campaign=await this.store.get<{source_world_id:string}>('SELECT source_world_id FROM campaigns WHERE id=?',t.campaign_id);
@@ -546,7 +559,7 @@ export class Game {
   },'read');
  }
  async saveCompatibility(actor:Actor,id:string,saveId:string){await this.access(actor,id,true);const saved=await this.savedSnapshot(id,saveId);saved.state.entities=saved.state.entities.map(validateEntity);validateState(saved.state);return {valid:true,version:1,revision:saved.revision,entities:saved.state.entities.length,transcriptTurns:saved.transcript.length,metadata:saved.metadata??null,projectionRebuild:'validated',migrations:saved.metadata?[]:['legacy-v1-metadata-defaults']};}
- private async mutate<T extends object>(actor:Actor,id:string,expectedRevision:number,key:string,body:unknown,type:string,creator:boolean,fn:(s:State,eventId:string,seed:string,role:string)=>Mutation<T>|Promise<Mutation<T>>,trace?:{recorder:TurnTraceRecorder;expectedCursor?:string}){
+ private async mutate<T extends object>(actor:Actor,id:string,expectedRevision:number,key:string,body:unknown,type:string,creator:boolean,fn:(s:State,eventId:string,seed:string,role:string)=>Mutation<T>|Promise<Mutation<T>>,trace?:{recorder:TurnTraceRecorder;expectedCursor?:string;seed?:string}){
   keySchema.parse(key);const recorder=trace?.recorder;
   const run=<R>(stage:string,task:()=>R|Promise<R>,details:Record<string,unknown>={})=>recorder?recorder.run(stage,task,details):Promise.resolve().then(task);
   return (await this.store.transaction(async ()=>{
@@ -557,11 +570,11 @@ export class Game {
    ensure(cursor,409,'turn_cursor_unavailable');ensure(t.revision===expectedRevision,409,'revision_conflict');ensure(cursor.revision===t.revision,409,'turn_cursor_desynchronized');
    if(trace?.expectedCursor!==undefined)ensure(cursor.cursor===trace.expectedCursor,409,'turn_cursor_conflict');
    recorder?.mark('turn-lock','succeeded',{protocol:'database-compare-and-swap',revision:t.revision,cursorMatched:trace?.expectedCursor!==undefined});
-   const s=await run('state-load',()=>this.load(id)),beforeState=structuredClone(s),eventId=randomUUID(),seed=randomBytes(32).toString('hex');
+   const s=await run('state-load',()=>this.load(id)),beforeState=structuredClone(s),seed=trace?.seed??randomBytes(32).toString('hex'),eventId=deterministicUuid(seed,id+':'+key);
    const beforeDeath=(s.settings.campaign?.saveBehavior.branchOnDeath??true)?structuredClone(s):null;
    const action=await run('deterministic-simulation',()=>fn(s,eventId,seed,access.role),{eventId,seedDigest:checksum(seed)});
-   maintainAutomaticStoryCards(beforeState,s,eventId,action.effects??[]);
-   await run('state-projection',()=>this.persist(id,s));
+   withTurnRuntime(seed+':story-cards',eventId,s,'story-cards',()=>maintainAutomaticStoryCards(beforeState,s,eventId,action.effects??[]));
+   await run('state-projection',()=>this.persist(id,s,true));
    const revision=t.revision+1,nextCursor=randomUUID();
    const timelineUpdate=await this.store.run('UPDATE timelines SET revision=? WHERE id=? AND revision=?',revision,id,t.revision);ensure(timelineUpdate.rowsAffected===1,409,'revision_conflict');
    const cursorUpdate=await this.store.run('UPDATE timeline_turn_cursors SET revision=?,cursor=?,updated_at=? WHERE timeline_id=? AND revision=? AND cursor=?',revision,nextCursor,now(),id,t.revision,cursor.cursor);ensure(cursorUpdate.rowsAffected===1,409,'turn_cursor_conflict');
@@ -575,11 +588,25 @@ export class Game {
    const characterId=action.characterId;
    if(characterId){
     await run('grounded-summary',async()=>{
-     const permitted=(action.effects??[]).filter(e=>e.observers.includes(characterId));
+     const permitted=observerEffects(s,action.effects??[],characterId);
      const narration=permitted.map(e=>e.text).join('\n\n')||'The action resolved. No observer-visible change was recorded.';
-     const presentation=chroniclePresentation(beforeState,s,characterId);
+     const projection=observerView(s,characterId),presentation=chroniclePresentation(beforeState,s,characterId,projection);
+     const activeScene=await updateScene(this.store,id,characterId,s,revision,eventId,projection,(action.result as {control?:ReturnType<typeof controlState>}).control);
+     Object.assign(action.result,{notices:presentation.notices,scene:presentation.scene,activeScene});
+     const safeEffects=permitted.map(({observers,...effect})=>({...effect,observers:[characterId]}));
+     const frozenManifest=buildContextManifest(s,characterId,action.turnText??'',{maxTokens:256,currentEvents:safeEffects,projection,sceneOnly:true});
+     const sources=frozenManifest.included.map(item=>({id:item.id,layer:item.category,text:item.text,source:item.source,priority:item.priority}));while(sources.length&&Buffer.byteLength(JSON.stringify(sources))>2000)sources.pop();
+     const frozen={scene:storyScene(s,characterId,projection),controls:frozenManifest.controls,dossier:{version:2,observerId:characterId,clock:s.clock,sources}};
+     await this.store.run('INSERT INTO turn_narrative_contexts VALUES (?,?)',eventId,JSON.stringify(frozen));
+     await this.store.run('INSERT INTO narration_versions VALUES (?,?,?,?,?)',randomUUID(),eventId,narration,'grounded',now());
      await this.store.run('INSERT INTO story_turns (id,timeline_id,user_id,character_id,input_text,permitted_json,narration,narration_status,prompt_version,created_at,notices_json,scene_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',eventId,id,actor.id,characterId,action.turnText??type,JSON.stringify(permitted),narration,'grounded','grounded-v1',now(),JSON.stringify(presentation.notices),JSON.stringify(presentation.scene));
     },{eventId,mechanicsPreserved:true});
+   }
+   if(await this.coreTurnSchemaReady()){
+   const previousEntities=new Map(beforeState.entities.map(entity=>[entity.id,entity]));
+   const previousKnowledge=new Set(beforeState.knowledge.map(entry=>checksum(entry)));
+   const changedEntities=s.entities.flatMap(entity=>{const prior=previousEntities.get(entity.id);if(prior&&prior.revision===entity.revision)return [];return [{ownerSystem:entity.kind,entityId:entity.id,preconditionRevision:prior?.revision??0,operation:prior?'provider-update':'provider-create',causeEventId:eventId,resultHash:checksum(entity)}];});
+   await this.store.run('INSERT INTO turn_resolution_batches VALUES (?,?)',eventId,JSON.stringify({rulesetVersion:coreRulesetVersion,contentVersion:s.canon?.revisionId??'local',baseRevision:t.revision,eventId,start:beforeState.clock,end:s.clock,nextControl:(action.result as {control?:ReturnType<typeof controlState>}).control??(characterId?controlState(s,characterId):null),entityDeltas:changedEntities,knowledgeDeltas:s.knowledge.filter(entry=>!previousKnowledge.has(checksum(entry))).map(entry=>({observerId:entry.observerId,propositionRef:entry.factId,channel:entry.source,causeEventId:eventId})),steps:action.resolutionSteps,resolution:action.result}));
    }
    await this.audit(actor,t.campaign_id,type,eventId,{reason:type,before:creator?{revision:t.revision,command:body}:undefined,after:creator?{revision,effects:action.effects??[]}:undefined});
    const response={revision,eventId,turnCursor:nextCursor,...action.result};
@@ -701,32 +728,18 @@ export class Game {
    return {result:{recordId}};
   }));
  }
- async expandStory(actor:Actor,id:string,revision:number,turnId:string,characterId:string,additions:StoryAddition[],narration:string,promptVersion:string){
-  await this.authorizeCharacter(actor,id,characterId);
-  return this.mutate(actor,id,revision,'story-expansion-'+turnId,{turnId,additions},'story.expanded',false,async s=>{
-   await this.authorizeCharacter(actor,id,characterId);
-   ensure(!await this.store.get('SELECT timeline_id FROM shared_world WHERE timeline_id=?',id),403,'world_authoring_only');
-   const latest=await this.store.get<{id:string;user_id:string;character_id:string;narration_status:string}>('SELECT id,user_id,character_id,narration_status FROM story_turns WHERE timeline_id=? ORDER BY rowid DESC LIMIT 1',id);
-   ensure(latest?.id===turnId&&latest.user_id===actor.id&&latest.character_id===characterId&&latest.narration_status!=='validated',409,'story_expansion_stale');
-   const entityIds=applyStoryAdditions(s,characterId,turnId,additions);
-   await this.store.run('UPDATE story_turns SET narration=?,narration_status=?,prompt_version=? WHERE id=?',narration,'validated',promptVersion,turnId);
-   return {result:{entityIds},effects:[]};
-  });
- }
- async turn(actor:Actor,id:string,input:{revision:number;characterId:string;action:Action;text?:string;cursor?:string},key:string){
+ async turn(actor:Actor,id:string,input:{revision:number;characterId:string;action:Action;text?:string;cursor?:string;clauses?:TurnClause[]},key:string,seedOverride?:string){
   keySchema.parse(key);const action=actionSchema.parse(input.action),body={...input,action},authorizationStarted=Date.now();
   // Authorization precedes trace creation so an unauthorized caller cannot write into another tenant's trace ledger.
   await this.authorizeCharacter(actor,id,input.characterId);
-  const trace=await beginTurnTrace(this.store,{timelineId:id,actorId:actor.id,requestKey:key,bodyHash:checksum(body),originalText:input.text??'',expectedRevision:input.revision,expectedCursor:input.cursor});
+  const trace=await beginTurnTrace(this.store,{timelineId:id,actorId:actor.id,requestKey:key,bodyHash:checksum(body),originalText:input.text??'',expectedRevision:input.revision,expectedCursor:input.cursor,seed:seedOverride});
   const recorder=new TurnTraceRecorder(trace.traceId);recorder.mark('input-preservation','succeeded',{originalTextPresent:input.text!==undefined,bytes:Buffer.byteLength(input.text??'')});recorder.mark('intent-confirmed','succeeded',{actionType:action.type,requiresServerValidation:true});recorder.mark('character-authorization','succeeded',{authorizedBeforeTraceWrite:true},undefined,Date.now()-authorizationStarted);
   try{
    const result=await recorder.run('atomic-commit',()=>this.mutate(actor,id,input.revision,key,body,'story.turn',false,(s,eventId,seed,role)=>{
     this.controlled(actor,s,input.characterId,role);
-    const resolved=resolveAction(s,input.characterId,action,eventId,seed);
-    const permitted=resolved.effects.filter(e=>e.observers.includes(input.characterId));
-    const narration=permitted.map(e=>e.text).join('\n\n')||'The action resolved. No observer-visible change was recorded.';
-    return {result:{narration,permitted,checks:resolved.checks??[],time:resolved.time},effects:resolved.effects,draws:resolved.draws,checks:resolved.checks,characterId:input.characterId,turnText:input.text??''};
-   },{recorder,expectedCursor:input.cursor}),{rollbackOnFailure:true});
+    const resolved=resolveTurnPlan(s,input.characterId,input.clauses??[{clauseId:'1',dependency:'NONE',action}],eventId,seed,undefined,true);
+    return {result:resolved.result,resolutionSteps:resolved.steps,effects:resolved.effects,draws:resolved.draws,checks:resolved.checks,characterId:input.characterId,turnText:input.text??''};
+   },{recorder,expectedCursor:input.cursor,seed:seedOverride??trace.seed}),{rollbackOnFailure:true});
    const typed=result as {eventId:string};await persistTurnTrace(this.store,trace.traceId,recorder.steps,'committed',typed.eventId);return {...result,traceId:trace.traceId};
   }catch(error){await persistTurnTrace(this.store,trace.traceId,recorder.steps,'failed',undefined,failureReason(error)).catch(()=>{});throw error;}
  } async triggerWatcher(actor:Actor,id:string,revision:number,watcherId:string,key:string){
@@ -790,7 +803,7 @@ export class Game {
  }
  async export(actor:Actor,id:string,options:{mediaStrategy?:'inline'|'references'}={}){
   const {t}=await this.access(actor,id,true),payload={version:1 as const,worldHistory:await this.worldHistory(id),state:(await this.load(id)),transcript:(await this.transcript(id))},cursor=await this.store.get<{cursor:string}>('SELECT cursor FROM timeline_turn_cursors WHERE timeline_id=?',id),latest=await this.store.get<{id:string;created_at:string}>('SELECT id,created_at FROM game_events WHERE timeline_id=? ORDER BY revision DESC LIMIT 1',id);ensure(cursor,409,'turn_cursor_unavailable');
-  const media=payload.state.entities.filter(entity=>entity.kind==='media').map(entity=>({id:entity.id,checksum:checksum(entity.data.body),visibility:entity.visibility})),payloadChecksum=checksum(payload),manifest={format:'valor-timeline-export' as const,formatVersion:2 as const,schemaVersion:44,projectionVersion:1 as const,exportedAt:latest?.created_at??payload.state.clock,campaignId:t.campaign_id,timeline:{id,name:t.name,revision:t.revision,clock:payload.state.clock,eventCursor:cursor.cursor,eventId:latest?.id??null},payloadChecksum,dependencies:{canonRevisionId:payload.state.canon?.revisionId??null,entityKinds:[...new Set(payload.state.entities.map(entity=>entity.kind))].sort(),media},mediaStrategy:options.mediaStrategy??'inline',visibility:'preserved' as const,migration:{sourceSnapshotVersion:1,targetSnapshotVersion:1,steps:[] as string[]}},envelope={manifest,payload};
+  const media=payload.state.entities.filter(entity=>entity.kind==='media').map(entity=>({id:entity.id,checksum:checksum(entity.data.body),visibility:entity.visibility})),payloadChecksum=checksum(payload),manifest={format:'valor-timeline-export' as const,formatVersion:2 as const,schemaVersion:46,projectionVersion:1 as const,exportedAt:latest?.created_at??payload.state.clock,campaignId:t.campaign_id,timeline:{id,name:t.name,revision:t.revision,clock:payload.state.clock,eventCursor:cursor.cursor,eventId:latest?.id??null},payloadChecksum,dependencies:{canonRevisionId:payload.state.canon?.revisionId??null,entityKinds:[...new Set(payload.state.entities.map(entity=>entity.kind))].sort(),media},mediaStrategy:options.mediaStrategy??'inline',visibility:'preserved' as const,migration:{sourceSnapshotVersion:1,targetSnapshotVersion:1,steps:[] as string[]}},envelope={manifest,payload};
   const result={...envelope,checksum:checksum(envelope)};ensureJsonBytes(result,this.exportBytes,'export_too_large');return result;
  }
  private async inspectImport(actor:Actor,id:string,raw:unknown){
@@ -802,7 +815,7 @@ export class Game {
   const target=await this.load(id),targetIds=new Set(target.entities.map(entity=>entity.id)),collisions=state.entities.filter(entity=>targetIds.has(entity.id)).map(entity=>entity.id);
   for(const e of state.entities.filter(e=>e.kind==='character'))e.data.controllerUserId=e.data.playable?actor.id:null;
   const migrations=[...(manifest?.migration.steps??[])];if(!manifest)migrations.push('legacy-export-envelope');if(!parsed.metadata)migrations.push('legacy-snapshot-metadata-defaults');
-  return {state,parsed,bundleChecksum:checksum(raw),report:{valid:true,formatVersion:manifest?.formatVersion??1,snapshotVersion:parsed.version,sourceSchemaVersion:manifest?.schemaVersion??null,targetSchemaVersion:44,projectionVersion:manifest?.projectionVersion??1,entities:state.entities.length,transcriptTurns:parsed.transcript.length,idCollisions:collisions,conflictPolicy:'isolated-child-timeline',overwritesLiveCampaign:false,visibility:manifest?.visibility??'preserved',mediaStrategy:manifest?.mediaStrategy??'inline',migrations,changes:['create-child-timeline','rebuild-state-projection','restore-world-history','restore-transcript']}};
+  return {state,parsed,bundleChecksum:checksum(raw),report:{valid:true,formatVersion:manifest?.formatVersion??1,snapshotVersion:parsed.version,sourceSchemaVersion:manifest?.schemaVersion??null,targetSchemaVersion:46,projectionVersion:manifest?.projectionVersion??1,entities:state.entities.length,transcriptTurns:parsed.transcript.length,idCollisions:collisions,conflictPolicy:'isolated-child-timeline',overwritesLiveCampaign:false,visibility:manifest?.visibility??'preserved',mediaStrategy:manifest?.mediaStrategy??'inline',migrations,changes:['create-child-timeline','rebuild-state-projection','restore-world-history','restore-transcript']}};
  }
  async validateImport(actor:Actor,id:string,raw:unknown){return (await this.inspectImport(actor,id,raw)).state;}
  async import(actor:Actor,id:string,name:string,raw:unknown,dryRun=true,confirmationToken?:string){

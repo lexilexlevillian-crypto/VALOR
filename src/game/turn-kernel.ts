@@ -1,0 +1,114 @@
+import {coreRulesetVersion} from './turn-rules.ts';
+import {validatePlanReferences,validateCreativeProposal,describeCreativePlan,observerReferenceIds,type TurnPlanner,type CreativeProposal} from './turn-planner.ts';
+import {beginTurnTrace,persistTurnTrace,failureReason} from './turn-pipeline.ts';
+import {randomUUID} from 'node:crypto';
+import {ensure} from '../contracts.ts';
+import type {Actor} from '../contracts.ts';
+import {Game,checksum} from './engine.ts';
+import {interpretTurn} from './turn-input.ts';
+import {currentScene} from './turn-scenes.ts';
+import {controlState} from './turn-resolution.ts';
+import {observerView} from './epistemics.ts';
+import {turnCommandSchema,type PendingDecision,type PlayMode,type TurnClause,type TurnAffordance} from './turn-contracts.ts';
+
+export {turnAffordances} from './turn-affordances.ts';
+import {turnAffordances} from './turn-affordances.ts';
+// Session means an existing timeline. All world writes still use Game.turn,
+// Game.branch, and their database transaction / authorization contracts.
+export class TurnKernel {
+ readonly game:Game;
+ private planner?:TurnPlanner;
+ constructor(game:Game,planner?:TurnPlanner){this.game=game;this.planner=planner;}
+ async execute(actor:Actor,raw:unknown):Promise<Record<string,any>>{
+  const command=turnCommandSchema.parse(raw),id=command.sessionId,characterId=command.actorId,input=command.input;
+  await this.game.authorizeCharacter(actor,id,characterId);
+  // Reserve RNG lineage before the world transaction so rollback cannot reroll.
+  const attempt=await beginTurnTrace(this.game.store,{timelineId:id,actorId:actor.id,requestKey:'command_'+checksum(command.commandId),bodyHash:checksum(command),originalText:input.kind==='freeform'?input.text:'',expectedRevision:command.expectedRevision});
+  try{
+   let proposal:CreativeProposal|null=null;
+   // Provider I/O is outside the world transaction. Receipt replay never calls AI.
+   if(input.kind==='freeform'&&this.planner&&!await this.game.store.get('SELECT command_id FROM turn_interactions WHERE command_id=?',command.commandId)){
+    const snapshot=await this.game.load(id),parsed=interpretTurn(snapshot,characterId,input.text);
+    if(parsed.clarification||parsed.clauses.some(c=>c.action.type==='physical'&&c.action.operation==='attempt'))proposal=await this.planner.propose(actor,id,characterId,command.expectedRevision,input.text).catch(()=>null);
+   }
+   const response=await this.game.store.transaction(async()=>{
+   const receipt=await this.game.store.get<{timeline_id:string;user_id:string;body_hash:string;result_json:string}>('SELECT * FROM turn_interactions WHERE command_id=?',command.commandId);
+   if(receipt){ensure(receipt.timeline_id===id&&receipt.user_id===actor.id&&receipt.body_hash===checksum(command),409,'idempotency_conflict');return JSON.parse(receipt.result_json);}
+   const {t}=await this.game.access(actor,id);
+   ensure(t.revision===command.expectedRevision,409,'revision_conflict');
+   const state=await this.game.load(id),metadata=await this.game.store.get<{mode:PlayMode;pending_json:string|null}>('SELECT mode,pending_json FROM turn_input_state WHERE timeline_id=? AND user_id=? AND character_id=?',id,actor.id,characterId);
+   let mode=command.mode,pending:PendingDecision|null=metadata?.pending_json?JSON.parse(metadata.pending_json):null;
+   let result:Record<string,unknown>,clauses:TurnClause[]|undefined,text='';let interpreted:unknown=null;
+   const scene=await currentScene(this.game.store,id,characterId);
+   const base={commandId:command.commandId,sessionId:id,revision:t.revision,worldTime:state.clock,control:pending?{holder:'PLAYER',reasonCode:'CLARIFICATION_REQUIRED',actingEntityId:characterId}:scene?.sceneRevision===t.revision?scene.control:controlState(state,characterId)};
+   if(input.kind==='mode_switch'){mode=input.targetMode;result={...base,status:'PRESENTED'};}
+   else if(input.kind==='inspection'){
+    const view=observerView(state,characterId);
+    if(input.targetId){const target=view.entities.find(e=>e.id===input.targetId);ensure(target,404,'target_unavailable');result={...base,status:'PRESENTED',inspection:target};}
+    else result={...base,status:'PRESENTED',inspection:input.panel==='inventory'?await this.game.inventory(actor,id,characterId,{}):input.panel==='phone'?await this.game.phone(actor,id,characterId):input.panel==='journal'?(await this.game.view(actor,id,characterId)).journal:input.panel==='cases'?(await this.game.view(actor,id,characterId)).caseFiles:input.panel==='health'?view.entities.filter(e=>e.id===characterId||e.kind==='injury'&&e.data.characterId===characterId):view};
+   }else if(input.kind==='cancel_pending'){
+    if(pending?.pendingDecisionId===input.pendingActionId){pending=null;result={...base,status:'CANCELED',control:scene?.sceneRevision===t.revision?scene.control:controlState(state,characterId)};}
+    else {
+     const committed=await this.game.store.get<{result_json:string}>('SELECT result_json FROM turn_interactions WHERE command_id=? AND timeline_id=? AND user_id=? AND character_id=?',input.pendingActionId,id,actor.id,characterId);
+     const turn=await this.game.store.get<{id:string;narration:string}>('SELECT id,narration FROM story_turns WHERE id=? AND timeline_id=? AND user_id=? AND character_id=?',input.pendingActionId,id,actor.id,characterId);
+     ensure(committed||turn,404,'pending_action_unavailable');result={...base,status:'ALREADY_COMMITTED',committed:committed?JSON.parse(committed.result_json):turn};
+    }
+   }else if(input.kind==='regenerate_narration'){
+    const turn=await this.game.store.get<{permitted_json:string;id:string}>('SELECT id,permitted_json FROM story_turns WHERE id=? AND timeline_id=? AND user_id=? AND character_id=?',input.turnId,id,actor.id,characterId);
+    ensure(turn,404,'turn_unavailable');
+    const batch=await this.game.store.get<{batch_json:string}>('SELECT batch_json FROM turn_resolution_batches WHERE event_id=?',input.turnId);
+    const original=batch?JSON.parse(batch.batch_json):null;
+    const narration=(JSON.parse(turn.permitted_json) as Array<{text:string}>).map(e=>e.text).join('\n\n')||'The action resolved. No observer-visible change was recorded.';
+    const versionId=randomUUID();await this.game.store.run('INSERT INTO narration_versions VALUES (?,?,?,?,?)',versionId,turn.id,narration,'grounded',new Date().toISOString());
+    result={...base,status:'PRESENTED',turnId:turn.id,narration,versionId,turnRevision:original?original.baseRevision+1:null,control:original?.resolution?.control??original?.nextControl??base.control,rerolled:false};
+   }else if(input.kind==='edit_request'){
+    const branch=await this.game.branch(actor,id,input.edit.saveId,input.edit.name);
+    result={...base,status:'BRANCHED',branch,reason:input.edit.reason};pending=null;
+   }else{
+    if(input.kind==='clarification_answer'){
+     ensure(pending?.pendingDecisionId===input.pendingDecisionId,409,'pending_decision_unavailable');
+     ensure(pending.basedOnRevision===t.revision,409,'clarification_stale');
+     if(pending.proposedClauses&&input.answer==='confirm_plan'){clauses=pending.proposedClauses;text=pending.originalText;}
+     else text=input.answer;const option=pending.options?.find(option=>option.id===input.answer||option.label.toLowerCase()===input.answer.toLowerCase());if(!clauses&&option?.answerText)text=option.answerText;else if(!clauses&&option)text=pending.originalText.replace(/\b(him|her|them|he|she|it)\b/gi,()=>option.label);
+    }else if(input.kind==='freeform'){text=input.text;}
+    else if(input.kind==='action'){text=input.text??'';clauses=[{clauseId:'1',dependency:'NONE',action:input.action}];}
+    else {
+     const choice=turnAffordances(state,characterId,t.revision).find(item=>item.affordanceId===input.affordanceId);
+     ensure(choice,409,'affordance_stale');clauses=[{clauseId:'1',dependency:'NONE',action:choice.action}];
+    }
+    if(!clauses){
+     const interpretation=interpretTurn(state,characterId,text);interpreted=interpretation;
+     if(proposal?.clauses.length){
+      proposal=validateCreativeProposal(proposal,state,characterId,text);
+      pending={pendingDecisionId:randomUUID(),basedOnRevision:t.revision,prompt:'Confirm these steps:\n'+describeCreativePlan(proposal.clauses,state,characterId),originalText:text,proposedClauses:proposal.clauses,proposalEvidence:proposal.evidence,options:[{id:'confirm_plan',label:'Confirm these steps'}]};
+      interpreted={...interpretation,proposal};result={...base,status:'NEEDS_CLARIFICATION',control:{holder:'PLAYER',reasonCode:'CLARIFICATION_REQUIRED',actingEntityId:characterId}};
+     }else if(interpretation.clauses.some(c=>c.action.type==='physical'&&c.action.operation==='attempt')){
+      pending={pendingDecisionId:randomUUID(),basedOnRevision:t.revision,prompt:proposal?.clarification??'Describe how you want to use the object and what should change. Nothing has happened.',originalText:text};result={...base,status:'NEEDS_CLARIFICATION',control:{holder:'PLAYER',reasonCode:'CLARIFICATION_REQUIRED',actingEntityId:characterId}};
+     }else if(interpretation.presentation){result={...base,status:'PRESENTED',presentation:interpretation.presentation};}
+     else if(interpretation.clarification){
+      pending={pendingDecisionId:randomUUID(),basedOnRevision:t.revision,prompt:interpretation.clarification,originalText:text,...(interpretation.options?{options:interpretation.options}:{})};
+      result={...base,status:'NEEDS_CLARIFICATION',control:{holder:'PLAYER',reasonCode:'CLARIFICATION_REQUIRED',actingEntityId:characterId}};
+     }else clauses=interpretation.clauses;
+    }
+    if(clauses){
+     // All references still pass domain validation; input IDs never grant access.
+     const visibleIds=observerReferenceIds(state,characterId);
+     validatePlanReferences(clauses,visibleIds);
+     const cursor=await this.game.store.get<{cursor:string}>('SELECT cursor FROM timeline_turn_cursors WHERE timeline_id=?',id);
+     ensure(cursor,409,'turn_cursor_unavailable');
+     const turn=await this.game.turn(actor,id,{revision:t.revision,cursor:cursor.cursor,characterId,action:clauses[0]!.action,clauses,text},'kernel_'+checksum(command.commandId),attempt.seed);
+     pending=null;result={...base,...turn,status:'COMMITTED',worldTime:(await this.game.load(id)).clock};
+    }
+   }
+   await this.game.store.run('INSERT INTO turn_input_state VALUES (?,?,?,?,?) ON CONFLICT(timeline_id,user_id,character_id) DO UPDATE SET mode=excluded.mode,pending_json=excluded.pending_json',id,actor.id,characterId,mode,pending?JSON.stringify(pending):null);
+   const current=await this.game.load(id),revision=Number(result!.revision);
+   const affordances:TurnAffordance[]=turnAffordances(current,characterId,revision).map(({action,...safe})=>safe);
+   const response={...result!,mode,pendingDecision:pending,affordances,freeformAllowed:true};
+   await this.game.store.run('INSERT INTO turn_interactions VALUES (?,?,?,?,?,?,?,?)',command.commandId,id,actor.id,characterId,checksum(command),input.kind,JSON.stringify(response),new Date().toISOString());
+   await this.game.store.run('INSERT INTO turn_attempt_records VALUES (?,?)',command.commandId,JSON.stringify({command,baseRevision:t.revision,resultKind:result!.status,interpretation:interpreted,clauses:clauses??null,committedEventIds:result!.eventId?[result!.eventId]:[],rulesetVersion:coreRulesetVersion,contentVersion:state.canon?.revisionId??'local',control:result!.control}));
+   return response;
+  });
+  await persistTurnTrace(this.game.store,attempt.traceId,[],response.status==='COMMITTED'?'committed':'validated',typeof response.eventId==='string'?response.eventId:undefined);return response;
+  }catch(error){await persistTurnTrace(this.game.store,attempt.traceId,[],'failed',undefined,failureReason(error)).catch(()=>{});throw error;}
+ }
+}

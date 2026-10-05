@@ -1,4 +1,4 @@
-import {randomUUID} from 'node:crypto';
+import {simulationId as randomUUID} from './turn-runtime.ts';
 import {WORKPLACES} from '../../public/city-content.js';
 import {getEntity} from './model.ts';
 import type {Data,State} from './model.ts';

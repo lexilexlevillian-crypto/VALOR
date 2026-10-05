@@ -1,3 +1,4 @@
+import {acceptsTurnResponse} from './turn-client.js';
 import {chronicleSurface,phoneOverlay,phoneLauncher} from './play-ui.js';
 import {requestJson,readJsonResponse} from './http.js';
 import {nativePhoneApp,nativePhonePages} from './phone-apps.js';
@@ -30,7 +31,9 @@ async function api(path,body,method=body?'POST':'GET',retryKey=crypto.randomUUID
  return requestJson(path,{method,credentials:'same-origin',cache:'no-store',headers:{...(body?{'content-type':'application/json','x-csrf-token':S.csrf,'idempotency-key':retryKey}:{})},...(body?{body:JSON.stringify(body)}:{})},labels);
 }
 function button(text,handler,primary=false){return $('button',{type:'button',class:primary?'primary':'',onclick:()=>run(handler)},text);}
-async function run(fn){if(S.busy)return;S.busy=true;document.documentElement.setAttribute('aria-busy','true');try{await fn();}catch(e){notify(e.message);}finally{S.busy=false;document.documentElement.removeAttribute('aria-busy');}}
+function lockBusyButtons(){for(const node of document.querySelectorAll('button:not(:disabled):not([data-allow-busy])')){node.disabled=true;node.dataset.busyDisabled='';}}
+new MutationObserver(()=>{if(S.busy)lockBusyButtons();}).observe(document.body,{childList:true,subtree:true});
+async function run(fn){if(S.busy)return;S.busy=true;app.setAttribute('aria-busy','true');lockBusyButtons();try{await fn();}catch(e){notify(e.message);}finally{S.busy=false;app.removeAttribute('aria-busy');for(const node of document.querySelectorAll('button[data-busy-disabled]')){node.disabled=false;delete node.dataset.busyDisabled;}}}
 function field(label,control){const id=control.id||'field-'+crypto.randomUUID();control.id=id;return $('div',{class:'field'},$('label',{for:id},label),control);}
 function input(value='',type='text'){return $('input',{type,value});}
 function validateCreationInputs(root){const invalid=root.querySelector('input:invalid,select:invalid,textarea:invalid');if(!invalid)return;for(let node=invalid.parentElement;node&&node!==root;node=node.parentElement)if(node.tagName==='DETAILS')node.open=true;invalid.reportValidity();invalid.focus();throw new Error('Check the highlighted creation field before saving.');}
@@ -60,7 +63,7 @@ function clearDeveloperState(){S.creator=null;S.view=null;}
 async function persistMode(next,dialog){const saved=await api('/me/mode',{mode:next,expectedRevision:S.modeRevision});S.mode=saved.mode;S.modeRevision=saved.revision;S.developerAllowed=saved.developerAllowed;if(next==='player'){clearDeveloperState();S.page=S.timeline?'Chronicle':'Campaigns';}else{S.developerArea=null;S.menuChoice='studio';S.page=S.timeline?'Developer':'Campaigns';}dialog.close();await render();}
 async function unlockDeveloperMode(accessKey,dialog){const saved=await api('/me/developer-access',{accessKey:accessKey.value.trim(),expectedRevision:S.modeRevision});accessKey.value='';S.user=saved.user;S.mode=saved.mode;S.modeRevision=saved.revision;S.developerAllowed=saved.developerAllowed;const campaignRole=saved.campaignRoles.find(row=>row.campaignId===S.campaign?.id)?.role;if(campaignRole)S.campaign.role=campaignRole;clearDeveloperState();S.developerArea=null;S.menuChoice='studio';S.page=S.timeline&&['creator','admin'].includes(S.campaign?.role)?'Developer':'Campaigns';dialog.close();await render();}
 function modeSwitch(){const developer=S.mode==='developer',campaignLocked=developer&&S.campaign&&!['creator','admin'].includes(S.campaign.role),label=campaignLocked?'Unlock Developer campaign access':developer?'Exit Developer Mode':'Enter Developer Mode',node=$('button',{type:'button',class:'mode-switch','aria-label':label,title:label,'data-tooltip':label},$('span',{class:'mode-switch-icon','aria-hidden':'true'},campaignLocked?'!':developer?'◆':'◇'));node.addEventListener('click',openModeSwitch);return node;}
-function openModeSwitch(){const campaignLocked=Boolean(S.campaign&&!['creator','admin'].includes(S.campaign.role)),next=S.mode==='developer'&&!campaignLocked?'player':'developer',locked=next==='developer'&&(!S.developerAllowed||campaignLocked),accessKey=input('','password');accessKey.autocomplete='off';accessKey.maxLength=256;const dialog=$('dialog',{class:'mode-dialog'},$('div',{class:'mode-dialog-inner'},$('div',{class:'section-kicker'},'ACCESS / MODE BOUNDARY'),$('h2',{},next==='developer'?'Enter Developer Mode?':'Exit Developer Mode?'),$('p',{},next==='developer'?'Developer Mode exposes authorized Creator/debug tools, hidden fields, world-state inspection, event history, AI context sources, simulations, controlled edits, and diagnostics. Every privileged request is still authorized by the server.':'Player Mode clears the loaded Developer snapshot and returns to observer-permitted gameplay surfaces.'),locked?$('p',{},'Enter the Developer access key to grant this account Creator status for its existing campaign memberships. The key is checked only by the server and is never saved in this browser.'):null,locked?field('Developer access key',accessKey):null,$('div',{class:'actions'},button('Cancel',()=>dialog.close()),locked?button('Unlock Developer Mode',()=>unlockDeveloperMode(accessKey,dialog),true):$('button',{type:'button',class:'primary',onclick:()=>run(()=>persistMode(next,dialog))},next==='developer'?'Confirm Developer Mode':'Confirm Player Mode'))));document.body.append(dialog);dialog.addEventListener('close',()=>dialog.remove(),{once:true});dialog.showModal();if(locked)accessKey.focus();}
+function openModeSwitch(){const campaignLocked=Boolean(S.campaign&&!['creator','admin'].includes(S.campaign.role)),next=S.mode==='developer'&&!campaignLocked?'player':'developer',locked=next==='developer'&&(!S.developerAllowed||campaignLocked),accessKey=input('','password');accessKey.autocomplete='off';accessKey.maxLength=256;const dialog=$('dialog',{class:'mode-dialog'},$('div',{class:'mode-dialog-inner'},$('div',{class:'section-kicker'},'ACCESS / MODE BOUNDARY'),$('h2',{},next==='developer'?'Enter Developer Mode?':'Exit Developer Mode?'),$('p',{},next==='developer'?'Developer Mode exposes authorized Creator/debug tools, hidden fields, world-state inspection, event history, AI context sources, simulations, controlled edits, and diagnostics. Every privileged request is still authorized by the server.':'Player Mode clears the loaded Developer snapshot and returns to observer-permitted gameplay surfaces.'),locked?$('p',{},'Enter the Developer access key to grant this account Creator status for its existing campaign memberships. The key is checked only by the server and is never saved in this browser.'):null,locked?field('Developer access key',accessKey):null,$('div',{class:'actions'},button('Cancel',()=>dialog.close()),locked?button('Unlock Developer Mode',()=>unlockDeveloperMode(accessKey,dialog),true):button(next==='developer'?'Confirm Developer Mode':'Confirm Player Mode',()=>persistMode(next,dialog),true))));document.body.append(dialog);dialog.addEventListener('close',()=>dialog.remove(),{once:true});dialog.showModal();if(locked)accessKey.focus();}
 function developerTag(kind,label){return $('span',{class:'developer-tag developer-tag--'+kind},label);}
 function developerConfirm(titleText,summary,confirmText,onconfirm,danger=false){const dialog=$('dialog',{class:'mode-dialog developer-confirm'},$('div',{class:'mode-dialog-inner'},$('div',{class:'section-kicker'},'DEVELOPER MODE / REVIEW'),$('h2',{},titleText),$('p',{},'Review the validated scope below. Nothing changes until you confirm; a successful mutation is recorded in the immutable event and audit history.'),$('div',{class:'developer-validation'},developerTag('preview','DRY RUN / PREVIEW'),renderValue(summary)),$('div',{class:'actions'},button('Cancel',()=>dialog.close()),$('button',{type:'button',class:danger?'danger':'primary',onclick:()=>run(async()=>{await onconfirm();dialog.close();})},confirmText))));document.body.append(dialog);dialog.addEventListener('close',()=>dialog.remove(),{once:true});dialog.showModal();}const endpoint=(suffix)=>'/game/timelines/'+S.timeline.id+'/'+suffix;
 const nav=['New Game','Chronicle','Character','Inventory','Equipment','Phone','Map','Relationships','Journal / Cases','Lore','Skills / Traits','Health','Vehicles','Jobs / Money','Combat','Search / Loot','Save / Load','Settings','NPC Registry','Creator'];
@@ -83,7 +86,7 @@ function frame(content){
  document.querySelector('.pocket-dialog')?.remove();
  app.replaceChildren(shell,modeSwitch());
  if(inGame){
-  const navigate=page=>run(async()=>{S.page=page;await render();}),close=()=>{S.page='Chronicle';render().then(()=>document.querySelector('.pocket-launcher')?.focus());};
+  const navigate=page=>run(async()=>{S.page=page;await render();}),close=()=>run(async()=>{S.page='Chronicle';await render();document.querySelector('.pocket-launcher')?.focus();});
   app.append(phoneLauncher($,()=>navigate('Phone Home')));
   if(phoneOpen){const phone=phoneOverlay({$,S,content,navigate,close});document.body.append(phone);phone.showModal();}
  }
@@ -114,7 +117,10 @@ async function render(){
  if(S.page==='Save / Load'&&!S.character)return saves();
  if(S.page==='Settings'&&!S.character)return settings();
  if(!S.character)return roster();
- S.view=await api(endpoint('view')+'?characterId='+S.character.id);
+ const viewTimelineId=S.timeline.id,viewCharacterId=S.character.id;
+ const nextView=await api(endpoint('view')+'?characterId='+viewCharacterId);
+ if(!acceptsTurnResponse({timelineId:S.timeline?.id,characterId:S.character?.id,viewTimelineId:S.view?.timeline.id,revision:S.view?.timeline.revision},{timelineId:nextView.timeline.id,revision:nextView.timeline.revision},{timelineId:viewTimelineId,characterId:viewCharacterId}))return;
+ S.view=nextView;
  if(!S.catalog)S.catalog=await api('/game/catalog');
  if(!S.narrator){const saved=stored('valor.narrator.'+S.user.id,''),preferred=S.catalog.defaultProvider??(S.catalog.providers.includes('deepinfra')?'deepinfra':S.catalog.providers.includes('gemini')?'gemini':'grounded');S.narrator=S.catalog.providers.includes(saved)?saved:preferred;}
  if(nativePhonePages.has(S.page))return frame(await nativePhoneApp({$,S,api,endpoint,act,run,formatMoment,entityActions,openStyle,navigate:async page=>{S.page=page;await render();},openDeveloperSettings:async()=>{S.character=null;S.page='Settings';await render();},loadBranch:async branch=>{S.timeline=branch;S.character=null;S.page='Chronicle';await render();}}));
@@ -227,8 +233,14 @@ async function newGame(){
 async function act(action,text,clearDraft=false){
  if(!navigator.onLine)throw new Error('Reconnect before taking an action.');
  const key=crypto.randomUUID();
- const payload={revision:S.view.timeline.revision,cursor:S.view.timeline.turnCursor,characterId:S.character.id,action,...(text?{text}:{})};
- const result=await api(endpoint('turns'),payload,'POST',key);
+ const timelineId=S.timeline.id,characterId=S.character.id;
+ const input=action?.kind?action:action?{kind:'action',action,text:text??''}:S.view.pendingDecision?{kind:'clarification_answer',pendingDecisionId:S.view.pendingDecision.pendingDecisionId,answer:text}:{kind:'freeform',text};
+ const payload={commandId:key,sessionId:timelineId,expectedRevision:S.view.timeline.revision,actorId:characterId,mode:S.view.playMode??'STORY',input};
+ const result=await api(endpoint('commands'),payload,'POST',key);
+ if(!acceptsTurnResponse({timelineId:S.timeline?.id,characterId:S.character?.id,viewTimelineId:S.view?.timeline.id,revision:S.view?.timeline.revision},{timelineId:result.sessionId,revision:result.revision},{timelineId,characterId}))return result;
+ S.view.pendingDecision=result.pendingDecision;
+ if(result.status==='NEEDS_CLARIFICATION'){await render();return result;}
+ if(result.status==='PRESENTED'){if(result.presentation?.text)notify(result.presentation.text);await render();return result;}
  if(result.deathTransition)S.deathTransition=result.deathTransition;
  if(clearDraft){sessionRemove(draftKey());S.page='Chronicle';}
  await render();
@@ -253,8 +265,17 @@ async function rebuildNarration(turn,text,provider,rebuild,cancel,status){
  }catch(error){if(error.name==='AbortError'||controller.signal.aborted){status.textContent='Narration rebuild canceled. The previous prose remains displayed.';return;}status.textContent='Narration rebuild failed. The previous prose remains displayed.';throw error;
  }finally{if(S.streamController===controller)S.streamController=null;rebuild.disabled=false;cancel.hidden=true;}
 }
+async function turnInteraction(input){
+ const commandId=crypto.randomUUID();
+ await api(endpoint('commands'),{commandId,sessionId:S.timeline.id,expectedRevision:S.view.timeline.revision,actorId:S.character.id,mode:S.view.playMode??'STORY',input},'POST',commandId);
+ await render();
+}
 function chronicleContent(){
- return chronicleSurface({$,button,S,formatMoment,draft:()=>sessionStored(draftKey(),''),saveDraft:text=>sessionSave(draftKey(),text),
+ return chronicleSurface({$,button,S,formatMoment,
+  switchMode:()=>turnInteraction({kind:'mode_switch',targetMode:S.view.playMode==='GAME'?'STORY':'GAME'}),
+  cancelPending:()=>turnInteraction({kind:'cancel_pending',pendingActionId:S.view.pendingDecision.pendingDecisionId}),
+  chooseClarification:answer=>act({kind:'clarification_answer',pendingDecisionId:S.view.pendingDecision.pendingDecisionId,answer}),
+  chooseAffordance:affordanceId=>act({kind:'affordance',affordanceId}),draft:()=>sessionStored(draftKey(),''),saveDraft:text=>sessionSave(draftKey(),text),
   rebuild:(...args)=>rebuildNarration(...args).catch(error=>notify(error.message)),
   openRoster:()=>{S.character=null;S.deathTransition=null;S.page='Chronicle';return render();},
   loadDeathBranch:async()=>{const timelines=await api('/game/campaigns/'+S.campaign.id+'/timelines'),branch=timelines.find(row=>row.id===S.deathTransition?.branchId);if(!branch)throw new Error('Protected branch is unavailable.');S.timeline=branch;S.deathTransition=null;await render();},
@@ -263,11 +284,8 @@ function chronicleContent(){
    try{
     if(/^\/dev\b/i.test(text.trim())){if(!(S.mode==='developer'&&S.developerAllowed&&['creator','admin'].includes(S.campaign?.role))){status.textContent='Developer test commands require Developer Mode.';return;}const raw=text.trim().toLowerCase().replace(/^\/dev\s*/,''),command=raw==='search'?'loot':['combat','loot','end-combat'].includes(raw)?raw:null;if(!command){status.textContent='Unknown Developer command. Open Developer test commands below for the supported list.';return;}status.textContent='Running '+command+' test command…';const result=await api(endpoint('developer/test-command'),{revision:S.view.timeline.revision,characterId:S.character.id,command});sessionRemove(draftKey());notify(result.summary);await render();return;}
     status.textContent='Reading your story…';
-    const resolved=await api(endpoint('story/resolve'),{characterId:S.character.id,text,provider:S.narrator??'grounded'});
-    if(!resolved.action){status.textContent=resolved.clarification??'Which person or place did you mean?';return;}
-    if(resolved.interpretationWarning)notify(resolved.interpretationWarning);
-    status.textContent='Saving the turn and writing its continuation…';
-    await act(resolved.action,text,true);
+    const result=await act(null,text,true);
+    if(result?.status==='NEEDS_CLARIFICATION')status.textContent=result.pendingDecision.prompt;
    }catch(error){status.textContent=error.message;throw error;}
   })
  });

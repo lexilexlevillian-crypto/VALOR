@@ -1,4 +1,4 @@
-import {randomUUID} from 'node:crypto';
+import {simulationId as randomUUID} from './turn-runtime.ts';
 import type {Store} from '../db.ts';
 export type GameDelivery={id:string;timelineId:string;revision:number;type:string;effects:unknown[];clock:string};
 // Trusted worker interface, not an API. Consumers must deduplicate event IDs.

@@ -6,6 +6,8 @@ Persistent, server-authoritative web game and installable PWA for a Creator-auth
 
 Database determines what exists. Simulation determines what happens. AI interprets, reasons, and narrates.
 
+The supplied [System 1 gameplay specification](docs/SYSTEM_01_CORE_SPEC.md) now has a [core turn integration report](docs/CORE_TURN_IMPLEMENTATION.md). It documents the new command endpoint, mode controls, clarification, compound actions, interruption behavior, physical interactions, persistent scenes, causal audit and acceptance evidence.
+
 The latest [lifecycle systems guide](docs/LIFECYCLE_SYSTEMS.md) covers NPC route travel and fixed-step catch-up, production, quest branches, social consequences, dispatch, court/estate flows, private image assets, deduplicated saves, Creator diagnostics and confirmed AI action proposals.
 
 ## Run locally
@@ -72,11 +74,9 @@ This is a Node web service, not a static site. Production uses external Turso/li
 
 Optional DeepInfra narration uses the server-only `DEEPINFRA_API_KEY` (or `DEEPINFRA_TOKEN`) with `deepseek-ai/DeepSeek-V4-Pro` by default. Gemini remains supported. Set `AI_PROVIDER=deepinfra` to choose explicitly, and set nonzero campaign and user AI budgets in Settings to allow requests. Story submissions use the same observer filtering and campaign/user budgets as other AI requests. Provider failure retains the committed turn without rerolling. See [AI provider setup](docs/SYSTEMS_EXPANSION.md).
 
-Chronicle submits roleplay through `story/resolve`: common actions have a deterministic fast path, and a configured AI provider can select among observer-permitted actions when needed. The normal transactional turn endpoint still validates ownership, availability, revision, cursor, and permissions. The legacy `/interpret` API continues to return proposals for clients that want separate confirmation.
+Chronicle submits through the revision-checked, idempotent turn command endpoint. Recognized actions and bounded sequences use the existing authoritative simulation. Ambiguous or unsupported input requests clarification without advancing time. Game Mode shows observer-safe suggestions; Story Mode keeps the freeform composer. Mode switches, inspection, and pending cancellation do not advance world time. The legacy parse/interpret APIs remain available for proposal-only clients.
 
-Unmatched wording now continues as a story turn, including questions, casual conversation, and attempted actions. Words like “work” or “take” no longer block the writing box. A story turn advances the ordinary moment; it does not execute an unrecognized purchase, attack, pickup, or other claimed outcome. Narration can respond with reactions and obstacles while preserving the simulation’s result. Content settings, permissions, and AI availability/budgets still apply.
-
-Story narration uses source-anchored prose: the provider rewrites the committed simulation outcome, preserving player dialogue, without authority to grant items or change the world. A saved turn appears immediately; generation is asynchronous and may take several seconds. Story narration has a 12-second provider deadline and one attempt, then retains the grounded result. Story tools can rebuild narration without rerolling mechanics.
+Story narration uses source-anchored prose: the provider arranges committed source text using validated wording and tense changes, preserving player dialogue, without authority to grant items or change the world. A saved turn appears immediately; generation is asynchronous and may take several seconds. Story narration has a 12-second provider deadline and bounded validation retries, then retains the grounded result. Story tools can rebuild narration without rerolling mechanics.
 
 New lives receive one-time everyday essentials: a wallet, clothes, a working phone when communications are enabled, and keys when a home exists. Authored equipment takes precedence. Pickups and other validated inventory actions persist before narration; prose alone never awards money, weapons, or arbitrary items. Dropping or consuming equipment does not respawn it.
 
@@ -99,9 +99,9 @@ For the isolated three-viewport phone smoke test, run `node tests/phone-ui.brows
 
 ### Descriptive stories and game updates
 
-Story-mode AI may propose up to three ordinary adult NPCs, nearby public streets/storefronts, or lasting scene details per new turn. Strict structured validation rejects extra fields, duplicate names, private-home NPC spawning, indoor street creation, stale revisions, and more than 500 generated records per life. It cannot write arbitrary stats, grant money/items, change permissions, or override resolved mechanics. Valid additions and prose commit together through the existing event/revision/save pipeline. Generated places have local walking exits; generated people are real observer-visible NPCs. This is life-local content, not a change to the shared authoring source. The existing starter-item system remains responsible for essential possessions.
+Narration rewrites only committed, observer-visible outcomes. It cannot add NPCs, locations, items, or lasting facts. Each new turn freezes its narration context so later discoveries cannot enter an older turn's regeneration. New canonical content is authored through the existing Creator/domain services.
 
-Retry beside Continue rewrites the latest narration; a previously validated turn cannot create more entities or reroll its outcome. A failed initial narration can still finish its first expansion once. Grounded system summaries and notices appear in the collapsible Game updates section below the composer, not the story text. Ordinary non-mechanical story turns advance the game clock by one minute.
+Retry rewrites narration without rerolling mechanics or changing world state. Grounded summaries and notices appear in Game updates. Unrecognized prose asks for clarification instead of silently consuming a minute. See the core turn report for supported input and remaining domain-provider work.
 
 ### Island County climate and interactive phone map
 

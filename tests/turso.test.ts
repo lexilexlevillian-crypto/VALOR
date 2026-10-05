@@ -51,7 +51,7 @@ test('native node:sqlite accounts and session hashes survive the libSQL forward 
   await store.migrate();
   assert.equal((await store.get<{password_hash:string}>('SELECT password_hash FROM users'))!.password_hash,'unchanged-password-hash');
   assert.equal((await store.get<{token_hash:string}>('SELECT token_hash FROM sessions'))!.token_hash,'unchanged-session-hash');
-  assert.equal((await store.get<{n:number}>('SELECT count(*) n FROM schema_migrations'))!.n,44);
+  assert.equal((await store.get<{n:number}>('SELECT count(*) n FROM schema_migrations'))!.n,46);
   assert.deepEqual(await store.all('PRAGMA foreign_key_check'),[]);
  }finally{store.close();cleanupTestDirectory(dir);}
 });

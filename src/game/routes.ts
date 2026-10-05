@@ -1,6 +1,9 @@
+import {CreativeTurnPlanner} from './turn-planner.ts';
+import {TurnKernel} from './turn-kernel.ts';
+import {interpretTurn} from './turn-input.ts';
 import {z} from 'zod';
 import type {FastifyInstance,FastifyRequest} from 'fastify';
-import {Game} from './engine.ts';
+import {Game,checksum} from './engine.ts';
 import {geography} from './geography.ts';
 import {SharedWorld} from './shared-world.ts';
 import {dataSchemas,kinds,actionSchema,settingsSchema} from './model.ts';
@@ -16,6 +19,9 @@ import {simulationTiers} from './simulation.ts';
 import {listMasterBank} from './master-bank.ts';
 export function gameRoutes(app:FastifyInstance,game:Game,actor:(r:object)=>Actor,key:(headers:Record<string,unknown>)=>string){
  const world=new SharedWorld(game);
+ const directProviders=directProvidersFromEnvironment(),preferredProvider=preferredDirectProvider(directProviders);
+ const kernel=new TurnKernel(game,preferredProvider?new CreativeTurnPlanner(game,preferredProvider):undefined);
+ app.post('/game/timelines/:id/commands',async r=>{const p=z.object({id}).parse(r.params),body=z.object({sessionId:z.literal(p.id)}).passthrough().parse(r.body);return wrap(()=>kernel.execute(actor(r),body));});
  app.get('/game/lives',async r=>world.lives(actor(r)));
  app.post('/game/lives/:id/delete',async r=>{const p=z.strictObject({id}).parse(r.params);z.strictObject({confirmed:z.literal(true)}).parse(r.body);return world.setLifeDeleted(actor(r),p.id,true);});
  app.post('/game/lives/:id/restore',async r=>{const p=z.strictObject({id}).parse(r.params);z.strictObject({}).parse(r.body);return world.setLifeDeleted(actor(r),p.id,false);});
@@ -24,7 +30,7 @@ export function gameRoutes(app:FastifyInstance,game:Game,actor:(r:object)=>Actor
  app.post('/game/world/setup',async r=>{const b=z.strictObject({timelineId:id.optional()}).parse(r.body);return world.setup(actor(r),b.timelineId);});
  app.post('/game/world/life',async r=>{z.strictObject({}).parse(r.body);return world.enter(actor(r),key(r.headers));});
  const providers:NarrativeProvider[]=[new GroundedProvider(),...(process.env.AI_GATEWAY_URL&&process.env.AI_GATEWAY_SECRET?[new JsonGatewayProvider(process.env.AI_GATEWAY_URL,process.env.AI_GATEWAY_SECRET)]:[])];
- const directProviders=directProvidersFromEnvironment(),preferredProvider=preferredDirectProvider(directProviders);providers.push(...directProviders);
+ providers.push(...directProviders);
  app.post('/game/ai/health',async r=>{
   const user=await game.domain.active(actor(r));if(!['creator','admin'].includes(user.role))throw new Fault(403,'forbidden');
   const b=z.strictObject({provider:z.enum(directProviderIds).optional()}).parse(r.body),selected=b.provider?directProviders.find(provider=>provider.id===b.provider):preferredProvider,providerId=b.provider??preferredDirectProviderId(directProviders);
@@ -118,16 +124,10 @@ export function gameRoutes(app:FastifyInstance,game:Game,actor:(r:object)=>Actor
  });
  app.post('/game/timelines/:id/story/resolve',async r=>wrap(async()=>{
   const b=z.strictObject({characterId:id,text:z.string().trim().min(1).max(1000),provider:z.enum(['grounded',...directProviderIds]).default('grounded')}).parse(r.body),a=actor(r),tid=timeline(r);
-  await game.authorizeCharacter(a,tid,b.characterId);const state=await game.load(tid),direct=storyIntent(state,b.characterId,b.text);
-  if(direct)return {action:direct};
-  let interpretationWarning:string|undefined;
-  if(b.provider!=='grounded'&&!/\b(?:don't|didn't|doesn't|never|not|would|could|might|if|consider|remember)\b|\?/i.test(b.text)){
-   try{const proposal=await intent.propose(a,tid,b.characterId,b.text,b.provider);if(proposal.action)return {action:proposal.action};}
-   catch(error){if(!(error instanceof Error)||!['provider_unavailable','provider_circuit_open','narration_busy','context_limit','ai_budget_exceeded','ai_user_budget_exceeded'].includes(error.message))throw error;interpretationWarning='AI interpretation is unavailable or its allowance is exhausted. Only recognized actions can change the world.';}
-  }
-  const clarification=storyActionClarification(b.text);if(clarification)return {action:null,clarification};
-  // Any unmatched roleplay can continue. A story turn does not execute the alleged action.
-  return {action:{type:'story',text:b.text},...(interpretationWarning?{interpretationWarning}:{})};
+  await game.authorizeCharacter(a,tid,b.characterId);const state=await game.load(tid),interpreted=interpretTurn(state,b.characterId,b.text);
+  if(interpreted.clarification)return {action:null,clarification:interpreted.clarification};
+  if(interpreted.clauses.length>1)return {action:null,clarification:'Submit this plan through the turn command endpoint to preserve its dependencies.',clauses:interpreted.clauses};
+  return {action:interpreted.clauses[0]!.action};
  }));
  app.post('/game/timelines/:id/parse',async r=>{const b=z.strictObject({characterId:id,text:z.string().min(1).max(1000)}).parse(r.body);return wrap(async ()=>(await game.parse(actor(r),timeline(r),b.characterId,b.text)));});
  app.post('/game/timelines/:id/interpret',async r=>{const b=z.strictObject({characterId:id,text:z.string().min(1).max(1000),provider:z.enum(directProviderIds)}).parse(r.body);return intent.propose(actor(r),timeline(r),b.characterId,b.text,b.provider);});
@@ -165,7 +165,7 @@ export function gameRoutes(app:FastifyInstance,game:Game,actor:(r:object)=>Actor
  app.get('/game/timelines/:id/developer/retrieval',async r=>{const q=retrievalQuery(r);return wrap(()=>game.semanticRetrieval(actor(r),timeline(r),q.characterId,q.query,q.filters,true));});
  app.get('/game/timelines/:id/context',async r=>{const q=z.strictObject({characterId:id,query:z.string().max(1000)}).parse(r.query);return wrap(async ()=>(await game.context(actor(r),timeline(r),q.characterId,q.query)));});
  app.get('/game/timelines/:id/developer/context-manifest',async r=>{const q=z.strictObject({characterId:id,query:z.string().max(1000).default('')}).parse(r.query);return wrap(()=>game.developerContextManifest(actor(r),timeline(r),q.characterId,q.query));});
- app.get('/game/timelines/:id/developer/turn-traces',async r=>{const timelineId=timeline(r);await game.access(actor(r),timelineId,true);const traces=await game.store.all<Record<string,unknown>>('SELECT trace_id AS traceId,actor_id AS actorId,request_key AS requestKey,original_text AS originalText,expected_revision AS expectedRevision,expected_cursor AS expectedCursor,event_id AS eventId,status,failure_reason AS failureReason,created_at AS createdAt,completed_at AS completedAt FROM turn_traces WHERE timeline_id=? ORDER BY created_at DESC LIMIT 100',timelineId);for(const trace of traces)trace.steps=(await game.store.all<Record<string,unknown>>('SELECT sequence,stage,duration_ms AS durationMs,status,failure_reason AS failureReason,details_json AS details,created_at AS createdAt FROM turn_trace_steps WHERE trace_id=? ORDER BY sequence',String(trace.traceId))).map(step=>({...step,details:JSON.parse(String(step.details))}));return traces;});
+ app.get('/game/timelines/:id/developer/turn-traces',async r=>{const timelineId=timeline(r);await game.access(actor(r),timelineId,true);const traces=await game.store.all<Record<string,unknown>>('SELECT trace_id AS traceId,actor_id AS actorId,request_key AS requestKey,original_text AS originalText,expected_revision AS expectedRevision,expected_cursor AS expectedCursor,event_id AS eventId,status,failure_reason AS failureReason,created_at AS createdAt,completed_at AS completedAt FROM turn_traces WHERE timeline_id=? ORDER BY created_at DESC LIMIT 100',timelineId);const attempts=(await game.store.all<{command_id:string;record_json:string}>('SELECT a.command_id,a.record_json FROM turn_attempt_records a JOIN turn_interactions i ON i.command_id=a.command_id WHERE i.timeline_id=? ORDER BY i.rowid DESC LIMIT 200',timelineId)).map(row=>({requestKey:'command_'+checksum(row.command_id),record:JSON.parse(row.record_json)}));for(const trace of traces){trace.attempt=attempts.find(row=>row.requestKey===trace.requestKey)?.record??null;if(trace.eventId){const batch=await game.store.get<{batch_json:string}>('SELECT batch_json FROM turn_resolution_batches WHERE event_id=?',String(trace.eventId));trace.resolution=batch?JSON.parse(batch.batch_json):null;}trace.steps=(await game.store.all<Record<string,unknown>>('SELECT sequence,stage,duration_ms AS durationMs,status,failure_reason AS failureReason,details_json AS details,created_at AS createdAt FROM turn_trace_steps WHERE trace_id=? ORDER BY sequence',String(trace.traceId))).map(step=>({...step,details:JSON.parse(String(step.details))}));}return traces;});
  app.get('/game/timelines/:id/ai-requests',async r=>{const timelineId=timeline(r);await game.access(actor(r),timelineId,true);return await game.store.all('SELECT trace_id AS traceId,purpose,provider,model,configuration_id AS configurationId,budget_json AS budget,allowed_tools_json AS allowedTools,response_schema_id AS responseSchemaId,response_schema_version AS responseSchemaVersion,prompt_id AS promptId,prompt_version AS promptVersion,cache_policy AS cachePolicy,status,attempt_count AS attempts,input_tokens AS inputTokens,output_tokens AS outputTokens,failure_code AS failureCode,created_at AS createdAt FROM ai_requests WHERE trace_id IN (SELECT id FROM ai_usage WHERE timeline_id=? UNION SELECT id FROM ai_intent_usage WHERE timeline_id=?) ORDER BY created_at DESC LIMIT 100',timelineId,timelineId);});
  app.get('/game/timelines/:id/ai-usage',async r=>{(await game.access(actor(r),timeline(r),true));return (await game.store.all('SELECT provider,reserved_tokens,used_tokens,status,created_at FROM ai_usage WHERE timeline_id=? ORDER BY rowid DESC LIMIT 100',timeline(r)));});
 }

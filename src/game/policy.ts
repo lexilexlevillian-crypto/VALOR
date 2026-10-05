@@ -13,6 +13,7 @@ export const needsRate=(s:State)=>needsEnabled(s)?({light:0.5,grounded:1,intense
 export const needsPresentation=(s:State)=>s.settings.campaign?.needsPolicy??{ui:needsEnabled(s)?'summary':'hidden',costs:'none' as const,penalties:'none' as const};
 export const injuryRate=(s:State)=>({restrained:0.5,grounded:1,intense:1.5}[s.settings.campaign?.injuryIntensity??'grounded']);
 export function enforceActionPolicy(s:State,action:Action){
+ for(const [field,value] of Object.entries(action))if(field.endsWith('Id')&&typeof value==='string'){const entity=s.entities.find(e=>e.id===value&&!e.archived);if(entity&&typeof entity.data.introducedOn==='string'&&entity.data.introducedOn>s.clock.slice(0,10)&&!(entity.data.tags as string[]).includes('canonical-technology-exception'))throw new Error('technology_not_yet_available');}
  const p=s.settings.campaign;if(!p)return;
  const system=actionSystems[action.type];if(!enabled(s,action.type)||system&&!enabled(s,system))throw new Error('system_disabled');
  if('phoneId'in action&&!technology(s,'phone'))throw new Error('phone_disabled');

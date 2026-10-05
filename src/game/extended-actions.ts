@@ -1,3 +1,4 @@
+import {simulationId} from './turn-runtime.ts';
 import {data,getEntity} from './model.ts';
 import type {Action,Data,Entity,State} from './model.ts';
 import {visible,fact} from './epistemics.ts';
@@ -20,7 +21,7 @@ export function extendedAction(s:State,actorId:string,pc:Data<'character'>,actio
    if(action.patientId){const patient=getEntity(s,action.patientId,'character');requireCondition(patient.data.locationId===pc.locationId&&visible(s,patient,actorId),'patient_not_present');}
    const responder=a.dispatchPolicy!.kind==='police'?availableOfficer(s,agency.id,pc.locationId!,eventId):s.entities.filter(e=>e.kind==='character'&&!e.archived&&a.memberIds.includes(e.id)&&!e.data.playable&&e.data.condition==='conscious'&&!s.entities.some(call=>call.kind==='dispatch'&&call.data.responderId===e.id&&['enroute','arrived'].includes(String(call.data.status)))).sort((x,y)=>x.id.localeCompare(y.id))[0];
    const responseMinutes=a.dispatchPolicy!.kind==='police'?postureDelayMinutes(resolveLawPosture(s,pc.locationId,agency.id),eventId):a.dispatchPolicy!.responseMinutes,call=add(s,'dispatch','Assistance request',{agencyId:agency.id,requesterId:actorId,locationId:pc.locationId,responderId:responder?.id??null,patientId:action.patientId,destinationId:a.dispatchPolicy!.hospitalId,report:action.report,kind:a.dispatchPolicy!.kind,status:responder?'enroute':'queued',dueAt:responder?new Date(Date.parse(s.clock)+responseMinutes*60000).toISOString():null,transportConsent:action.patientId===actorId&&action.transportConsent,createdAt:s.clock},'owner');
-   if(responder){s.beliefs.push({id:crypto.randomUUID(),observerId:responder.id,proposition:action.report,confidence:0.5,source:'dispatch:'+call.id,at:s.clock,correctedBy:null});fact(s,call.id,'request-received',true,eventId,[actorId,responder.id]);}
+   if(responder){s.beliefs.push({id:simulationId(),observerId:responder.id,proposition:action.report,confidence:0.5,source:'dispatch:'+call.id,at:s.clock,correctedBy:null});fact(s,call.id,'request-received',true,eventId,[actorId,responder.id]);}
    output(responder?'Assistance requested; a responder is en route.':'Assistance requested; awaiting an available responder.');return 0;
   }
   case 'dispatch-response':{
@@ -29,7 +30,7 @@ export function extendedAction(s:State,actorId:string,pc:Data<'character'>,actio
     requireCondition(d.status==='queued'&&agency.memberIds.includes(actorId)&&agency.dispatchPolicy,'dispatch_authority_required');
     requireCondition(!s.entities.some(e=>e.kind==='dispatch'&&!e.archived&&e.data.responderId===actorId&&['enroute','arrived'].includes(String(e.data.status))),'responder_busy');
     d.responderId=actorId;d.status='enroute';const responseMinutes=d.kind==='police'?postureDelayMinutes(resolveLawPosture(s,d.locationId,d.agencyId),entity.id+'|accept'):agency.dispatchPolicy!.responseMinutes;d.dueAt=new Date(Date.parse(s.clock)+responseMinutes*60000).toISOString();
-    s.beliefs.push({id:crypto.randomUUID(),observerId:actorId,proposition:d.report,confidence:0.5,source:'dispatch:'+entity.id,at:s.clock,correctedBy:null});
+    s.beliefs.push({id:simulationId(),observerId:actorId,proposition:d.report,confidence:0.5,source:'dispatch:'+entity.id,at:s.clock,correctedBy:null});
    }else if(action.operation==='close'){
     requireCondition([d.requesterId,d.responderId].includes(actorId),'dispatch_authority_required');d.status='closed';
    }else{
@@ -126,7 +127,7 @@ export function extendedAction(s:State,actorId:string,pc:Data<'character'>,actio
     requireCondition(w.characterId===actorId&&!w.permanent,'clinical_treatment_unavailable');
     requireCondition(rule.medicineId,'authored_medicine_required');const medicine=getEntity(s,rule.medicineId!,'item'),m=data(medicine,'item');
     requireCondition(m.category==='medicine'&&m.ownerId===business.id&&m.quantity>0,'clinic_supply_unavailable');
-    requireCondition(rule.treatmentQuality>=w.treatmentRequirements.minimumQuality,'clinical_quality_insufficient');medicine.data.quantity=m.quantity-1;w.treated=true;w.stabilized=true;w.bleeding=0;w.infection=Math.max(0,w.infection-rule.severityReduction);w.severity=Math.max(0,w.severity-rule.severityReduction);w.course.status=w.severity===0?'resolved':'recovering';if(w.severity===0)w.course.resolvedAt=s.clock;w.treatments.push({id:crypto.randomUUID(),at:s.clock,eventId,providerId:actorId,method:'clinical',itemId:medicine.id,serviceId:service.id,quality:rule.treatmentQuality,outcome:w.severity===0?'improved':'stabilized',minutes:rule.minutes,note:service.name});if(!w.knownByIds.includes(actorId))w.knownByIds.push(actorId);if(!w.diagnosedByIds.includes(actorId))w.diagnosedByIds.push(actorId);w.assessments.push({id:crypto.randomUUID(),at:s.clock,eventId,assessorId:actorId,method:'clinical',severityBand:w.severity<25?'minor':w.severity<50?'moderate':w.severity<75?'serious':'critical',diagnosis:w.category+' · '+w.bodyPart,confidence:rule.treatmentQuality,sharedWithIds:[actorId]});injury.data=w as Entity['data'];
+    requireCondition(rule.treatmentQuality>=w.treatmentRequirements.minimumQuality,'clinical_quality_insufficient');medicine.data.quantity=m.quantity-1;w.treated=true;w.stabilized=true;w.bleeding=0;w.infection=Math.max(0,w.infection-rule.severityReduction);w.severity=Math.max(0,w.severity-rule.severityReduction);w.course.status=w.severity===0?'resolved':'recovering';if(w.severity===0)w.course.resolvedAt=s.clock;w.treatments.push({id:simulationId(),at:s.clock,eventId,providerId:actorId,method:'clinical',itemId:medicine.id,serviceId:service.id,quality:rule.treatmentQuality,outcome:w.severity===0?'improved':'stabilized',minutes:rule.minutes,note:service.name});if(!w.knownByIds.includes(actorId))w.knownByIds.push(actorId);if(!w.diagnosedByIds.includes(actorId))w.diagnosedByIds.push(actorId);w.assessments.push({id:simulationId(),at:s.clock,eventId,assessorId:actorId,method:'clinical',severityBand:w.severity<25?'minor':w.severity<50?'moderate':w.severity<75?'serious':'critical',diagnosis:w.category+' · '+w.bodyPart,confidence:rule.treatmentQuality,sharedWithIds:[actorId]});injury.data=w as Entity['data'];
     if(w.severity===0)injury.archived=true;
     fact(s,injury.id,'clinical-treatment',{serviceId:service.id,costCents:rule.costCents},eventId,[actorId]);output('Authored clinical treatment completed; continuing recovery follows campaign rules.');
    }else{

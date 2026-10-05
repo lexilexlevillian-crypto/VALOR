@@ -1,4 +1,4 @@
-import {randomUUID} from 'node:crypto';
+import {simulationId as randomUUID} from './turn-runtime.ts';
 import {data,validateEntity} from './model.ts';
 import type {State,Entity} from './model.ts';
 // Only starting essentials, never weapons, cash, quest rewards, or model-invented items.

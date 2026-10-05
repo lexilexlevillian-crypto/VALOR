@@ -1,10 +1,10 @@
 import {z} from 'zod';
-import {randomUUID} from 'node:crypto';
+import {simulationId as randomUUID} from './turn-runtime.ts';
 import {ensure} from '../contracts.ts';
 import {data,validateEntity,validateState,type State,type Entity} from './model.ts';
 import {fact,observerView} from './epistemics.ts';
 
-// The model may propose modest scene additions, never arbitrary entity data or commands.
+// Trusted authoring utility only; runtime narration cannot apply scene additions.
 export const storyAdditionSchema=z.strictObject({kind:z.enum(['npc','street','place','detail']),name:z.string().trim().min(2).max(80),description:z.string().trim().min(1).max(600)});
 export const storyAdditionsSchema=z.array(storyAdditionSchema).max(3);
 export type StoryAddition=z.infer<typeof storyAdditionSchema>;
@@ -38,8 +38,8 @@ export function applyStoryAdditions(s:State,characterId:string,turnId:string,raw
  }
  validateState(s);return effects;
 }
-export function storyScene(s:State,characterId:string){
- const view=observerView(s,characterId),pc=view.entities.find(e=>e.id===characterId),place=view.entities.find(e=>e.id===pc?.data.locationId);
+export function storyScene(s:State,characterId:string,projection?:ReturnType<typeof observerView>){
+ const view=projection??observerView(s,characterId),pc=view.entities.find(e=>e.id===characterId),place=view.entities.find(e=>e.id===pc?.data.locationId);
  return {clock:view.clock,weather:view.weather.actual,character:pc?{name:pc.name}:null,place:place?{name:place.name,category:place.data.category,allowNewPeople:!place.data.ownerId&&data(place,'location').access.policy==='public',description:String(place.data.description).slice(0,120)}:null,
   people:view.entities.filter(e=>e.kind==='character'&&e.id!==characterId&&e.data.locationId===pc?.data.locationId).slice(0,3).map(e=>({name:e.name,description:String(e.data.description).slice(0,80)})),
   details:view.facts.filter(f=>f.predicate==='scene-detail'&&f.subjectId===place?.id).slice(-3).map(f=>{const detail=storyAdditionSchema.safeParse(f.value);return detail.success?{name:detail.data.name,description:detail.data.description.slice(0,100)}:null;}),

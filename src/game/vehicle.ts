@@ -1,4 +1,4 @@
-import {randomUUID} from 'node:crypto';
+import {simulationId as randomUUID} from './turn-runtime.ts';
 import {data,getEntity} from './model.ts';
 import type {Data,Entity,State} from './model.ts';
 import {carriedBy} from './items.ts';
@@ -43,10 +43,11 @@ export function recordVehicleDamage(s:State,vehicle:Entity,eventId:string,kind:D
  const v=data(vehicle,'vehicle'),record={id:randomUUID(),at:s.clock,eventId,kind,component,severity:Math.max(0,Math.min(100,severity)),description,repairedAt:null};v.damageRecords.push(record);if(v.damageRecords.length>5000)v.damageRecords.splice(0,v.damageRecords.length-5000);vehicle.data=v as Entity['data'];return record;
 }
 
-export function moveVehicle(s:State,vehicle:Entity,driverId:string,destinationId:string,minutes:number,eventId:string,mode:'drive'|'tow'='drive',distanceKm?:number){
- const v=data(vehicle,'vehicle'),originId=v.locationId;if(!originId)throw new Error('vehicle_location_unresolved');getEntity(s,destinationId,'location');
+export function moveVehicle(s:State,vehicle:Entity,driverId:string,destinationId:string,minutes:number,eventId:string,mode:'drive'|'tow'='drive',distanceKm?:number,complete=true){
+ const v=data(vehicle,'vehicle'),originId=v.locationId??v.routeState?.originId;if(!originId)throw new Error('vehicle_location_unresolved');getEntity(s,destinationId,'location');
  const departedAt=s.clock,arrivesAt=new Date(Date.parse(s.clock)+minutes*60000).toISOString();v.locationId=null;v.routeState={originId,destinationId,departedAt,arrivesAt,mode,status:'enroute'};vehicle.data=v as Entity['data'];recordVehicleEvent(s,vehicle,eventId,mode==='tow'?'towed':'departed',driverId,{fromLocationId:originId,toLocationId:destinationId,note:'Route state '+originId+' to '+destinationId+'.'});
- const moving=data(vehicle,'vehicle');moving.locationId=destinationId;moving.routeState=null;moving.odometerKm+=Math.max(0,distanceKm??minutes*s.settings.vehicles.distanceKmPerMinute);for(const id of moving.occupants){const occupant=getEntity(s,id,'character'),character=data(occupant,'character');character.locationId=destinationId;occupant.data=character as Entity['data'];}vehicle.data=moving as Entity['data'];recordVehicleEvent(s,vehicle,eventId,'arrived',driverId,{fromLocationId:originId,toLocationId:destinationId,note:'Vehicle and occupants arrived; trunk contents remain contained.'});
+ const moving=data(vehicle,'vehicle');if(!complete){moving.odometerKm+=Math.max(0,distanceKm??minutes*s.settings.vehicles.distanceKmPerMinute);for(const id of moving.occupants)getEntity(s,id,'character').data.locationId=null;vehicle.data=moving as Entity['data'];return;}
+ moving.locationId=destinationId;moving.routeState=null;moving.odometerKm+=Math.max(0,distanceKm??minutes*s.settings.vehicles.distanceKmPerMinute);for(const id of moving.occupants){const occupant=getEntity(s,id,'character'),character=data(occupant,'character');character.locationId=destinationId;occupant.data=character as Entity['data'];}vehicle.data=moving as Entity['data'];recordVehicleEvent(s,vehicle,eventId,'arrived',driverId,{fromLocationId:originId,toLocationId:destinationId,note:'Vehicle and occupants arrived; trunk contents remain contained.'});
 }
 
 export function transitOption(s:State,fromId:string,toId:string,mode:'transit'|'taxi'){

@@ -67,3 +67,10 @@ Trait definitions declare category, visibility, prerequisites, oppositions, comb
 - `GET .../templates` and `POST .../templates/use` with `{templateId,name}` instantiate a template into a separate timeline.
 
 Checksums detect corruption, not authorship/authenticity. Keep exports private: they include all hidden game content and private Chronicle. Accounts, credentials and session tables are excluded from game exports; full database backups include them and require stronger protection.
+
+
+## Core turn command envelope (migrations 045–046)
+
+The Chronicle now uses `POST /game/timelines/:id/commands`. The strict envelope contains `commandId`, `sessionId`, `expectedRevision`, controlled-character `actorId`, `mode` (`GAME` or `STORY`), and a discriminated `input`. The full input list, response behavior, compatibility mapping and limits are documented in [Core turn implementation](CORE_TURN_IMPLEMENTATION.md). Legacy `/turns` remains supported and uses the same resolver/transaction. Unknown freeform no longer becomes a time-consuming generic story action; it creates clarification. Narration no longer creates canonical scene additions.
+
+Command inspection panels include scene, inventory, phone, journal, health and cases. Clarification answers may select a stored option by ID/name or restate the action. Committed results include a persisted active scene and causal resolution audit; privileged turn traces expose the audit batch. Item mechanisms and identity disclosure are described in the core implementation guide.

@@ -1,4 +1,4 @@
-import {randomUUID} from 'node:crypto';
+import {simulationId as randomUUID} from './turn-runtime.ts';
 import type {Effect} from './simulation.ts';
 import type {Entity,State} from './model.ts';
 import {validateEntity} from './model.ts';

@@ -1,6 +1,6 @@
 import {anchorFor,mappedRoute,cityBridges} from './city-geography.ts';
 import {canonSources} from './canon.ts';
-import {randomUUID} from 'node:crypto';
+import {simulationId as randomUUID} from './turn-runtime.ts';
 import {data,getEntity} from './model.ts';
 import type {Data,Entity,State} from './model.ts';
 import {calendarView,hoursOpen,weatherView} from './calendar.ts';
@@ -35,7 +35,11 @@ export function knows(s:State,observerId:string,subjectId:string){
 }
 export function visible(s:State,e:Entity,observerId:string):boolean{
  if(e.archived)return false;
- const observer=data(getEntity(s,observerId,'character'),'character');
+ return visibleTo(s,e,observerId,data(getEntity(s,observerId,'character'),'character'));
+}
+// One synchronous projection shares a validated observer; no cache survives a mutation.
+function visibleTo(s:State,e:Entity,observerId:string,observer:Data<'character'>):boolean{
+ if(e.archived)return false;
  if(e.id===observerId)return true;
  if(e.kind==='location'&&e.id===observer.locationId)return true;
  if(e.visibility==='creator')return false;
@@ -81,6 +85,8 @@ export function visible(s:State,e:Entity,observerId:string):boolean{
 }
 export function project(s:State,e:Entity,observerId:string):Entity {
  const copy=structuredClone(e);
+ if(e.kind==='character'){const identity=data(e,'character').identityDisclosure;if(identity?.concealed&&e.id!==observerId&&!identity.knownByIds.includes(observerId))copy.name=identity.label;}
+ if(e.kind==='item'&&e.data.mechanism){const {attempts,lockDifficulty,forceDifficulty,noiseDifficulty,throwDifficulty,keyId,...safe}=e.data.mechanism as Record<string,unknown>;for(const field of ['destinationId','obstructedById'])if(typeof safe[field]==='string'&&!s.entities.some(target=>target.id===safe[field]&&visible(s,target,observerId)))delete safe[field];copy.data.mechanism=safe as Entity['data'][string];}
  if(e.kind==='media')delete copy.data.body;
  copy.data.mediaIds=((e.data.mediaIds??[]) as string[]).filter(id=>{const media=s.entities.find(e=>e.id===id&&e.kind==='media');return media&&visible(s,media,observerId);});
  if(e.kind==='case'&&e.data.investigatorId!==observerId){copy.name='Case notice';copy.data={stage:e.data.stage!,bailAmountCents:e.data.bailAmountCents??null,bookingCompletesAt:e.data.bookingCompletesAt??null,holdingUntil:e.data.holdingUntil??null,courtAt:e.data.courtAt??null,releasedAt:e.data.releasedAt??null};return copy;}
@@ -108,6 +114,7 @@ export function project(s:State,e:Entity,observerId:string):Entity {
   const portrait=d.portraitMediaId?s.entities.find(candidate=>candidate.id===d.portraitMediaId&&candidate.kind==='media'&&!candidate.archived):undefined;
   presentation.mediaIds=mediaIds;
   presentation.portraitMediaId=portrait&&visible(s,portrait,observerId)?portrait.id:null;
+  if(d.identityDisclosure?.concealed&&!d.identityDisclosure.knownByIds.includes(observerId)){for(const key of ['identity','legalName','aliases','identityDisclosure'])delete presentation[key];}
   copy.data=presentation as Entity['data'];
  }else{
   for(const k of ['secrets','instructions','aiBehavior','hiddenSolution','embedding','pending','preferences','goals','fears','forensicFindings'])delete copy.data[k];
@@ -151,12 +158,16 @@ export function project(s:State,e:Entity,observerId:string):Entity {
  return copy;
 }
 export function observerView(s:State,observerId:string){
- const entities=s.entities.filter(e=>visible(s,e,observerId)).map(e=>project(s,e,observerId)),now=Date.parse(s.clock);
+ const observer=data(getEntity(s,observerId,'character'),'character');
+ const entities=s.entities.filter(e=>visibleTo(s,e,observerId,observer)).map(e=>project(s,e,observerId)),now=Date.parse(s.clock);
  const factIds=new Set(s.knowledge.filter(k=>k.observerId===observerId&&(!k.expiresAt||Date.parse(k.expiresAt)>now)).map(k=>k.factId));
- const needs=needsPresentation(s);return {clock:s.clock,calendar:calendarView(s),weather:weatherView(s),locationBrowser:locationBrowser(s,observerId),settings:{needs:needsEnabled(s),needsPolicy:{intensity:s.settings.campaign?.needsIntensity??(s.settings.needs?'grounded':'off'),...needs},fuel:s.settings.fuel,romance:s.settings.romance,intimacy:s.settings.intimacy,intensity:s.settings.intensity,weather:s.settings.weather,rulesConfigured:s.settings.rules!==null},
+ const needs=needsPresentation(s);const result={clock:s.clock,calendar:calendarView(s),weather:weatherView(s),locationBrowser:locationBrowser(s,observerId),settings:{needs:needsEnabled(s),needsPolicy:{intensity:s.settings.campaign?.needsIntensity??(s.settings.needs?'grounded':'off'),...needs},fuel:s.settings.fuel,romance:s.settings.romance,intimacy:s.settings.intimacy,intensity:s.settings.intensity,weather:s.settings.weather,rulesConfigured:s.settings.rules!==null},
  entities,facts:s.facts.filter(f=>factIds.has(f.id)&&!f.retiredAt&&within(now,f.validFrom,f.validUntil)&&audienceAllows(s,observerId,f.audience)),
  beliefs:s.beliefs.filter(b=>b.observerId===observerId&&within(now,b.validFrom,b.validUntil)&&audienceAllows(s,observerId,b.audience)),
  memories:s.memories.filter(m=>m.observerId===observerId&&(!m.expiresAt||Date.parse(m.expiresAt)>now)).map(m=>({...m,currentSalience:memorySalience(s,m)}))};
+ const aliases=s.entities.flatMap(e=>{const identity=e.data.identityDisclosure as {concealed:boolean;knownByIds:string[];label:string}|null;return e.kind==='character'&&identity?.concealed&&e.id!==observerId&&!identity.knownByIds.includes(observerId)?[...new Set([e.name,String(e.data.legalName??''),...((e.data.aliases??[]) as string[])])].filter(Boolean).map(name=>({name,label:identity.label})):[];});
+ if(!aliases.length)return result;
+ return JSON.parse(JSON.stringify(result,(_key,value)=>{if(typeof value!=='string')return value;for(const alias of aliases)value=value.replaceAll(alias.name,alias.label);return value;})) as typeof result;
 }
 export function locationBrowser(s:State,observerId:string){
  const observer=data(getEntity(s,observerId,'character'),'character'),currentId=observer.locationId,visibleLocations=s.entities.filter(entity=>entity.kind==='location'&&visible(s,entity,observerId)),visibleIds=new Set(visibleLocations.map(entity=>entity.id)),carriedTags=new Set(s.entities.filter(entity=>entity.kind==='item'&&carriedBy(s,entity,observerId)).flatMap(entity=>entity.data.tags as string[])),carriedIds=new Set(s.entities.filter(entity=>entity.kind==='item'&&carriedBy(s,entity,observerId)).map(entity=>entity.id));
@@ -184,8 +195,8 @@ export function storyCardState(entity:Entity,s:State,observerId:string,query:str
  return {active:!deactivated,reason:deactivated?'deactivated':'active',activatesWhen:activation,deactivatesWhen:deactivation};
 }
 const memoryRecallMatches=(s:State,memory:State['memories'][number],query:string,filters:ReturnType<typeof normalizedFilters>)=>{const conditions=memory.recallConditions;if(!conditions)return true;const now=Date.parse(s.clock),location=data(getEntity(s,memory.observerId,'character'),'character').locationId,queryTerms=new Set(query.toLowerCase().split(/\W+/).filter(Boolean)),filterEntities=[...filters.entityIds,...filters.placeIds,...filters.personIds,...filters.relationshipIds,...filters.evidenceIds,...filters.factionIds];return within(now,conditions.from,conditions.until)&&(!conditions.locationId||conditions.locationId===location)&&(!conditions.entityIds.length||conditions.entityIds.some(id=>filterEntities.includes(id)))&&(!conditions.tags.length||conditions.tags.some(tag=>queryTerms.has(tag.toLowerCase())||filters.tags.includes(tag.toLowerCase())));};
-export function retrieve(s:State,observerId:string,query:string,limit=12,queryEmbedding:number[]=[],rawFilters:RetrievalFilters={},developer=false){
- const view=observerView(s,observerId),terms=query.toLowerCase().split(/\W+/).filter(Boolean),filters=normalizedFilters(rawFilters),localQuery=queryEmbedding.length?queryEmbedding:embedText(query),visibleIds=new Set(view.entities.map(entity=>entity.id));
+export function retrieve(s:State,observerId:string,query:string,limit=12,queryEmbedding:number[]=[],rawFilters:RetrievalFilters={},developer=false,projection?:ReturnType<typeof observerView>){
+ const view=projection??observerView(s,observerId),terms=query.toLowerCase().split(/\W+/).filter(Boolean),filters=normalizedFilters(rawFilters),localQuery=queryEmbedding.length?queryEmbedding:embedText(query),visibleIds=new Set(view.entities.map(entity=>entity.id));
  const visibleCandidates=view.entities.filter(e=>['lore','storycard'].includes(e.kind)).filter(e=>matchesFilters(s,e,filters)),rejected:Array<{id:string;reason:string;kind:string}>=[];
  const rows:Array<{id:string;name:string;text:unknown;source:string;score:number;provenance:{kind:string;revision:string|number;visibility:string;sourceRefs:unknown[];links:unknown[];validFrom:string|null;validUntil:string|null;activation:unknown;matched:{lexical:number;semantic:number;structured:number}}}>=visibleCandidates.flatMap(e=>{const source=data(getEntity(s,e.id),e.kind as 'lore'|'storycard'),state=storyCardState(e,s,observerId,query);if(!state.active){if(developer)rejected.push({id:e.id,reason:state.reason,kind:e.kind});return [];}const candidateEmbedding=source.embedding.length===localQuery.length?source.embedding:embedText(source.description+' '+source.tags.join(' '),localQuery.length),semantic=cosine(localQuery,candidateEmbedding),body=(e.name+' '+e.data.description+' '+source.tags.join(' ')).toLowerCase(),lexical=terms.filter(term=>body.includes(term)).length,structured=Object.values(filters).some(value=>Array.isArray(value)?value.length:Boolean(value))?1:0;return [{id:e.id,name:e.name,text:e.data.description,source:source.source,score:lexical+Math.max(0,semantic)+source.priority+structured,provenance:{kind:e.kind,revision:e.revision,visibility:e.visibility,sourceRefs:source.sourceRefs,links:source.linkDetails,validFrom:source.validFrom,validUntil:source.validUntil,activation:state,matched:{lexical,semantic,structured}}}];});
  if(developer)for(const entity of s.entities.filter(e=>['lore','storycard'].includes(e.kind)&&!e.archived&&!visibleIds.has(e.id)&&matchesFilters(s,e,filters)))rejected.push({id:entity.id,reason:'permission-filtered',kind:entity.kind});

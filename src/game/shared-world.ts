@@ -1,4 +1,4 @@
-import {randomUUID} from 'node:crypto';
+import {simulationId as randomUUID} from './turn-runtime.ts';
 import {ensure} from '../contracts.ts';
 import type {Actor} from '../contracts.ts';
 import type {Game} from './engine.ts';

@@ -2,7 +2,7 @@
 
 ## Database and migrations
 
-Local default: data/valor.sqlite, excluded from Git. Production uses external Turso via the official @libsql/client package. Run npm run migrate before use; startup also awaits verification/application of every migration before accepting requests. All SQL migrations run transactionally with checksums. Never edit an applied migration. Add a forward-compatible migration for future changes. Startup refuses unknown schema versions and modified migration checksums; connectivity/authentication failures never create a local fallback database. `/readyz` returns success only when the database is reachable and schema migration 044 is present; `/healthz` remains the liveness/dependency check.
+Local default: data/valor.sqlite, excluded from Git. Production uses external Turso via the official @libsql/client package. Run npm run migrate before use; startup also awaits verification/application of every migration before accepting requests. All SQL migrations run transactionally with checksums. Never edit an applied migration. Add a forward-compatible migration for future changes. Startup refuses unknown schema versions and modified migration checksums; connectivity/authentication failures never create a local fallback database. `/readyz` returns success only when the database is reachable and schema migration 046 is present; `/healthz` remains the liveness/dependency check.
 
 001_foundation establishes the durable model, constraints and immutable history triggers. 002_query_indexes adds scoped query indexes. 003_game adds timelines, typed entities, epistemic tables, game events, saves, templates and AI usage. 004_chronicle_lineage preserves historical turns across branches/imports. 005_game_delivery adds a leased game-event outbox, committed atomically with mutations. Tests migrate a populated 001 database forward through all migrations and inspect it from a new Node process.
 
@@ -73,7 +73,7 @@ Deployment sequence:
 2. Run the full CI gates and `npm run release:rehearse -- <new path>` against the intended source.
 3. Deploy to staging, run migrations, require `/healthz` and `/readyz`, then exercise the acceptance matrix in `SYSTEM32_RELEASE.md`.
 4. Deploy the same immutable artifact to production, run forward migrations once, require readiness, and inspect errors, latency, queue depth and storage growth before reopening writes.
-5. For code rollback, redeploy the prior artifact only if it understands schema 044. Otherwise keep the service stopped and restore the verified pre-release backup to a new database, validate it, then switch credentials. Never down-migrate or overwrite the live database in place.
+5. For code rollback, redeploy the prior artifact only if it understands schema 046. Otherwise keep the service stopped and restore the verified pre-release backup to a new database, validate it, then switch credentials. Never down-migrate or overwrite the live database in place.
 
 The release owner must record backup path/checksum custody, artifact/commit, migration result, health/readiness evidence, acceptance result, monitoring baseline, and rollback decision. See [System 32 release report](SYSTEM32_RELEASE.md).
 
@@ -94,6 +94,10 @@ External AI requires either a server-only DeepInfra token (`DEEPINFRA_API_KEY` o
 
 Every committed mutation creates an immutable autosave. New saves deduplicate and compress immutable entity/history blocks, while manifests retain their references and checksums. This reduces repeated storage without deleting history; manifests and growing state still consume storage. Monitor Turso storage, query/transfer limits and backup duration; no automatic history deletion, garbage collection or retention pruning is implemented. Monitor HTTP availability/error rates externally and keep backups off-host; no monitoring account, scheduler, billing or off-host destination has been provisioned.
 
-AI interpretation is request-driven, not a background job. It sends bounded candidate choices plus user text, accepts only a candidate ID or clarification, and never executes mechanics. Its reservation table is included when checking both campaign and user narration allowances. Failed requests remain reserved. Creator read-only diagnostics expose warning/storage/outbox counts; they do not provide arbitrary SQL or return credentials.
+AI interpretation is request-driven, not a background job. The legacy classifier accepts a bounded candidate ID or clarification. The core creative planner can propose up to eight schema-validated actions with exact input evidence and observer-permitted references; the player must confirm the persisted plan before mechanics execute. Both use the existing classification budgets and reservation table when checking campaign and user allowances. Failed requests remain reserved. Provider calls occur outside the world transaction, and receipt replay never invokes the planner again. Creator read-only diagnostics expose warning/storage/outbox counts; they do not provide arbitrary SQL or return credentials.
 
-See IMPLEMENTATION_STATUS.md for per-system coverage and remaining work. Passing local tests does not certify production deployment or physical-device accessibility.
+See CORE_SYSTEM_INTERFACES.md for the canonical 32-system mapping and CORE_TURN_IMPLEMENTATION.md for current core verification. IMPLEMENTATION_STATUS.md retains an older grouped status summary. Passing local tests does not certify production deployment or physical-device accessibility.
+
+## Observer response timing
+
+Observer GET/HEAD reads are held to at least 250 ms; command, legacy turn, parse and story-resolution responses are held to at least 500 ms. Include errors when measuring the public route classes. Monitor private server warnings named privacy.response_latency_overrun, including their route class and processing duration. Frequent overruns invalidate the bounded timing assumption and require profiling and capacity/budget calibration before privacy sign-off. Neither local tests nor minimum padding certify network-level timing indistinguishability. No external alert service is provisioned by this change.

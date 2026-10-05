@@ -101,7 +101,7 @@ test('System 08 scopes experience modifiers to the authored skill and context',a
   const rows=await f.store.all<{modifiers_json:string}>('SELECT modifiers_json FROM check_records WHERE timeline_id=? ORDER BY rowid',timeline.id);
   assert.deepEqual(JSON.parse(rows[0]!.modifiers_json),[{kind:'trait',name:'Trait: Police academy / Patrol procedure',value:5,sourceId:experience.id}]);assert.deepEqual(JSON.parse(rows[1]!.modifiers_json),[]);
   const playerHistory=await game.checks(f.player,timeline.id,player.id) as Array<{modifiers:Array<{name:string;sourceId?:string}>}>,creatorHistory=await game.checks(f.creator,timeline.id,player.id) as Array<{modifiers:Array<{name:string;sourceId?:string}>}>;
-  assert.equal(playerHistory[1]!.modifiers[0]!.name,'Private authored modifier');assert.equal(playerHistory[1]!.modifiers[0]!.sourceId,undefined);assert.match(creatorHistory[1]!.modifiers[0]!.name,/Police academy/);
+  assert.deepEqual(playerHistory[1]!.modifiers,[]);assert.doesNotMatch(JSON.stringify(playerHistory),/Police academy|modifiers_json|provenance_json/);assert.match(creatorHistory[1]!.modifiers[0]!.name,/Police academy/);
  }finally{await f.close();}
 });
 

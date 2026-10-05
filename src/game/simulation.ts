@@ -1,6 +1,8 @@
+import {eventMetadata} from './turn-runtime.ts';
 import {skillStatus} from '../../public/creation-rules.js';
 import {syncWeather} from './island-weather.ts';
-import {createHash,randomUUID} from 'node:crypto';
+import {createHash} from 'node:crypto';
+import {simulationId as randomUUID} from './turn-runtime.ts';
 import {data,getEntity,validateEntity} from './model.ts';
 import type {Data,Entity,State} from './model.ts';
 import {fact,observe,remember} from './epistemics.ts';
@@ -16,7 +18,7 @@ import {applyRelationshipMovement,decayReputations,recordRelationshipHistory,rel
 import {carriedBy,itemPossessor} from './items.ts';
 import {creditCharacter,debitBusiness,jobEligible,postTransaction} from './economy.ts';
 import {advanceEventDeadlines,evaluateEventWatchers} from './events.ts';
-export type Effect={id:string;text:string;observers:string[];type:string;subjectId:string};
+export type Effect={id:string;text:string;observers:string[];type:string;subjectId:string;occurredAt?:string;sourceSystem?:string;causeRefs?:string[]};
 export const simulationTiers={
  active:{
   updateFrequencyMinutes:1,
@@ -73,7 +75,7 @@ function recordNpcActivity(s:State,npc:Entity,d:Data<'character'>,eventId:string
  d.activityTimeline.push({id,at,tier,outcome,source,sourceEntityId,summary,eventId});
  if(d.activityTimeline.length>s.settings.npcTimelineLimit)d.activityTimeline.splice(0,d.activityTimeline.length-s.settings.npcTimelineLimit);
 }
-export function emit(effects:Effect[],text:string,observers:string[],type:string,subjectId:string){effects.push({id:randomUUID(),text,observers:[...new Set(observers)],type,subjectId});}
+export function emit(effects:Effect[],text:string,observers:string[],type:string,subjectId:string){effects.push({...eventMetadata(),id:randomUUID(),text,observers:[...new Set(observers)],type,subjectId});}
 export function atLocation(s:State,locationId:string|null){return s.entities.filter(e=>e.kind==='character'&&!e.archived&&e.data.locationId===locationId&&locationId&&e.data.condition==='conscious');}
 export function add(s:State,kind:Entity['kind'],name:string,raw:Record<string,unknown>,visibility:Entity['visibility']='knowledge'){
  const entity=validateEntity({id:randomUUID(),kind,name,visibility,data:raw});s.entities.push(entity);return entity;
@@ -97,18 +99,34 @@ export function isOpen(hours:{opens:number;closes:number;days?:number[];closedOn
  if(hours.opens===hours.closes)return true;
  return hours.closes>hours.opens?h>=hours.opens&&h<hours.closes:h>=hours.opens||h<hours.closes;
 }
-export function advance(s:State,minutes:number,eventId:string,effects:Effect[],playerId:string){
- if(s.settings.deterministicCatchup&&minutes>1){
-  const cost=minutes*Math.max(1,s.entities.filter(e=>!e.archived&&['character','watcher','production','transition','socialRule'].includes(e.kind)).length);
-  if(cost>s.settings.npcCatchupWorkBudget)throw new Error('catchup_work_budget_exceeded_use_shorter_wait');
-  for(let minute=0;minute<minutes;minute++)advanceStep(s,1,eventId,effects,playerId);
- }else advanceStep(s,minutes,eventId,effects,playerId);
+export function advance(s:State,minutes:number,eventId:string,effects:Effect[],playerId:string,options:{interruptible?:boolean;condition?:()=>boolean}={}){
+ const began=Date.parse(s.clock),end=began+minutes*60000;
+ const mandatory=s.entities.filter(e=>!e.archived&&(e.kind==='watcher'||e.kind==='message')&&e.data.requiresPlayerResponse);
+ const dynamic=Boolean(options.interruptible&&(mandatory.length||options.condition));
+ const cost=minutes*Math.max(1,s.entities.filter(e=>!e.archived&&['character','watcher','production','transition','socialRule'].includes(e.kind)).length);
+ if((s.settings.deterministicCatchup||dynamic)&&cost>s.settings.npcCatchupWorkBudget)throw new Error('catchup_work_budget_exceeded_use_shorter_wait');
+ let interrupted=false;
+ while(Date.parse(s.clock)<end){
+  if(options.condition?.())break;
+  const before=Date.parse(s.clock),previous=new Map(mandatory.map(e=>[e.id,e.kind==='watcher'?e.data.lastFired:e.data.status]));
+  const times=mandatory.flatMap(e=>[e.data.dueAt,e.data.availableAt].filter((v):v is string=>typeof v==='string').map(Date.parse)).filter(at=>at>before&&at<=end);
+  const boundary=times.length?Math.min(...times):end;
+  const step=(s.settings.deterministicCatchup||dynamic)?Math.min(60000,end-before,boundary-before):end-before;
+  advanceStep(s,step/60000,eventId,effects,playerId);
+  if(options.interruptible){
+   interrupted=mandatory.some(e=>e.kind==='watcher'?e.data.lastFired!==previous.get(e.id)&&(e.data.notifyCharacterIds as string[]).includes(playerId):e.data.toId===playerId&&e.data.status!==previous.get(e.id)&&!['draft','queued','sent','failed'].includes(String(e.data.status)));
+   const pc=s.entities.find(e=>e.id===playerId);
+   if(pc&&pc.data.condition!=='conscious')interrupted=true;
+   if(interrupted||options.condition?.())break;
+  }
+ }
+ return {minutes:(Date.parse(s.clock)-began)/60000,interrupted};
 }
 function advanceStep(s:State,minutes:number,eventId:string,effects:Effect[],playerId:string){
  const start=Date.parse(s.clock),end=start+minutes*60000,npcs=s.entities.filter(e=>e.kind==='character'&&!e.archived&&!e.data.playable);
  if(npcs.length>s.settings.npcBudget)throw new Error('npc_budget_exceeded');
  const slots:{at:number;minute:number;day:number}[]=[];
- if(npcs.some(n=>Array.isArray(n.data.schedule)&&n.data.schedule.length))for(let t=start+60000;t<=end;t+=60000){const p=timeParts(new Date(t).toISOString(),s.settings.timezone);slots.push({at:t,minute:p.minute,day:p.day});}
+ if(npcs.some(n=>Array.isArray(n.data.schedule)&&n.data.schedule.length))for(let t=(Math.floor(start/60000)+1)*60000;t<=end;t+=60000){const p=timeParts(new Date(t).toISOString(),s.settings.timezone);slots.push({at:t,minute:p.minute,day:p.day});}
  // Exact schedule boundary catch-up. No AI calls; a near/active NPC produces more observable detail.
  const scheduleTierContext=npcTierContext(s,playerId,effects);
  for(const npc of npcs){

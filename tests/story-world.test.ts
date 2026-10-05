@@ -16,38 +16,31 @@ async function setup(){
  return {f,game,t,place,pc,turn};
 }
 
-test('descriptive fire and door clicks narrate; invalid schemas and invented shots produce safe diagnostics',async()=>{
+test('source-preserving prose narrates; invalid schemas and invented shots produce safe diagnostics',async()=>{
  const {f,game,t,pc,turn}=await setup();
  try{
   let mode='ordinary';
-  const provider:NarrativeProvider={id:'diagnostic-story',arrange:async c=>mode==='schema'?{paragraphs:[{sourceIds:c.fragments.map(f=>f.id),text:42}],private_field:'DO NOT EXPOSE'}:{additions:[],paragraphs:[{sourceIds:c.fragments.map(f=>f.id),text:mode==='shot'?'Alex fired the pistol.':'The door clicked shut. A fire flickered in the fireplace.'}]}};
+  const provider:NarrativeProvider={id:'diagnostic-story',arrange:async c=>mode==='schema'?{paragraphs:[{sourceIds:c.fragments.map(f=>f.id),text:42}],private_field:'DO NOT EXPOSE'}:{additions:[],paragraphs:[{sourceIds:c.fragments.map(f=>f.id),text:mode==='shot'?'Alex fired the pistol.':c.fragments.map(f=>f.text).join(' ')}]}};
   const gateway=new NarrativeGateway(game,[provider]),before=(await game.access(f.player,t.id)).t.revision;
   assert.equal((await gateway.narrate(f.player,t.id,turn.eventId,provider.id,undefined,'story')).status,'validated');
-  for(const [next,code] of [['schema','ai_output_schema_invalid_text'],['shot','narrative_mechanical_claim_rejected']]){
+  for(const [next,code] of [['schema','ai_output_schema_invalid_text'],['shot','narrative_unsupported_claim']]){
    mode=next!;const result=await gateway.narrate(f.player,t.id,turn.eventId,provider.id,undefined,'story');
    assert.equal(result.status,'grounded-fallback');assert.equal('failureCode' in result?result.failureCode:null,code);
    assert.doesNotMatch(JSON.stringify(result),/DO NOT EXPOSE|private_field/);
    const saved=await f.store.get<{failure_code:string}>('SELECT failure_code FROM ai_requests WHERE trace_id=?',result.traceId);assert.equal(saved?.failure_code,code);
   }
   assert.equal((await game.access(f.player,t.id)).t.revision,before);
-  assert.equal((await game.view(f.player,t.id,pc.id)).turns.at(-1)?.narration,'The door clicked shut. A fire flickered in the fireplace.');
+  assert.equal((await game.view(f.player,t.id,pc.id)).turns.at(-1)?.narration,turn.narration);
  }finally{await f.close();}
 });
-test('story additions persist in the life, support interaction and survive saves; retry only changes prose',async()=>{
- const {f,game,t,place,pc,turn}=await setup();
+test('narration additions are rejected and cannot change entities, facts, time or revision',async()=>{
+ const {f,game,t,pc,turn}=await setup();
  try{
-  let retry=false;
-  const provider:NarrativeProvider={id:'test-story',arrange:async context=>({additions:retry?[]:[{kind:'npc',name:'Mara Bell',description:'An adult clerk carrying a folded newspaper.'},{kind:'street',name:'Bell Street',description:'A narrow public street beside the market.'},{kind:'detail',name:'Blue awning',description:'A faded blue awning hung over the corner.'}],paragraphs:[{sourceIds:context.fragments.map(f=>f.id),text:retry?'Mara Bell stood beneath the blue awning on Bell Street.':'Mara Bell waited beside Bell Street beneath a blue awning. “Can I help you?” she asked.'}]})};
-  const gateway=new NarrativeGateway(game,[provider]),result=await gateway.narrate(f.player,t.id,turn.eventId,provider.id,undefined,'story');assert.equal(result.status,'validated');
-  let s=await game.load(t.id);const npc=s.entities.find(e=>e.name==='Mara Bell')!,street=s.entities.find(e=>e.name==='Bell Street')!;
-  assert.ok(npc&&street);assert.equal(npc.data.locationId,place.id);assert.equal(npc.data.playable,false);assert.equal(npc.data.controllerUserId,null);
-  assert.ok(data(s.entities.find(e=>e.id===place.id)!,'location').exits.some(e=>e.to===street.id));
-  assert.ok(observerView(s,pc.id).entities.some(e=>e.id===npc.id));assert.ok(s.facts.some(f=>f.predicate==='scene-detail'));
-  const revision=(await game.access(f.player,t.id)).t.revision;retry=true;
-  assert.equal((await gateway.narrate(f.player,t.id,turn.eventId,provider.id,undefined,'story')).status,'validated');
-  assert.equal((await game.access(f.player,t.id)).t.revision,revision);assert.equal((await game.load(t.id)).entities.length,s.entities.length);
-  const save=await game.save(f.player,t.id,'Story memory'),branch=await game.branch(f.player,t.id,save.id,'Story branch');assert.ok((await game.load(branch.id)).entities.some(e=>e.id===npc.id));
-  const moved=await game.turn(f.player,t.id,{revision,characterId:pc.id,action:{type:'travel',destinationId:street.id,mode:'walk',vehicleId:null}},key());assert.ok(moved.eventId);assert.equal((await game.load(t.id)).entities.find(e=>e.id===pc.id)!.data.locationId,street.id);
+  const before=await game.load(t.id),revision=(await game.access(f.player,t.id)).t.revision;
+  const provider:NarrativeProvider={id:'test-story',arrange:async context=>({additions:[{kind:'npc',name:'Mara Bell',description:'An adult clerk.'}],paragraphs:[{sourceIds:context.fragments.map(f=>f.id),text:'Mara Bell waited nearby.'}]})};
+  const result=await new NarrativeGateway(game,[provider]).narrate(f.player,t.id,turn.eventId,provider.id,undefined,'story');
+  assert.equal(result.status,'grounded-fallback');assert.equal(result.failureCode,'narration_cannot_mutate_world');
+  assert.deepEqual(await game.load(t.id),before);assert.equal((await game.access(f.player,t.id)).t.revision,revision);
  }finally{await f.close();}
 });
 test('unsafe, duplicate, indoor and retry additions cannot mutate the world',async()=>{
@@ -69,10 +62,10 @@ test('failed private-scene narration retries are prose-only and cannot propose a
  try{
   const state=await game.load(t.id),privatePlace=state.entities.find(e=>e.id===place.id)!;privatePlace.data.ownerId=pc.id;
   await game.edit(f.creator,t.id,{revision:4,entity:privatePlace},key());const expansionStates:boolean[]=[];
-  const provider:NarrativeProvider={id:'private-retry',arrange:async context=>{expansionStates.push(Boolean(context.allowExpansion));return context.allowExpansion?{additions:[{kind:'npc',name:'Uninvited stranger',description:'An adult stranger.'}],paragraphs:[{sourceIds:context.fragments.map(f=>f.id),text:'Alex remained in the private room.'}]}:{additions:[],paragraphs:[{sourceIds:context.fragments.map(f=>f.id),text:'Alex stayed in the room as the moment settled.'}]};}};
+  const provider:NarrativeProvider={id:'private-retry',arrange:async context=>{expansionStates.push(Boolean(context.allowExpansion));return context.allowExpansion?{additions:[{kind:'npc',name:'Uninvited stranger',description:'An adult stranger.'}],paragraphs:[{sourceIds:context.fragments.map(f=>f.id),text:'Alex remained in the private room.'}]}:{additions:[],paragraphs:[{sourceIds:context.fragments.map(f=>f.id),text:context.fragments.map(f=>f.text).join(' ')}]};}};
   const gateway=new NarrativeGateway(game,[provider]),first=await gateway.narrate(f.player,t.id,turn.eventId,provider.id,undefined,'story');
-  assert.equal(first.status,'grounded-fallback');assert.equal('failureCode'in first?first.failureCode:null,'story_addition_not_allowed');assert.deepEqual(expansionStates,[true,true]);
-  const retried=await gateway.narrate(f.player,t.id,turn.eventId,provider.id,undefined,'story');assert.equal(retried.status,'validated');assert.deepEqual(expansionStates,[true,true,false]);
+  assert.equal(first.status,'validated');assert.deepEqual(expansionStates,[false]);
+  const retried=await gateway.narrate(f.player,t.id,turn.eventId,provider.id,undefined,'story');assert.equal(retried.status,'validated');assert.deepEqual(expansionStates,[false,false]);
   assert.ok(!(await game.load(t.id)).entities.some(e=>e.name==='Uninvited stranger'));
  }finally{await f.close();}
 });
@@ -80,7 +73,7 @@ test('a stale narration cannot add entities after another turn commits',async()=
  const {f,game,t,pc,turn}=await setup();
  try{
   const provider:NarrativeProvider={id:'slow-story',arrange:async c=>{await game.turn(f.player,t.id,{revision:4,characterId:pc.id,action:{type:'wait',minutes:1}},key());return {additions:[{kind:'npc',name:'Late visitor',description:'An adult passerby.'}],paragraphs:[{sourceIds:c.fragments.map(f=>f.id),text:'A visitor stood nearby.'}]};}};
-  await assert.rejects(new NarrativeGateway(game,[provider]).narrate(f.player,t.id,turn.eventId,provider.id,undefined,'story'),/revision_conflict|stale/);
+  const response=await new NarrativeGateway(game,[provider]).narrate(f.player,t.id,turn.eventId,provider.id,undefined,'story');assert.equal(response.status,'grounded-fallback');
   assert.ok(!(await game.load(t.id)).entities.some(e=>e.name==='Late visitor'));
  }finally{await f.close();}
 });

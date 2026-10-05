@@ -13,7 +13,6 @@ test('iPad shell, keyboard login, Creator form, long prose, reduced motion and o
  let narrationRequests=0;
  await page.route('**/game/catalog',async route=>{const response=await route.fetch(),catalog=await response.json();catalog.providers=['grounded','gemini'];catalog.defaultProvider='gemini';await route.fulfill({response,json:catalog});});
  await page.route('**/narrate',async route=>{assert.equal(route.request().postDataJSON().provider,'gemini');narrationRequests++;const story=await f.store.get<{narration:string}>('SELECT narration FROM story_turns WHERE id=?',route.request().postDataJSON().turnId);if(story?.narration.includes('synthetic test prose')){await f.store.run("UPDATE story_turns SET narration_status='validated' WHERE id=?",route.request().postDataJSON().turnId);await route.fulfill({json:{status:'validated',narration:story.narration}});return;}await route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:'test_provider_unavailable'})});});
- await page.route('**/story/resolve',async route=>{const body=route.request().postDataJSON();if(body.text==='Take the unknown object.')await route.fulfill({json:{action:null,clarification:'Which object did you mean?'}});else await route.continue();});
  await page.route('**/narrate/stream',async route=>{await new Promise(resolve=>setTimeout(resolve,300));try{await route.fulfill({status:200,contentType:'application/x-ndjson',body:JSON.stringify({type:'paragraph',text:'This must stay buffered.'})+'\n'+JSON.stringify({type:'complete',status:'validated'})+'\n'});}catch{/* The browser intentionally canceled this request. */}});
  try{
   const navAction=async(name:string)=>{const control=page.locator('.rail').getByRole('button',{name,exact:true});if(!await control.isVisible())await page.getByRole('button',{name:'Toggle navigation'}).click();await control.click();};
@@ -128,10 +127,15 @@ test('iPad shell, keyboard login, Creator form, long prose, reduced motion and o
   assert.equal(narrationRequests,2,'each committed turn tries the selected provider once; failures do not reroll');
   const beforeAI=(await game.access(f.creator,timeline.id)).t.revision;
   await page.getByLabel('Continue the story',{exact:true}).fill('Take the unknown object.');await page.getByLabel('Continue the story',{exact:true}).press('Enter');
-  await page.getByText('Which object did you mean?',{exact:true}).waitFor();
+  await page.getByText('Which action or known target do you mean? Nothing has happened yet.',{exact:true}).waitFor();
   assert.equal((await game.access(f.creator,timeline.id)).t.revision,beforeAI,'ambiguous targets do not mutate the world');
+  await page.getByRole('button',{name:'Switch to Game Mode',exact:true}).click();
+  await page.getByRole('region',{name:'Suggested actions',exact:true}).waitFor();
+  await page.getByRole('button',{name:'Cancel pending action',exact:true}).click();await page.waitForFunction(()=>!document.querySelector('[aria-busy="true"]'));
+  await page.getByRole('button',{name:'Switch to Story Mode',exact:true}).click();await page.getByRole('button',{name:'Switch to Game Mode',exact:true}).waitFor();await page.waitForFunction(()=>!document.querySelector('[aria-busy="true"]'));
+  assert.equal((await game.access(f.creator,timeline.id)).t.revision,beforeAI,'mode switching and cancellation do not mutate the world');
   assert.equal(await page.locator('.story-combat').count(),0,'combat stays hidden outside an encounter');
-  assert.deepEqual((await new AxeBuilder({page}).analyze()).violations.map(v=>v.id),[]);
+  const chronicleAudit=await new AxeBuilder({page}).analyze();assert.deepEqual(chronicleAudit.violations.map(v=>v.id),[],JSON.stringify(chronicleAudit.violations));
   await page.screenshot({path:'artifacts/chronicle.png'});
   for(const [width,height] of [[390,844],[820,1180],[1440,1000]]){
    await page.setViewportSize({width:width!,height:height!});
@@ -152,7 +156,7 @@ test('iPad shell, keyboard login, Creator form, long prose, reduced motion and o
   await page.getByRole('button',{name:'Open phone',exact:true}).click();await page.getByRole('button',{name:'Put away ↘'}).click();await page.getByRole('heading',{name:'In combat',exact:true}).waitFor();
   encounter.data.active=false;encounter.data.phase='ended';await game.edit(f.creator,timeline.id,{revision:(await game.access(f.creator,timeline.id)).t.revision,entity:encounter},randomUUID());
   await page.getByRole('button',{name:'Open phone',exact:true}).click();await page.getByRole('button',{name:'Put away ↘'}).click();await page.locator('.story-combat').waitFor({state:'detached'});
-  const reconnectDraft='This draft survives a reconnect.\nIt is still not an action.';await page.getByLabel('Continue the story',{exact:true}).fill(reconnectDraft);await page.reload();await page.getByRole('heading',{name:'VALOR',exact:true}).waitFor();assert.equal(await page.evaluate(()=>Object.entries(sessionStorage).find(([key])=>key.startsWith('valor.draft.'))?.[1]),reconnectDraft);
+  const reconnectDraft='This draft survives a reconnect.\nIt is still not an action.';await page.waitForFunction(()=>!document.querySelector('[aria-busy="true"]'));await page.getByLabel('Continue the story',{exact:true}).fill(reconnectDraft);await page.waitForFunction(expected=>Object.values(sessionStorage).includes(expected),reconnectDraft);await page.reload();await page.getByRole('heading',{name:'VALOR',exact:true}).waitFor();assert.equal(await page.evaluate(key=>sessionStorage.getItem(key),'valor.draft.'+f.creator.id+'.'+timeline.id+'.'+character.id),reconnectDraft);
   await page.setViewportSize({width:390,height:844});
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
   await page.getByRole('button',{name:'Toggle navigation'}).click();
@@ -170,4 +174,24 @@ test('iPad shell, keyboard login, Creator form, long prose, reduced motion and o
   await page.getByRole('button',{name:'Enter Valor'}).waitFor();
   assert.deepEqual(errors,[]);
  }finally{await context.close();await browser.close();await f.close();}
+});
+
+test('AT-062: browser discards delayed revision 17 after revision 18 and rejects a different selected life',async()=>{
+ const f=await fixture(),browser=await chromium.launch({headless:true}),page=await browser.newPage();
+ try{
+  const address=await f.app.listen({host:'127.0.0.1',port:0});await page.goto(address+'/app');
+  const result=await page.evaluate(async()=>{
+   const modulePath='/turn-client.js', {acceptsTurnResponse}=await import(modulePath);
+   const current={timelineId:'timeline',characterId:'actor',viewTimelineId:'timeline',revision:16},scope={timelineId:'timeline',characterId:'actor'};
+   const rendered:number[]=[];let release!:(v:{timelineId:string;revision:number})=>void;
+   const delayed=new Promise<{timelineId:string;revision:number}>(resolve=>release=resolve);
+   const apply=(response:{timelineId:string;revision:number})=>{if(acceptsTurnResponse(current,response,scope)){current.revision=response.revision;rendered.push(response.revision);}};
+   const oldRequest=delayed.then(apply);await Promise.resolve({timelineId:'timeline',revision:18}).then(apply);
+   release({timelineId:'timeline',revision:17});await oldRequest;
+   const otherActor=acceptsTurnResponse({...current,characterId:'other'},{timelineId:'timeline',revision:19},scope);
+   const otherTimeline=acceptsTurnResponse(current,{timelineId:'elsewhere',revision:19},scope);
+   return {rendered,revision:current.revision,otherActor,otherTimeline};
+  });
+  assert.deepEqual(result,{rendered:[18],revision:18,otherActor:false,otherTimeline:false});
+ }finally{await browser.close();await f.close();}
 });

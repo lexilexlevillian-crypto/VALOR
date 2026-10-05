@@ -1,4 +1,4 @@
-import {randomUUID} from 'node:crypto';
+import {simulationId as randomUUID} from './turn-runtime.ts';
 import {data,validateEntity,type Entity,type State} from './model.ts';
 
 // Approximate anchors traced from the user's Valor map (960 x 1280).
