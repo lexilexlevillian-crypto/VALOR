@@ -2,6 +2,8 @@
 
 Build: 0.2.0-alpha, updated 2026-10-02. Systems 30–32 now add authored dynamic-event projections, branch-safe versioned recovery, durable Creator draft/publish/version/template workflows, confirmation-bound fixtures and repairs, release readiness, and consolidated operational evidence. See [SYSTEM32_RELEASE.md](SYSTEM32_RELEASE.md) for the current release gate and known limitations. This older coverage table remains a subsystem inventory rather than a production certification. No city, person, faction or legal canon is seeded into production.
 
+The subsequent System 02 Behavior Bible work adds persistent narrative profiles, exact communication, frozen narrative context, validation/repair and developer diagnostics. See [SYSTEM_02_IMPLEMENTATION.md](SYSTEM_02_IMPLEMENTATION.md) for schema 47, character schema 10, the acceptance matrix and its bounded-prose limitations. This is a local implementation update, not a production deployment claim.
+
 ## System coverage
 
 Current expansion: see [LIFECYCLE_SYSTEMS.md](LIFECYCLE_SYSTEMS.md) for migrations 006–007, gameplay controls, Gemini proposals, media, save deduplication and exact remaining boundaries. [SYSTEMS_EXPANSION.md](SYSTEMS_EXPANSION.md) records the previous checkpoint.

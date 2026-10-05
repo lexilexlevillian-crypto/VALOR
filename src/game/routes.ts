@@ -1,3 +1,5 @@
+import {NarrativePreferences} from './narrative-preferences.ts';
+import {phraseCommunication} from './communication.ts';
 import {CreativeTurnPlanner} from './turn-planner.ts';
 import {TurnKernel} from './turn-kernel.ts';
 import {interpretTurn} from './turn-input.ts';
@@ -47,6 +49,12 @@ export function gameRoutes(app:FastifyInstance,game:Game,actor:(r:object)=>Actor
  const timeline=(r:FastifyRequest)=>z.object({id}).parse(r.params).id;
  const bodyRevision=z.number().int().positive();
  const wrap=async(fn:()=>unknown)=>{try{return await fn();}catch(error){if(error instanceof Fault||error instanceof z.ZodError)throw error;if(error instanceof Error&&/^[a-z_]+$/.test(error.message))throw new Fault(400,error.message);throw error;}};
+ const preferences=new NarrativePreferences(game);
+ app.get('/game/timelines/:id/narrative/preferences',async r=>{const q=z.strictObject({characterId:id,mode:z.enum(['GAME','STORY'])}).parse(r.query);return preferences.read(actor(r),timeline(r),q.characterId,q.mode);});
+ app.post('/game/timelines/:id/narrative/preferences',async r=>preferences.save(actor(r),timeline(r),r.body));
+ app.post('/game/narrative/presets',async r=>preferences.savePreset(actor(r),r.body));
+ app.get('/game/timelines/:id/narrative/diagnostics/:eventId',async r=>{const p=z.strictObject({id,eventId:id}).parse(r.params);return preferences.diagnostics(actor(r),p.id,p.eventId);});
+ app.post('/game/timelines/:id/communication/phrase',async r=>{const b=z.strictObject({characterId:id,intent:z.enum(['greet','decline','ask-location','ask-status']),subjectName:z.string().trim().max(100).default('')}).parse(r.body);await game.authorizeCharacter(actor(r),timeline(r),b.characterId);return {text:phraseCommunication(b.intent,b.subjectName),requiresConfirmation:true,committed:false};});
  app.get('/game/catalog',async r=>{actor(r);return {kinds,schemas:Object.fromEntries(kinds.map(k=>[k,z.toJSONSchema(dataSchemas[k])])),settings:z.toJSONSchema(settingsSchema),actions:actionSchema.options.map(option=>z.toJSONSchema(option)),simulationTiers,providers:providers.map(p=>p.id),defaultProvider:preferredProvider?.id??'grounded'};});
  app.get('/game/master-bank',async r=>{actor(r);const q=z.strictObject({q:z.string().max(200).optional(),kind:z.enum(['item','weapon','vehicle']).optional(),category:z.string().max(80).optional(),offset:z.coerce.number().int().min(0).max(100000).optional(),limit:z.coerce.number().int().min(1).max(100).optional()}).parse(r.query);return listMasterBank(q);});
  app.get('/game/campaigns/:id/timelines',async r=>(await game.list(actor(r),timeline(r))));

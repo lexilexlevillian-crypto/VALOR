@@ -27,7 +27,7 @@ test('System 07 persists one validated character architecture for player and NPC
   const npc=validateEntity({id:randomUUID(),kind:'character',name:'Morgan',visibility:'campaign',data:characterData(location.id,null,{playable:false,birthplace:'Lakeview',occupations:[{id:randomUUID(),businessId:null,placeOfWork:'Corner Market',position:'Night clerk',days:['Monday','Tuesday'],shift:'night',startMinute:1320,endMinute:360,notes:'Closes alone'}],dossierRatings:{toughness:6,charm:4,persuasion:5,intimidation:3,cunning:7,loyalty:8,trustworthiness:6,empathy:5,selfEsteem:4,courage:7,compassion:6,judginess:2,convincibility:3},personalityProfile:{summary:'Reserved and observant',mbti:'INTJ',openness:8},psychologyNotes:'Creator-authored behavioral context.',secrets:'Hidden plot truth',instructions:'Never expose this',goals:['private-goal'],fears:['private-fear'],cultureContext:'Private authored context'})});
   await game.bulkEdit(f.creator,timeline.id,{revision:1,entities:[location,player,npc]},key());
   const loaded=await game.load(timeline.id),saved=loaded.entities.find(e=>e.id===player.id)!;
-  assert.equal(saved.data.legalName,'Alex Morgan');assert.equal(saved.data.heightCm,175);assert.equal(saved.data.characterSchemaVersion,9);
+  assert.equal(saved.data.legalName,'Alex Morgan');assert.equal(saved.data.heightCm,175);assert.equal(saved.data.characterSchemaVersion,10);
   const savedNpc=loaded.entities.find(e=>e.id===npc.id)!;assert.equal(savedNpc.data.birthplace,'Lakeview');assert.equal((savedNpc.data.occupations as Array<{position:string}>)[0]!.position,'Night clerk');assert.equal((savedNpc.data.dossierRatings as {loyalty:number}).loyalty,8);assert.equal((savedNpc.data.personalityProfile as {mbti:string}).mbti,'INTJ');
   assert.equal((await f.store.get<{n:number}>('SELECT count(*) n FROM character_profile_schema_versions WHERE timeline_id=?',timeline.id))!.n,2);
   const view=await game.view(f.player,timeline.id,player.id),seen=view.entities.find(e=>e.id===npc.id)!;
@@ -54,7 +54,7 @@ test('System 07 custom section and field IDs survive rename, reorder, parent cha
   const result=reloaded.data.sections as typeof sections;
   assert.equal(result.find(s=>s.id===identityId)!.name,'Renamed identity');assert.equal(result.find(s=>s.id===identityId)!.fields.find(field=>field.id===fieldId)!.name,'Renamed field');
   assert.equal(result.find(s=>s.id===identityId)!.fields.find(field=>field.id===fieldId)!.value,'Preserve me');
-  assert.equal((await f.store.get<{schema_version:number}>('SELECT schema_version FROM character_profile_schema_versions WHERE character_id=?',character.id))!.schema_version,8);
+  assert.equal((await f.store.get<{schema_version:number}>('SELECT schema_version FROM character_profile_schema_versions WHERE character_id=?',character.id))!.schema_version,10);
   const invalid=structuredClone(reloaded);const invalidSections=invalid.data.sections as Array<{id:string;parentId:string|null}>;invalidSections[0]!.parentId=invalidSections[1]!.id;invalidSections[1]!.parentId=invalidSections[0]!.id;
   assert.throws(()=>validateEntity(invalid),/section_cycle/);
  }finally{await f.close();}

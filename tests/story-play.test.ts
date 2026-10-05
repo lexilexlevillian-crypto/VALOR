@@ -87,7 +87,7 @@ test('story narration uses the real Gemini adapter contract within a 2000-token 
    return Response.json({candidates:[{finishReason:'STOP',content:{parts:[{text:JSON.stringify({paragraphs:[{sourceIds,text:fragments.map((p:{content:{text:string}})=>p.content.text).join(' ')}]})}]}}],usageMetadata:{promptTokenCount:600,candidatesTokenCount:30}});
   });
   const gateway=new NarrativeGateway(game,[provider]),result=await gateway.narrate(f.player,t.id,turn.eventId,'gemini',undefined,'story');
-  assert.equal(result.status,'validated');assert.equal(result.narration,turn.permitted.map((e:{text:string})=>e.text).join(' '));assert.equal(calls,1);assert.equal((await game.access(f.player,t.id)).t.revision,4);
+  assert.equal(result.status,'validated');assert.equal(result.narration,'Time passed.');assert.equal(calls,1);assert.equal((await game.access(f.player,t.id)).t.revision,4);
   const context={promptVersion:'test',instructions:'',fragments:[],protectedIds:[]};
   assert.throws(()=>validateStoryVoice('You waited.',context),/third_person/);assert.throws(()=>validateStoryVoice('Alex is waiting.',context),/past_tense/);validateStoryVoice('Alex waited.',context);
  }finally{await f.close();}

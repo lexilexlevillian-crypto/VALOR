@@ -143,12 +143,15 @@ export function project(s:State,e:Entity,observerId:string):Entity {
    copy.data={...copy.data,participants:chase.participants.filter(id=>allowed.has(id)),pursuerIds:chase.pursuerIds.filter(id=>allowed.has(id)),quarryIds:chase.quarryIds.filter(id=>allowed.has(id)),turnOrder:chase.turnOrder.filter(id=>allowed.has(id)),actorStates,witnessIds:chase.witnessIds.includes(observerId)?[observerId]:[],history:chase.history.filter(entry=>allowed.has(entry.actorId))} as Entity['data'];
   }
   if(e.kind==='character'){
+   delete copy.data.voiceProfile;if(e.id!==observerId)delete copy.data.communication;
    copy.data.traits=(copy.data.traits as string[]).filter(traitId=>{const trait=s.entities.find(entity=>entity.id===traitId&&entity.kind==='trait'&&!entity.archived);return !!trait&&visible(s,trait,observerId);});
    delete copy.data.plans;delete copy.data.traitEffectTrace;
   }
   if(e.kind==='location')copy.data.exits=(copy.data.exits as {to:string;interruption?:unknown}[]).filter(exit=>s.entities.some(target=>target.id===exit.to&&visible(s,target,observerId))).map(({interruption,...route})=>route) as never;
  }
  if(e.kind==='character'&&e.id===observerId){const character=data(e,'character'),band=(value:number)=>value<25?'low':value<50?'moderate':value<75?'high':'severe',needs=needsPresentation(s);copy.data.healthSummary={condition:character.condition,blood:character.blood>75?'stable':character.blood>25?'reduced':'critical',pain:band(character.pain),fatigue:band(character.fatigue),intoxication:band(character.intoxication),withdrawal:character.withdrawalEnabled?band(character.withdrawal):'not-enabled',activeEffects:character.activeSubstances.filter(exposure=>Date.parse(exposure.expiresAt)>Date.parse(s.clock)).map(exposure=>({name:exposure.name,kind:exposure.kind,expiresAt:exposure.expiresAt}))};if(needsEnabled(s)&&needs.ui==='summary'){copy.data.needsSummary={hunger:band(character.hunger),thirst:band(character.thirst),hygiene:character.hygiene>75?'clean':character.hygiene>25?'needs-attention':'poor'};for(const key of ['hunger','thirst','hygiene'])delete copy.data[key];}else if(!needsEnabled(s)||needs.ui==='hidden')for(const key of ['hunger','thirst','hygiene','needsContext'])delete copy.data[key];for(const key of ['blood','pain','intoxication','withdrawal','withdrawalEnabled','dependence','lastDoseAt','activeSubstances','restUntil'])delete copy.data[key];}
+ if(e.kind==='character'&&e.id!==observerId){delete copy.data.voiceProfile;delete copy.data.communication;}
+ if(e.kind==='location'&&copy.data.narrative){const rich=copy.data.narrative as {details:Array<{visibility:string}>};rich.details=rich.details.filter(detail=>detail.visibility==='public');}
  const sections=(copy.data.sections??[]) as {id:string;parentId:string|null;visibility?:string;archived?:boolean;fields:{visibility:string;archived?:boolean}[]}[];
  // Custom section containers reveal only those fields explicitly allowed to this observer.
  const canSee=(v:string|undefined)=>v==='campaign'||v==='owner'&&own||v==='knowledge'&&knows(s,observerId,e.id);

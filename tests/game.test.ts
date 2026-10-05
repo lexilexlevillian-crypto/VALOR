@@ -261,7 +261,7 @@ test('failed escape commits its roll and time once, and a full database backup r
   (await f.rules());(await f.game.configure(f.creator,f.timeline.id,(await f.revision()),settingsSchema.parse({...(await f.game.load(f.timeline.id)).settings,rules:{...(await f.game.load(f.timeline.id)).settings.rules!,threshold:10000}}),key()));
   (await f.turn({type:'combat',targetId:f.npc}));const revision=(await f.revision()),requestKey=key(),before=Date.parse((await f.game.load(f.timeline.id)).clock);
   const result=(await f.turn({type:'flee',destinationId:f.destination},requestKey,revision));
-  assert.match(result.narration,/escape attempt fails/);assert.equal((await f.revision()),revision+1);assert.equal(Date.parse((await f.game.load(f.timeline.id)).clock)-before,60000);
+  assert.match(result.narration,/escape attempt failed/);assert.equal((await f.revision()),revision+1);assert.equal(Date.parse((await f.game.load(f.timeline.id)).clock)-before,60000);
   assert.deepEqual((await f.turn({type:'flee',destinationId:f.destination},requestKey,revision)),result);
   const expected=(await f.game.export(f.creator,f.timeline.id)),path=join(f.dir,'full-game-backup.sqlite');await f.store.backupTo(path);
   const restored=new Store(path);try{(await restored.migrate());assert.deepEqual((await new Game(restored).export(f.creator,f.timeline.id)),expected);}finally{restored.close();}

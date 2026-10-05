@@ -5,7 +5,7 @@ import {resolveAction,type CheckRecord} from './actions.ts';
 import type {Effect} from './simulation.ts';
 import type {actionTime} from './calendar.ts';
 
-export const coreRulesetVersion='core-turn-v3';
+export const coreRulesetVersion='core-turn-v4';
 
 export type RuleResolution={
  status:'SUCCEEDED'|'FAILED'|'PARTIAL'|'INTERRUPTED'|'NO_EFFECT';
@@ -54,6 +54,7 @@ export function existingTurnRules(){
 // those domains keep their existing entity authorities and checked write grants.
 // New actions must choose an owner at compile time, never fall through a regex.
 export const actionOwners={
+ "communicate":"communications",
   "story": "world-actions",
   "physical": "items",
   "take": "items",

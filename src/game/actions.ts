@@ -1,3 +1,4 @@
+import {communicate} from './communication.ts';
 import {physicalInteraction} from './physical.ts';
 import {compressionLimit} from './turn-clock.ts';
 import {ensureCityAtlas,mappedRoute} from './city-geography.ts';
@@ -39,8 +40,8 @@ export function resolveAction(s:State,actorId:string,action:Action,eventId:strin
  if(action.type==='content-filter'){pc.contentFilters={romance:action.romance,matureContent:action.matureContent,blockedIntents:[...new Set(action.blockedIntents)],allowNpcInitiative:action.allowNpcInitiative};actor.data=pc as Entity['data'];return {effects,draws:rng.draws,checks:[],time:actionTime(action,0)};}
  if(action.type==='safety-exit'){cancelPendingConsent(s,actorId,action.targetId??null,eventId);actor.data=pc as Entity['data'];emit(effects,'The scene ends here. No relationship or narrative penalty is applied.',[actorId],'safety.exit',actorId);return {effects,draws:rng.draws,checks:[],time:actionTime(action,0)};}
  assert(pc.condition==='conscious','character_cannot_act');
- assert(!pc.journey?.mode||['travel','look','inspect','say','wait','sleep','phone-call','text','call-response','call-speak'].includes(action.type),'journey_in_progress');
- assert(!pc.restrainedBy||['look','inspect','say','wait','fast-forward','surrender','pay-bail','escape-restraint'].includes(action.type),'character_restrained');
+ assert(!pc.journey?.mode||['travel','look','inspect','say','communicate','wait','sleep','phone-call','text','call-response','call-speak'].includes(action.type),'journey_in_progress');
+ assert(!pc.restrainedBy||['look','inspect','say','communicate','wait','fast-forward','surrender','pay-bail','escape-restraint'].includes(action.type),'character_restrained');
  const choice=choiceAccess(s,actorId,action.type,action.type);assert(choice.allowed,'trait_choice_restricted');
  const say=(text:string,type:string=action.type,subjectId=actorId,observers=[actorId])=>emit(effects,text,observers,type,subjectId);
  const nearby=(target:Entity)=>{assert(target.data.locationId===pc.locationId&&pc.locationId&&visible(s,target,actorId),'target_not_present');};
@@ -156,7 +157,8 @@ export function resolveAction(s:State,actorId:string,action:Action,eventId:strin
  case 'wait-until':{const target=getEntity(s,action.targetId,'character');assert(visible(s,target,actorId),'target_unavailable');const origin=pc.locationId;minutes=advanceInterval(action.minutes,()=>action.condition==='arrives'?target.data.locationId===origin:target.data.locationId!==origin);say('Waiting stops at the agreed endpoint.');break;}
  case 'wait':case 'fast-forward':minutes=advanceInterval(action.minutes);say(action.type==='fast-forward'?'The validated simulation advances to the requested time.':'Time passes.');break;
  case 'sleep':pc.restUntil=new Date(Date.parse(s.clock)+action.minutes*60000).toISOString();actor.data=pc as Entity['data'];minutes=advanceInterval(action.minutes);pc.fatigue=Math.max(0,pc.fatigue-minutes/6);pc.restUntil=s.clock;say('The rest interval passes; recovery still follows each condition’s authored course.');break;
- case 'say':say(action.text,'player.dialogue',actorId,atLocation(s,pc.locationId).map(e=>e.id));minutes=1;break;
+ case 'communicate':communicate(s,actorId,action,eventId,effects);minutes=1;break;
+ case 'say':communicate(s,actorId,{method:pc.communication?.normalMethod??'say',language:pc.communication?.language??'en',targetId:null,text:action.text},eventId,effects);minutes=1;break;
  case 'vehicle-access':{
   const vehicle=getEntity(s,action.vehicleId,'vehicle'),v=data(vehicle,'vehicle');nearby(vehicle);const driving=s.entities.find(entity=>entity.kind==='skill'&&entity.name.toLowerCase()==='driving'),witnesses=atLocation(s,pc.locationId).filter(entity=>entity.id!==actorId);
   if(action.operation==='leave'){assert(v.occupants.includes(actorId),'not_in_vehicle');v.occupants=v.occupants.filter(id=>id!==actorId);vehicle.data=v as Entity['data'];recordVehicleEvent(s,vehicle,eventId,'exited',actorId,{toLocationId:pc.locationId});say('Vehicle exit recorded.','vehicle.access',vehicle.id);break;}
@@ -224,6 +226,7 @@ export function resolveAction(s:State,actorId:string,action:Action,eventId:strin
   arrivalId=completedTravel?arrival.id:null;pc.locationId=null;minutes=travelMinutes;pc.journey=completedTravel?null:{originId:travelOrigin,destinationId:destination.id,arrivesAt:new Date(Date.parse(s.clock)+(requestedTravelMinutes-travelMinutes)*60000).toISOString(),remainingMinutes:requestedTravelMinutes-travelMinutes,mode,vehicleId:action.type==='travel'?action.vehicleId:null,activity:'travel'};
   if(interruption?.questId)getEntity(s,interruption.questId,'quest').data.status='active';
   say((!completedTravel?'Travel paused en route to: ':transit?'Scheduled '+data(transit.service,'transportService').mode+' service completed. ':interruption?'Travel interrupted at: ':'Arrival: ')+arrival.name+'.','travel',arrival.id);
+  effects.at(-1)!.travel={originId:travelOrigin,destinationId:arrival.id,mode,minutes:travelMinutes,passengerIds:mode==='drive'&&action.type==='travel'?(data(getEntity(s,action.vehicleId!,'vehicle'),'vehicle').occupants):[actorId]};
   const combat=activeCombat();if(combat){const c=data(combat,'combat'),state=c.actorStates[actorId];if(state){state.escaped=true;state.actionPoints=0;}c.active=false;c.phase='ended';c.endedReason='fled';combat.data=c as Entity['data'];say('The participant leaves the tactical scene through an authored exit.','combat.fled',actorId,atLocation(s,arrival.id).map(entity=>entity.id));}break;
  }
  case 'physical':{const resolved=physicalInteraction(s,actorId,action,eventId,{check:(attribute,difficulty,context)=>roll(attribute,null,difficulty,null,context),say});minutes=resolved.minutes;explicitStatus=resolved.status;pc=data(actor,'character');break;}
@@ -317,7 +320,7 @@ export function resolveAction(s:State,actorId:string,action:Action,eventId:strin
  }
  case 'conversation':{
   const target=getEntity(s,action.targetId,'character');nearby(target);assert(target.id!==actorId,'invalid_target');
-  say(action.text);minutes=1;break;
+  communicate(s,actorId,{method:pc.communication?.normalMethod??'say',language:pc.communication?.language??'en',targetId:target.id,text:action.text},eventId,effects);minutes=1;break;
  }
  case 'message':{
   const phone=requirePhone(s,action.phoneId,actorId),p=data(phone,'item'),contact=contactFor(phone,action.toId,action.number);assert(action.number||contact,'contact_unknown');assert(!contact?.blocked,'contact_blocked');assert(!contact||contact.permissions[action.medium],'contact_permission_denied');

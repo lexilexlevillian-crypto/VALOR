@@ -74,3 +74,24 @@ Checksums detect corruption, not authorship/authenticity. Keep exports private: 
 The Chronicle now uses `POST /game/timelines/:id/commands`. The strict envelope contains `commandId`, `sessionId`, `expectedRevision`, controlled-character `actorId`, `mode` (`GAME` or `STORY`), and a discriminated `input`. The full input list, response behavior, compatibility mapping and limits are documented in [Core turn implementation](CORE_TURN_IMPLEMENTATION.md). Legacy `/turns` remains supported and uses the same resolver/transaction. Unknown freeform no longer becomes a time-consuming generic story action; it creates clarification. Narration no longer creates canonical scene additions.
 
 Command inspection panels include scene, inventory, phone, journal, health and cases. Clarification answers may select a stored option by ID/name or restate the action. Committed results include a persisted active scene and causal resolution audit; privileged turn traces expose the audit batch. Item mechanisms and identity disclosure are described in the core implementation guide.
+
+
+## System 02 narrative preferences and communication
+
+All endpoints require the existing authenticated session and tenant/character access. POST requests require the existing CSRF protections.
+
+| Method | Path | Input / access |
+|---|---|---|
+| GET | /game/timelines/:id/narrative/preferences | Query characterId and mode (GAME or STORY); controlled character |
+| POST | /game/timelines/:id/narrative/preferences | characterId, mode, scope (user/campaign/character/scene), expectedRevision, patch; campaign scope additionally requires Developer Mode |
+| POST | /game/narrative/presets | name and profile override object; saved to the current account |
+| POST | /game/timelines/:id/communication/phrase | characterId, intent (greet/decline/ask-location/ask-status), optional subjectName; returns preview only |
+| GET | /game/timelines/:id/narrative/diagnostics/:eventId | Creator/admin access plus Developer Mode; frozen context and append-only render audit |
+
+Preference patches are replacement overrides for their chosen scope. Empty patches restore inheritance. Read returns the effective profile, layer revisions, preset choices, custom presets and profile schema. An omitted field inherits; it is not reset to its default. Preferences never increment a game timeline revision.
+
+Explicit communication uses the existing command endpoint with input.kind=action and action.type=communicate. Supply method (say/sign/write), language, targetId (UUID or null), text, optional tone (neutral/quiet/firm/warm) and volume (whisper/normal/shout). It validates and commits through the normal owning rules and advances the resolved communication time. Auto-Phrase itself does not execute this command.
+
+NPC speak plans accept speechMethod, speechLanguage, speechExact, speechFactIds, optional speechRequiresResponse, repeatedQuestionText and answerToLatestQuestion in addition to normal plan conditions, priorities and limits. They are authored through the existing Creator entity workflow. A response-requiring plan pauses interruptible compression; presentation settings cannot extend it.
+
+Existing narrate and narrate/stream endpoints render the original frozen event bundle/profile. Streamed paragraphs are released only after validation; retries do not change checks, RNG or world state. The deterministic regenerate_narration command also uses the saved bundle and appends presentation provenance. Old turns without a bundle retain the legacy restricted path.

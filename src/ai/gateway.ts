@@ -33,7 +33,7 @@ class GatewayQueue {
 
 type CacheEntry={expires:number;response:AiProviderResponse};
 export type GatewayOptions={maxConcurrent?:number;maxQueued?:number;maxQueueWaitMs?:number;audit?:AiAuditSink;now?:()=>number;};
-export type ExecuteOptions<T>={request:AiRequest;validate:(output:unknown)=>T;toolAuthorization?:ToolAuthorization;fallback?:(reason:string)=>T;signal?:AbortSignal;};
+export type ExecuteOptions<T>={request:AiRequest;validate:(output:unknown)=>T;toolAuthorization?:ToolAuthorization;onRetry?:(request:AiRequest,reason:string,attempt:number)=>void;fallback?:(reason:string)=>T;signal?:AbortSignal;};
 export type GatewayResult<T>={traceId:string;status:'succeeded'|'cached'|'fallback';output:T;usage:{inputTokens:number;outputTokens:number};attempts:number;toolResults:unknown[];fallbackMessage?:string;failureReason?:string;};
 
 export class AiGateway {
@@ -74,7 +74,7 @@ export class AiGateway {
      return {traceId:request.traceId,status:'succeeded',output,usage:response.usage,attempts:attempts+1,toolResults};
     }catch(error){
      if(options.signal?.aborted){await this.audit.record({traceId:request.traceId,status:'canceled',attempts:attempts+1,inputTokens:0,outputTokens:0,reason:'ai_canceled',at:new Date(this.now()).toISOString()});throw new Error('ai_canceled',{cause:error});}
-     lastReason=safeAiFailure(error,stage);
+     lastReason=safeAiFailure(error,stage);if(attempts+1<request.budget.maxAttempts)options.onRetry?.(request,lastReason,attempts+1);
     }
    }
    return this.useFallback(options,lastReason,attempts,lastReason==='ai_timeout'?'timed-out':'failed');

@@ -6,7 +6,7 @@ const files:Record<string,[string,string]>={
  '/http.js':['http.js','text/javascript; charset=utf-8'],'/turn-client.js':['turn-client.js','text/javascript; charset=utf-8'],
  '/phone-map.js':['phone-map.js','text/javascript; charset=utf-8'],
  '/phone-apps.js':['phone-apps.js','text/javascript; charset=utf-8'],
- '/play-ui.css':['play-ui.css','text/css; charset=utf-8'],'/play-ui.js':['play-ui.js','text/javascript; charset=utf-8'],
+ '/play-ui.css':['play-ui.css','text/css; charset=utf-8'],'/play-ui.js':['play-ui.js','text/javascript; charset=utf-8'],'/narrative-ui.js':['narrative-ui.js','text/javascript; charset=utf-8'],
  '/studio.css':['studio.css','text/css; charset=utf-8'],'/studio.js':['studio.js','text/javascript; charset=utf-8'],
  '/theme.js':['theme.js','text/javascript; charset=utf-8'],'/sw.js':['sw.js','text/javascript; charset=utf-8'],
  '/backgrounds.js':['backgrounds.js','text/javascript; charset=utf-8'],

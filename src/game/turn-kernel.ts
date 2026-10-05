@@ -1,3 +1,4 @@
+import {deterministicNarrative,narrativeValidatorVersion} from './narrative-runtime.ts';
 import {coreRulesetVersion} from './turn-rules.ts';
 import {validatePlanReferences,validateCreativeProposal,describeCreativePlan,observerReferenceIds,type TurnPlanner,type CreativeProposal} from './turn-planner.ts';
 import {beginTurnTrace,persistTurnTrace,failureReason} from './turn-pipeline.ts';
@@ -58,8 +59,10 @@ export class TurnKernel {
     ensure(turn,404,'turn_unavailable');
     const batch=await this.game.store.get<{batch_json:string}>('SELECT batch_json FROM turn_resolution_batches WHERE event_id=?',input.turnId);
     const original=batch?JSON.parse(batch.batch_json):null;
-    const narration=(JSON.parse(turn.permitted_json) as Array<{text:string}>).map(e=>e.text).join('\n\n')||'The action resolved. No observer-visible change was recorded.';
+    const frozen=await this.game.store.get<{context_json:string}>('SELECT context_json FROM turn_narrative_contexts WHERE event_id=?',turn.id),narrative=frozen?JSON.parse(frozen.context_json).narrative:null;
+    const narration=narrative?deterministicNarrative(narrative):(JSON.parse(turn.permitted_json) as Array<{text:string}>).map(e=>e.text).join('\n\n')||'The action resolved. No observer-visible change was recorded.';
     const versionId=randomUUID();await this.game.store.run('INSERT INTO narration_versions VALUES (?,?,?,?,?)',versionId,turn.id,narration,'grounded',new Date().toISOString());
+    if(narrative)await this.game.store.run('INSERT INTO narrative_render_records VALUES (?,?,?,?,?,?,?)',randomUUID(),turn.id,id,actor.id,versionId,JSON.stringify({turnId:turn.id,eventIds:narrative.eventIds,profile:narrative.profile,promptVersion:'narrative-v1',model:{provider:'grounded',model:'deterministic-v2'},validatorVersion:narrativeValidatorVersion,retryCount:0,status:'regenerated',mechanicsChanged:false}),new Date().toISOString());
     result={...base,status:'PRESENTED',turnId:turn.id,narration,versionId,turnRevision:original?original.baseRevision+1:null,control:original?.resolution?.control??original?.nextControl??base.control,rerolled:false};
    }else if(input.kind==='edit_request'){
     const branch=await this.game.branch(actor,id,input.edit.saveId,input.edit.name);
@@ -96,7 +99,7 @@ export class TurnKernel {
      validatePlanReferences(clauses,visibleIds);
      const cursor=await this.game.store.get<{cursor:string}>('SELECT cursor FROM timeline_turn_cursors WHERE timeline_id=?',id);
      ensure(cursor,409,'turn_cursor_unavailable');
-     const turn=await this.game.turn(actor,id,{revision:t.revision,cursor:cursor.cursor,characterId,action:clauses[0]!.action,clauses,text},'kernel_'+checksum(command.commandId),attempt.seed);
+     const turn=await this.game.turn(actor,id,{revision:t.revision,cursor:cursor.cursor,characterId,action:clauses[0]!.action,clauses,text,mode},'kernel_'+checksum(command.commandId),attempt.seed);
      pending=null;result={...base,...turn,status:'COMMITTED',worldTime:(await this.game.load(id)).clock};
     }
    }

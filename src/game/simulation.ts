@@ -1,3 +1,4 @@
+import {communicate,conversationState} from './communication.ts';
 import {eventMetadata} from './turn-runtime.ts';
 import {skillStatus} from '../../public/creation-rules.js';
 import {syncWeather} from './island-weather.ts';
@@ -18,7 +19,7 @@ import {applyRelationshipMovement,decayReputations,recordRelationshipHistory,rel
 import {carriedBy,itemPossessor} from './items.ts';
 import {creditCharacter,debitBusiness,jobEligible,postTransaction} from './economy.ts';
 import {advanceEventDeadlines,evaluateEventWatchers} from './events.ts';
-export type Effect={id:string;text:string;observers:string[];type:string;subjectId:string;occurredAt?:string;sourceSystem?:string;causeRefs?:string[]};
+export type Effect={id:string;text:string;observers:string[];type:string;subjectId:string;occurredAt?:string;sourceSystem?:string;causeRefs?:string[];travel?:{originId:string;destinationId:string;mode:string;minutes:number;passengerIds:string[]};dialogue?:{speakerId:string;method:'say'|'sign'|'write';language:string;exact:boolean;text:string;comprehension:'full'|'partial'|'none';register?:string;tone?:string;volume?:string;targetId?:string|null;requiresResponse?:boolean};}
 export const simulationTiers={
  active:{
   updateFrequencyMinutes:1,
@@ -102,7 +103,8 @@ export function isOpen(hours:{opens:number;closes:number;days?:number[];closedOn
 export function advance(s:State,minutes:number,eventId:string,effects:Effect[],playerId:string,options:{interruptible?:boolean;condition?:()=>boolean}={}){
  const began=Date.parse(s.clock),end=began+minutes*60000;
  const mandatory=s.entities.filter(e=>!e.archived&&(e.kind==='watcher'||e.kind==='message')&&e.data.requiresPlayerResponse);
- const dynamic=Boolean(options.interruptible&&(mandatory.length||options.condition));
+ const speechWindows=s.entities.some(e=>e.kind==='character'&&!e.archived&&!e.data.playable&&e.data.condition==='conscious'&&(e.data.plans as Array<{type:string;targetId:string;enabled:boolean;speechRequiresResponse?:boolean}>).some(p=>p.type==='speak'&&p.enabled&&p.targetId===playerId&&p.speechRequiresResponse!==false));
+ const dynamic=Boolean(options.interruptible&&(mandatory.length||speechWindows||options.condition));
  const cost=minutes*Math.max(1,s.entities.filter(e=>!e.archived&&['character','watcher','production','transition','socialRule'].includes(e.kind)).length);
  if((s.settings.deterministicCatchup||dynamic)&&cost>s.settings.npcCatchupWorkBudget)throw new Error('catchup_work_budget_exceeded_use_shorter_wait');
  let interrupted=false;
@@ -112,11 +114,11 @@ export function advance(s:State,minutes:number,eventId:string,effects:Effect[],p
   const times=mandatory.flatMap(e=>[e.data.dueAt,e.data.availableAt].filter((v):v is string=>typeof v==='string').map(Date.parse)).filter(at=>at>before&&at<=end);
   const boundary=times.length?Math.min(...times):end;
   const step=(s.settings.deterministicCatchup||dynamic)?Math.min(60000,end-before,boundary-before):end-before;
-  advanceStep(s,step/60000,eventId,effects,playerId);
+  const firstEffect=effects.length;advanceStep(s,step/60000,eventId,effects,playerId);
   if(options.interruptible){
    interrupted=mandatory.some(e=>e.kind==='watcher'?e.data.lastFired!==previous.get(e.id)&&(e.data.notifyCharacterIds as string[]).includes(playerId):e.data.toId===playerId&&e.data.status!==previous.get(e.id)&&!['draft','queued','sent','failed'].includes(String(e.data.status)));
    const pc=s.entities.find(e=>e.id===playerId);
-   if(pc&&pc.data.condition!=='conscious')interrupted=true;
+   if(pc&&pc.data.condition!=='conscious'||effects.slice(firstEffect).some(e=>e.observers.includes(playerId)&&e.dialogue?.requiresResponse&&e.dialogue.targetId===playerId))interrupted=true;
    if(interrupted||options.condition?.())break;
   }
  }
@@ -280,6 +282,7 @@ function advanceStep(s:State,minutes:number,eventId:string,effects:Effect[],play
    const target=s.entities.find(e=>e.id===plan.targetId&&!e.archived);if(!target){fail('blocked');if(plan.fallback==='next-plan')continue;break;}
    const observers=atLocation(s,d.locationId).filter(e=>e.data.playable).map(e=>e.id);
    let performed=false,activityOutcome:Data<'character'>['activityTimeline'][number]['outcome']|null=null,activitySummary='',secondaryOutcome:Data<'character'>['activityTimeline'][number]['outcome']|null=null,secondarySummary='';
+   if(plan.type==='speak'&&target.kind==='character'&&target.data.locationId===d.locationId&&d.locationId&&plan.text&&(plan.speechMethod!=='say'||d.communication?.canSpeak!==false)&&((d.communication?.languages??{en:{spoken:100,written:100,signed:0}})[plan.speechLanguage]?.[plan.speechMethod==='say'?'spoken':plan.speechMethod==='sign'?'signed':'written']??0)>0&&plan.speechFactIds.every(id=>s.knowledge.some(k=>k.observerId===npc.id&&k.factId===id&&(!k.expiresAt||k.expiresAt>s.clock))&&s.facts.some(f=>f.id===id&&!f.retiredAt&&(!f.validFrom||f.validFrom<=s.clock)&&(!f.validUntil||f.validUntil>s.clock)))){const conversation=conversationState(s,npc.id,target.id),text=conversation.repeatCount>1&&plan.repeatedQuestionText?plan.repeatedQuestionText:plan.text;communicate(s,npc.id,{method:plan.speechMethod,language:plan.speechLanguage,targetId:target.id,text,requiresResponse:plan.speechRequiresResponse!==false,...(plan.answerToLatestQuestion&&conversation.latestQuestion?{replyToFactId:conversation.latestQuestion.id}:{})},eventId,effects,plan.speechExact);performed=true;activityOutcome='socialized';activitySummary='Delivered an authored, knowledge-validated speech intent.';}
    if(plan.type==='message'&&target.kind==='character'&&plan.text){
     const device=s.entities.find(e=>e.kind==='item'&&!e.archived&&carriedBy(s,e,npc.id)&&phonePowered(e)&&(e.data.contacts as {characterId:string|null;blocked?:boolean}[]).some(c=>c.characterId===target.id&&!c.blocked));
     if(device){const receiver=recipientPhone(s,target.id,'','sms'),delay=communicationDelayMinutes(s,device,receiver);

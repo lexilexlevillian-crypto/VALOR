@@ -18,7 +18,7 @@ export function messageThreads(messages,selfId,contacts=[]){
  }
  return [...groups.values()].map(thread=>({...thread,messages:thread.messages.sort((a,b)=>a.at.localeCompare(b.at))})).sort((a,b)=>b.messages.at(-1).at.localeCompare(a.messages.at(-1).at));
 }
-export async function nativePhoneApp({$,S,api,endpoint,act,run,navigate,formatMoment,entityActions,openStyle,openDeveloperSettings,loadBranch}){
+export async function nativePhoneApp({$,S,api,endpoint,act,run,navigate,formatMoment,entityActions,openStyle,openDeveloperSettings,writingPreferences,loadBranch}){
  const view=S.view,entities=view.entities,pc=entities.find(e=>e.id===S.character.id),kind=k=>entities.filter(e=>e.kind===k),name=id=>entities.find(e=>e.id===id)?.name??'Unknown',human=value=>String(value??'').replace(/([a-z])([A-Z])/g,'$1 $2').replaceAll('-',' '),root=$('section',{class:'native-app','data-native-app':S.page});
  const perform=fn=>run(async()=>{try{return await fn();}catch(error){const host=document.querySelector('.native-app')??root;let alert=host.querySelector('.phone-app-error');if(!alert){alert=$('p',{class:'phone-app-error',role:'alert'});host.prepend(alert);}alert.textContent=error.message||'That action could not be completed.';throw error;}});
  const text=(value,cls='mobile-note')=>$('p',{class:cls},value),empty=message=>$('div',{class:'mobile-empty'},text(message)),heading=value=>$('h2',{class:'mobile-section-title'},value);
@@ -140,7 +140,7 @@ export async function nativePhoneApp({$,S,api,endpoint,act,run,navigate,formatMo
  if(S.page==='Settings'){
   const narrator=$('select',{'aria-label':'Story narrator'},...(S.catalog?.providers??['grounded']).map(id=>$('option',{value:id,selected:id===S.narrator},id==='grounded'?'Grounded (no AI)':id==='deepinfra'?'DeepSeek via DeepInfra':'Gemini')));
   narrator.onchange=()=>{S.narrator=narrator.value;try{localStorage.setItem('valor.narrator.'+S.user.id,S.narrator);}catch{}};
-  root.append(heading('Personal settings'),group(field('Story narrator',narrator),row('Appearance','Colors, backgrounds & animation',openStyle)),text('These settings belong to this device and account.'),heading('Current life'),group(row('Life',S.campaign.name),row('Timeline',S.timeline.name)),button('Manage this life’s settings',openDeveloperSettings),text('Opens the settings for this life, not the shared authoring world. Developer permission is required for world rules.'));return root;
+  root.append(heading('Personal settings'),group(field('Story narrator',narrator),row('Appearance','Colors, backgrounds & animation',openStyle),row('Writing preferences','Perspective, style & response length',async()=>detail('Writing preferences',await writingPreferences()))),text('These settings belong to this device and account.'),heading('Current life'),group(row('Life',S.campaign.name),row('Timeline',S.timeline.name)),button('Manage this life’s settings',openDeveloperSettings),text('Opens the settings for this life, not the shared authoring world. Developer permission is required for world rules.'));return root;
  }
  root.append(empty('This app has no information yet.'));return root;
 }

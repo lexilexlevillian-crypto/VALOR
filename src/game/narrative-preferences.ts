@@ -1,0 +1,32 @@
+import {randomUUID,createHash} from 'node:crypto';
+import {z} from 'zod';
+import {ensure,type Actor} from '../contracts.ts';
+import type {Store} from '../db.ts';
+import type {Game} from './engine.ts';
+import {currentScene} from './turn-scenes.ts';
+import {narrativePatchSchema,narrativeProfileSchema,narrativePresets,type NarrativePatch} from './narrative-profile.ts';
+export const preferenceCommand=z.strictObject({characterId:z.uuid(),mode:z.enum(['GAME','STORY']),scope:z.enum(['user','campaign','character','scene']),expectedRevision:z.number().int().min(0),patch:narrativePatchSchema});
+type Row={scope:string;scope_id:string;user_id:string;mode:string;revision:number;patch_json:string};
+export async function resolveNarrativeProfile(store:Store,userId:string,campaignId:string,characterId:string,sceneId:string|null,mode:'GAME'|'STORY'){
+ const keys=[['user',userId,userId],['campaign',campaignId,''],['character',characterId,userId],...(sceneId?[['scene',sceneId,userId]]:[])];
+ const rows=await store.all<Row>("SELECT * FROM narrative_preferences WHERE mode=? AND ((scope='user' AND scope_id=? AND user_id=?) OR (scope='campaign' AND scope_id=? AND user_id='') OR (scope='character' AND scope_id=? AND user_id=?) OR (scope='scene' AND scope_id=? AND user_id=?))",mode,userId,userId,campaignId,characterId,userId,sceneId??'',userId);
+ let patch:NarrativePatch={mechanicalFeedbackStyle:mode==='GAME'?'standard':'light'};const layers=[];
+ for(const [scope,id,owner] of keys){const row=rows.find(r=>r.scope===scope&&r.scope_id===id&&r.user_id===owner);if(row){patch={...patch,...narrativePatchSchema.parse(JSON.parse(row.patch_json))};layers.push({scope,revision:row.revision});}}
+ const profile=narrativeProfileSchema.parse(patch),values=Object.entries(profile).filter(([key])=>!['id','name','version'].includes(key)),preset=Object.values(narrativePresets).find(p=>values.every(([key,value])=>key==='mechanicalFeedbackStyle'||JSON.stringify(p[key as keyof typeof p])===JSON.stringify(value)));profile.id=preset?.id??'custom';profile.name=preset?.name??'Custom';profile.version=parseInt(createHash('sha256').update(JSON.stringify({values,layers})).digest('hex').slice(0,12),16)||1;
+ return {profile,layers,rows:rows.map(({scope,revision,patch_json})=>({scope,revision,patch:JSON.parse(patch_json)}))};
+}
+export class NarrativePreferences{
+ readonly game:Game;constructor(game:Game){this.game=game;}
+ async read(actor:Actor,timelineId:string,characterId:string,mode:'GAME'|'STORY'){
+  await this.game.authorizeCharacter(actor,timelineId,characterId);const {t}=await this.game.access(actor,timelineId),scene=await currentScene(this.game.store,timelineId,characterId);
+  return {...await resolveNarrativeProfile(this.game.store,actor.id,t.campaign_id,characterId,scene?.sceneId??null,mode),presets:narrativePresets,customPresets:await this.game.store.all('SELECT id,name,revision,profile_json FROM narrative_presets WHERE user_id=?',actor.id),schema:z.toJSONSchema(narrativeProfileSchema)};
+ }
+ async save(actor:Actor,timelineId:string,raw:unknown){
+  const command=preferenceCommand.parse(raw);await this.game.authorizeCharacter(actor,timelineId,command.characterId);const {t}=await this.game.access(actor,timelineId),scene=await currentScene(this.game.store,timelineId,command.characterId);
+  if(command.scope==='campaign')await this.game.developerAccess(actor,timelineId);
+  ensure(command.scope!=='scene'||scene,409,'scene_unavailable');const scopeId=command.scope==='user'?actor.id:command.scope==='campaign'?t.campaign_id:command.scope==='character'?command.characterId:scene.sceneId,owner=command.scope==='campaign'?'':actor.id;
+  return this.game.store.transaction(async()=>{await this.game.authorizeCharacter(actor,timelineId,command.characterId);if(command.scope==='campaign')await this.game.developerAccess(actor,timelineId);const old=await this.game.store.get<Row>('SELECT * FROM narrative_preferences WHERE scope=? AND scope_id=? AND user_id=? AND mode=?',command.scope,scopeId,owner,command.mode);ensure((old?.revision??0)===command.expectedRevision,409,'narrative_preference_conflict');const revision=(old?.revision??0)+1,patch=JSON.stringify(command.patch);await this.game.store.run('INSERT INTO narrative_preferences VALUES (?,?,?,?,?,?) ON CONFLICT(scope,scope_id,user_id,mode) DO UPDATE SET revision=excluded.revision,patch_json=excluded.patch_json',command.scope,scopeId,owner,command.mode,revision,patch);await this.game.store.run('INSERT INTO narrative_preference_history VALUES (?,?,?,?,?,?,?,?)',randomUUID(),actor.id,command.scope,scopeId,command.mode,revision,patch,new Date().toISOString());return {revision,affects:'future-narration-only'};});
+ }
+ async savePreset(actor:Actor,raw:unknown){const input=z.strictObject({name:z.string().trim().min(1).max(100),profile:narrativePatchSchema}).parse(raw);await this.game.domain.active(actor);const id=randomUUID(),profile=narrativeProfileSchema.parse({...input.profile,id,name:input.name});await this.game.store.run('INSERT INTO narrative_presets VALUES (?,?,?,?,?)',id,actor.id,input.name,1,JSON.stringify(profile));return {id,profile};}
+ async diagnostics(actor:Actor,timelineId:string,eventId:string){await this.game.developerAccess(actor,timelineId);const turn=await this.game.store.get('SELECT id FROM game_events WHERE id=? AND timeline_id=?',eventId,timelineId);ensure(turn,404,'turn_unavailable');const context=await this.game.store.get<{context_json:string}>('SELECT context_json FROM turn_narrative_contexts WHERE event_id=?',eventId),records=await this.game.store.all<{record_json:string}>('SELECT record_json FROM narrative_render_records WHERE event_id=? ORDER BY rowid DESC LIMIT 20',eventId);return {context:context?JSON.parse(context.context_json).narrative??null:null,loreSources:context?JSON.parse(context.context_json).dossier?.sources??[]:[],knowledgeFilters:['observer-visible entities and effects only','private thoughts are non-objective','utterances are asserted reports','unknown language has no translation','concealed identities use observer labels'],validationStages:['source authority and state','player agency','observer knowledge','NPC intent and literal speech','event continuity and unique ordering','control handoff','content and optional detail filters','perspective and tense','repetition and style','presentation size and atomic commit'],renders:records.map(r=>JSON.parse(r.record_json))};}
+}

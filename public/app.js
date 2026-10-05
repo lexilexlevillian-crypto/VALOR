@@ -1,3 +1,4 @@
+import {narrativeSettings,communicationPanel} from './narrative-ui.js';
 import {acceptsTurnResponse} from './turn-client.js';
 import {chronicleSurface,phoneOverlay,phoneLauncher} from './play-ui.js';
 import {requestJson,readJsonResponse} from './http.js';
@@ -123,7 +124,7 @@ async function render(){
  S.view=nextView;
  if(!S.catalog)S.catalog=await api('/game/catalog');
  if(!S.narrator){const saved=stored('valor.narrator.'+S.user.id,''),preferred=S.catalog.defaultProvider??(S.catalog.providers.includes('deepinfra')?'deepinfra':S.catalog.providers.includes('gemini')?'gemini':'grounded');S.narrator=S.catalog.providers.includes(saved)?saved:preferred;}
- if(nativePhonePages.has(S.page))return frame(await nativePhoneApp({$,S,api,endpoint,act,run,formatMoment,entityActions,openStyle,navigate:async page=>{S.page=page;await render();},openDeveloperSettings:async()=>{S.character=null;S.page='Settings';await render();},loadBranch:async branch=>{S.timeline=branch;S.character=null;S.page='Chronicle';await render();}}));
+ if(nativePhonePages.has(S.page))return frame(await nativePhoneApp({$,S,api,endpoint,act,run,formatMoment,entityActions,openStyle,writingPreferences:()=>narrativeSettings({$,button,field,panel:(_key,title,...children)=>$('section',{class:'narrative-preferences'},$('h2',{},title),...children),api,endpoint,S,schemaEditor,notify,creatorRole:S.mode==='developer'&&S.developerAllowed&&['creator','admin'].includes(S.campaign.role)}),navigate:async page=>{S.page=page;await render();},openDeveloperSettings:async()=>{S.character=null;S.page='Settings';await render();},loadBranch:async branch=>{S.timeline=branch;S.character=null;S.page='Chronicle';await render();}}));
  if(S.page==='Chronicle')return chronicle();
  if(S.page==='Phone Home')return frame($('div',{}));
  if(S.page==='Relationships')return relationshipsScreen();
@@ -271,7 +272,7 @@ async function turnInteraction(input){
  await render();
 }
 function chronicleContent(){
- return chronicleSurface({$,button,S,formatMoment,
+ return chronicleSurface({$,button,S,formatMoment,communication:()=>communicationPanel({$,button,S,commit:act,phrase:input=>api(endpoint('communication/phrase'),input)}),
   switchMode:()=>turnInteraction({kind:'mode_switch',targetMode:S.view.playMode==='GAME'?'STORY':'GAME'}),
   cancelPending:()=>turnInteraction({kind:'cancel_pending',pendingActionId:S.view.pendingDecision.pendingDecisionId}),
   chooseClarification:answer=>act({kind:'clarification_answer',pendingDecisionId:S.view.pendingDecision.pendingDecisionId,answer}),
@@ -562,7 +563,7 @@ function characterCoreEditor(schema,data,onchange,excluded=[]){
   ['Extra appearance details','Optional. Describe them in your own words. Blank entries are fine.',['appearance','hair','scars','tattoos','disabilities','presentation','socialPresentation','attractivenessContext']],
   ['Starting place & money','Choose where they begin and enter any starting money in dollars and cents.',['locationId','homeId','cash','bank']],
   ['Health & daily needs','For a normal healthy start, keep the defaults: conscious, blood 100, cleanliness 100, and other levels 0.',['condition','blood','fatigue','hunger','thirst','hygiene','intoxication','restrainedBy','dependence','withdrawal','lastDoseAt','needsContext','reproductive']],
-  ['Personality, goals & AI writing','Optional. Give the narrator useful examples of how this character talks and behaves. These notes do not override game rules or player choices.',['mood','goals','fears','voice','instructions','aiBehavior','secrets','notes']],
+  ['Personality, goals & AI writing','Optional. Give the narrator useful examples of how this character talks and behaves. These notes do not override game rules or player choices.',['mood','goals','fears','voice','voiceProfile','communication','instructions','aiBehavior','secrets','notes']],
   ['Skills, groups & relationships','Optional. Choose existing traits and groups, or describe likes and boundaries. Leave advanced matching rules unchanged if unsure.',['attributes','skills','traits','factionIds','preferences','boundaries','compatibility']],
   ['Daily routine & automatic actions','Optional. Add routines only if this character needs scheduled activity. Automatic action rules are advanced; an empty list is fine.',['activity','schedule','plans']],
   ['Player access & profile visibility','Check who can control this character and who may see profile details. Leave existing visibility rules unchanged if unsure.',['playable','controllerUserId','profileVisibility','registryStatus','arrested','retirementNarrative','tags','mediaIds']],
@@ -842,7 +843,8 @@ async function settings(){
  const providerName=id=>id==='deepinfra'?'DeepInfra · DeepSeek V4 Pro':id==='gemini'?'Google Gemini':id;
  const narration=$('select',{},...S.catalog.providers.map(id=>$('option',{value:id,selected:id===S.narrator},id==='grounded'?'Grounded results (no AI calls)':providerName(id)+' story narration')));
  narration.addEventListener('change',()=>{S.narrator=narration.value;try{localStorage.setItem('valor.narrator.'+S.user.id,S.narrator);}catch{}});
- content.append(panel('STORY','Narration',field('Story narrator',narration),$('p',{},'AI narration writes third-person, past-tense continuations using your world’s allowance. Grounded mode keeps play available without sending your story to an AI provider.')));
+ content.append(panel('STORY','Narration',field('Story narrator',narration),$('p',{},'AI narration uses your saved writing preferences for continuations using your world’s allowance. Grounded mode keeps play available without sending your story to an AI provider.')));
+ content.append(await narrativeSettings({$,button,field,panel,api,endpoint,S,schemaEditor,notify,creatorRole}));
  if(!creatorRole){content.append($('section',{class:'empty'},$('h3',{},'Developer controls are not loaded.'),$('p',{},['creator','admin'].includes(S.campaign.role)?'Enter Developer Mode to load campaign policy, validation, and mutation tools. Player Mode keeps that state out of memory.':'Campaign settings are controlled by an authorized Creator.')));frame(content);return;}
  const testProvider='deepinfra';
  content.append(panel('AI CONNECTION','DeepSeek V4 Pro',button('Test DeepSeek connection',async()=>{const result=await api('/game/ai/health',{provider:testProvider});notify(result.status==='ok'?'DeepSeek V4 Pro responded successfully in '+(result.latencyMs/1000).toFixed(1)+' seconds.':result.message??'DeepSeek V4 Pro is not configured on this server.');}),$('p',{},'Runs a small synthetic DeepInfra API test. No player story or secret key is shown.')));

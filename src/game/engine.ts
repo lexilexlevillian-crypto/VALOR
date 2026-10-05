@@ -1,3 +1,5 @@
+import {resolveNarrativeProfile} from './narrative-preferences.ts';
+import {buildNarrativeBundle,deterministicNarrative,narrativeValidatorVersion} from './narrative-runtime.ts';
 import {coreRulesetVersion} from './turn-rules.ts';
 import {withTurnRuntime} from './turn-runtime.ts';
 import {turnAffordances} from './turn-affordances.ts';
@@ -48,7 +50,7 @@ import {developerSocialGraph,playerRelationships,recordReputation} from './socia
 import {inventoryView} from './items.ts';
 import {instantiateMasterBankEntry,masterBankEntry} from './master-bank.ts';
 type Timeline={id:string;campaign_id:string;parent_id:string|null;parent_save_id:string|null;name:string;revision:number;clock:string;settings_json:string};
-type Mutation<T>={result:T;resolutionSteps?:unknown;effects?:Effect[];draws?:number;checks?:CheckRecord[];characterId?:string;turnText?:string};
+type Mutation<T>={result:T;resolutionSteps?:unknown;effects?:Effect[];draws?:number;checks?:CheckRecord[];characterId?:string;turnText?:string;mode?:'GAME'|'STORY'};
 const now=()=>new Date().toISOString();
 const canonical=(v:unknown):string=>Array.isArray(v)?'['+v.map(canonical).join(',')+']':v&&typeof v==='object'?'{'+Object.entries(v).sort(([a],[b])=>a.localeCompare(b)).map(([k,x])=>JSON.stringify(k)+':'+canonical(x)).join(',')+'}':JSON.stringify(v);
 export const checksum=(v:unknown)=>createHash('sha256').update(canonical(v)).digest('hex');
@@ -301,7 +303,8 @@ export class Game {
   const cursor=await this.store.get<{revision:number;cursor:string}>('SELECT revision,cursor FROM timeline_turn_cursors WHERE timeline_id=?',id);ensure(cursor&&cursor.revision===t.revision,409,'turn_cursor_desynchronized');
   const inputState=await this.store.get<{mode:string;pending_json:string|null}>('SELECT mode,pending_json FROM turn_input_state WHERE timeline_id=? AND user_id=? AND character_id=?',id,actor.id,characterId);
   const activeScene=await currentScene(this.store,id,characterId);
-  return {activeScene,affordances:turnAffordances(s,characterId,t.revision).map(({action,...safe})=>safe),playMode:inputState?.mode??'STORY',pendingDecision:inputState?.pending_json?JSON.parse(inputState.pending_json):null,timeline:{id:t.id,name:t.name,revision:cursor.revision,turnCursor:cursor.cursor},...observerView(s,characterId),control:inputState?.pending_json?{holder:'PLAYER',reasonCode:'CLARIFICATION_REQUIRED',actingEntityId:characterId}:activeScene?.sceneRevision===t.revision?activeScene.control:controlState(s,characterId),journal:journalView(s,characterId),caseFiles:s.entities.filter(entity=>entity.kind==='case'&&!entity.archived&&entity.data.investigatorId===characterId).map(entity=>caseFileView(s,entity.id,characterId)),checks:await this.checkHistory(id,characterId,false,s),turns:(await this.transcript(id)).filter(turn=>turn.character_id===characterId&&turn.user_id===actor.id).slice(-100).map(presentTranscript)};},'read');}
+  const writing=await resolveNarrativeProfile(this.store,actor.id,t.campaign_id,characterId,activeScene?.sceneId??null,inputState?.mode==='GAME'?'GAME':'STORY');
+  return {feedbackStyle:writing.profile.mechanicalFeedbackStyle,activeScene,affordances:turnAffordances(s,characterId,t.revision).map(({action,...safe})=>safe),playMode:inputState?.mode??'STORY',pendingDecision:inputState?.pending_json?JSON.parse(inputState.pending_json):null,timeline:{id:t.id,name:t.name,revision:cursor.revision,turnCursor:cursor.cursor},...observerView(s,characterId),control:inputState?.pending_json?{holder:'PLAYER',reasonCode:'CLARIFICATION_REQUIRED',actingEntityId:characterId}:activeScene?.sceneRevision===t.revision?activeScene.control:controlState(s,characterId),journal:journalView(s,characterId),caseFiles:s.entities.filter(entity=>entity.kind==='case'&&!entity.archived&&entity.data.investigatorId===characterId).map(entity=>caseFileView(s,entity.id,characterId)),checks:await this.checkHistory(id,characterId,false,s),turns:(await this.transcript(id)).filter(turn=>turn.character_id===characterId&&turn.user_id===actor.id).slice(-100).map(presentTranscript)};},'read');}
  async relationships(actor:Actor,id:string,characterId:string){const {access}=await this.access(actor,id),state=await this.load(id);this.controlled(actor,state,characterId,access.role);return playerRelationships(state,characterId);}
  async phone(actor:Actor,id:string,characterId:string){const {access}=await this.access(actor,id),state=await this.load(id);this.controlled(actor,state,characterId,access.role);return phoneView(state,characterId);}
  async inventory(actor:Actor,id:string,characterId:string,options:{sort?:'name'|'category'|'condition'|'quantity';category?:string;equipped?:boolean}){const {access}=await this.access(actor,id),state=await this.load(id);this.controlled(actor,state,characterId,access.role);return inventoryView(state,characterId,options);}
@@ -421,7 +424,7 @@ export class Game {
  async media(actor:Actor,id:string,mediaId:string,characterId:string){
   const {access}=await this.access(actor,id),s=await this.load(id);this.controlled(actor,s,characterId,access.role);const entity=getEntity(s,mediaId,'media');ensure(visible(s,entity,characterId),404,'media_unavailable');const m=data(entity,'media');return {mime:m.mime,bytes:mediaBytes(m.mime,m.body)};
  }
- private async developerAccess(actor:Actor,id:string){
+ async developerAccess(actor:Actor,id:string){
   const result=await this.access(actor,id,true),mode=await this.domain.userMode(actor);ensure(privileged(result.access.role)&&mode.mode==='developer',403,'developer_mode_required');return result;
  }
  private async studioValidation(id:string,raw:unknown,characterId?:string){
@@ -588,17 +591,25 @@ export class Game {
    const characterId=action.characterId;
    if(characterId){
     await run('grounded-summary',async()=>{
-     const permitted=observerEffects(s,action.effects??[],characterId);
-     const narration=permitted.map(e=>e.text).join('\n\n')||'The action resolved. No observer-visible change was recorded.';
+     const permitted=observerEffects(s,action.effects??[],characterId,true);
+     let narration=permitted.map(e=>e.text).join('\n\n')||'The action resolved. No observer-visible change was recorded.';
      const projection=observerView(s,characterId),presentation=chroniclePresentation(beforeState,s,characterId,projection);
      const activeScene=await updateScene(this.store,id,characterId,s,revision,eventId,projection,(action.result as {control?:ReturnType<typeof controlState>}).control);
      Object.assign(action.result,{notices:presentation.notices,scene:presentation.scene,activeScene});
      const safeEffects=permitted.map(({observers,...effect})=>({...effect,observers:[characterId]}));
      const frozenManifest=buildContextManifest(s,characterId,action.turnText??'',{maxTokens:256,currentEvents:safeEffects,projection,sceneOnly:true});
      const sources=frozenManifest.included.map(item=>({id:item.id,layer:item.category,text:item.text,source:item.source,priority:item.priority}));while(sources.length&&Buffer.byteLength(JSON.stringify(sources))>2000)sources.pop();
-     const frozen={scene:storyScene(s,characterId,projection),controls:frozenManifest.controls,dossier:{version:2,observerId:characterId,clock:s.clock,sources}};
+     const selected=await resolveNarrativeProfile(this.store,actor.id,t.campaign_id,characterId,activeScene.sceneId,action.mode??'GAME');
+     const recentRows=await this.store.all<{input_text:string;narration:string;context_json:string|null}>('SELECT st.input_text,st.narration,nc.context_json FROM story_turns st LEFT JOIN turn_narrative_contexts nc ON nc.event_id=st.id WHERE st.timeline_id=? AND st.character_id=? ORDER BY st.rowid DESC LIMIT 50',id,characterId);
+     const previous=recentRows.flatMap(row=>row.context_json?[JSON.parse(row.context_json).narrative]:[]).find(bundle=>bundle?.locationId===data(getEntity(s,characterId,'character'),'character').locationId);
+     const narrative=buildNarrativeBundle({state:s,before:beforeState,projection,actorId:characterId,turnId:eventId,effects:safeEffects,profile:selected.profile,layers:selected.layers,mode:action.mode??'GAME',control:activeScene,playerText:action.turnText??'',recent:recentRows.reverse().map(row=>({input:row.input_text,narration:row.narration})),previousLocationFingerprint:previous?.locationFingerprint,excluded:frozenManifest.controls.safety.excludedContent});
+     narration=deterministicNarrative(narrative);
+     for(const f of narrative.facts.filter(f=>f.classification==='UI_ONLY'))presentation.notices.push({category:'messages',label:'Game update',detail:f.text.slice(0,1000)});
+     Object.assign(action.result,{narration,notices:presentation.notices});
+     const frozen={narrative,scene:storyScene(s,characterId,projection),controls:frozenManifest.controls,dossier:{version:2,observerId:characterId,clock:s.clock,sources}};
      await this.store.run('INSERT INTO turn_narrative_contexts VALUES (?,?)',eventId,JSON.stringify(frozen));
-     await this.store.run('INSERT INTO narration_versions VALUES (?,?,?,?,?)',randomUUID(),eventId,narration,'grounded',now());
+     const narrationVersionId=randomUUID();await this.store.run('INSERT INTO narration_versions VALUES (?,?,?,?,?)',narrationVersionId,eventId,narration,'grounded',now());
+     await this.store.run('INSERT INTO narrative_render_records VALUES (?,?,?,?,?,?,?)',randomUUID(),eventId,id,actor.id,narrationVersionId,JSON.stringify({turnId:eventId,eventIds:narrative.eventIds,profile:narrative.profile,profileLayers:selected.layers,promptVersion:'narrative-v1',model:{provider:'grounded',model:'deterministic-v2'},validatorVersion:narrativeValidatorVersion,retryCount:0,status:'grounded',repairs:[],mechanicsChanged:false}),now());
      await this.store.run('INSERT INTO story_turns (id,timeline_id,user_id,character_id,input_text,permitted_json,narration,narration_status,prompt_version,created_at,notices_json,scene_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',eventId,id,actor.id,characterId,action.turnText??type,JSON.stringify(permitted),narration,'grounded','grounded-v1',now(),JSON.stringify(presentation.notices),JSON.stringify(presentation.scene));
     },{eventId,mechanicsPreserved:true});
    }
@@ -728,7 +739,7 @@ export class Game {
    return {result:{recordId}};
   }));
  }
- async turn(actor:Actor,id:string,input:{revision:number;characterId:string;action:Action;text?:string;cursor?:string;clauses?:TurnClause[]},key:string,seedOverride?:string){
+ async turn(actor:Actor,id:string,input:{revision:number;characterId:string;action:Action;text?:string;cursor?:string;clauses?:TurnClause[];mode?:'GAME'|'STORY'},key:string,seedOverride?:string){
   keySchema.parse(key);const action=actionSchema.parse(input.action),body={...input,action},authorizationStarted=Date.now();
   // Authorization precedes trace creation so an unauthorized caller cannot write into another tenant's trace ledger.
   await this.authorizeCharacter(actor,id,input.characterId);
@@ -738,7 +749,7 @@ export class Game {
    const result=await recorder.run('atomic-commit',()=>this.mutate(actor,id,input.revision,key,body,'story.turn',false,(s,eventId,seed,role)=>{
     this.controlled(actor,s,input.characterId,role);
     const resolved=resolveTurnPlan(s,input.characterId,input.clauses??[{clauseId:'1',dependency:'NONE',action}],eventId,seed,undefined,true);
-    return {result:resolved.result,resolutionSteps:resolved.steps,effects:resolved.effects,draws:resolved.draws,checks:resolved.checks,characterId:input.characterId,turnText:input.text??''};
+    return {result:resolved.result,resolutionSteps:resolved.steps,effects:resolved.effects,draws:resolved.draws,checks:resolved.checks,characterId:input.characterId,turnText:input.text??'',mode:input.mode};
    },{recorder,expectedCursor:input.cursor,seed:seedOverride??trace.seed}),{rollbackOnFailure:true});
    const typed=result as {eventId:string};await persistTurnTrace(this.store,trace.traceId,recorder.steps,'committed',typed.eventId);return {...result,traceId:trace.traceId};
   }catch(error){await persistTurnTrace(this.store,trace.traceId,recorder.steps,'failed',undefined,failureReason(error)).catch(()=>{});throw error;}
@@ -803,7 +814,7 @@ export class Game {
  }
  async export(actor:Actor,id:string,options:{mediaStrategy?:'inline'|'references'}={}){
   const {t}=await this.access(actor,id,true),payload={version:1 as const,worldHistory:await this.worldHistory(id),state:(await this.load(id)),transcript:(await this.transcript(id))},cursor=await this.store.get<{cursor:string}>('SELECT cursor FROM timeline_turn_cursors WHERE timeline_id=?',id),latest=await this.store.get<{id:string;created_at:string}>('SELECT id,created_at FROM game_events WHERE timeline_id=? ORDER BY revision DESC LIMIT 1',id);ensure(cursor,409,'turn_cursor_unavailable');
-  const media=payload.state.entities.filter(entity=>entity.kind==='media').map(entity=>({id:entity.id,checksum:checksum(entity.data.body),visibility:entity.visibility})),payloadChecksum=checksum(payload),manifest={format:'valor-timeline-export' as const,formatVersion:2 as const,schemaVersion:46,projectionVersion:1 as const,exportedAt:latest?.created_at??payload.state.clock,campaignId:t.campaign_id,timeline:{id,name:t.name,revision:t.revision,clock:payload.state.clock,eventCursor:cursor.cursor,eventId:latest?.id??null},payloadChecksum,dependencies:{canonRevisionId:payload.state.canon?.revisionId??null,entityKinds:[...new Set(payload.state.entities.map(entity=>entity.kind))].sort(),media},mediaStrategy:options.mediaStrategy??'inline',visibility:'preserved' as const,migration:{sourceSnapshotVersion:1,targetSnapshotVersion:1,steps:[] as string[]}},envelope={manifest,payload};
+  const media=payload.state.entities.filter(entity=>entity.kind==='media').map(entity=>({id:entity.id,checksum:checksum(entity.data.body),visibility:entity.visibility})),payloadChecksum=checksum(payload),manifest={format:'valor-timeline-export' as const,formatVersion:2 as const,schemaVersion:47,projectionVersion:1 as const,exportedAt:latest?.created_at??payload.state.clock,campaignId:t.campaign_id,timeline:{id,name:t.name,revision:t.revision,clock:payload.state.clock,eventCursor:cursor.cursor,eventId:latest?.id??null},payloadChecksum,dependencies:{canonRevisionId:payload.state.canon?.revisionId??null,entityKinds:[...new Set(payload.state.entities.map(entity=>entity.kind))].sort(),media},mediaStrategy:options.mediaStrategy??'inline',visibility:'preserved' as const,migration:{sourceSnapshotVersion:1,targetSnapshotVersion:1,steps:[] as string[]}},envelope={manifest,payload};
   const result={...envelope,checksum:checksum(envelope)};ensureJsonBytes(result,this.exportBytes,'export_too_large');return result;
  }
  private async inspectImport(actor:Actor,id:string,raw:unknown){
@@ -815,7 +826,7 @@ export class Game {
   const target=await this.load(id),targetIds=new Set(target.entities.map(entity=>entity.id)),collisions=state.entities.filter(entity=>targetIds.has(entity.id)).map(entity=>entity.id);
   for(const e of state.entities.filter(e=>e.kind==='character'))e.data.controllerUserId=e.data.playable?actor.id:null;
   const migrations=[...(manifest?.migration.steps??[])];if(!manifest)migrations.push('legacy-export-envelope');if(!parsed.metadata)migrations.push('legacy-snapshot-metadata-defaults');
-  return {state,parsed,bundleChecksum:checksum(raw),report:{valid:true,formatVersion:manifest?.formatVersion??1,snapshotVersion:parsed.version,sourceSchemaVersion:manifest?.schemaVersion??null,targetSchemaVersion:46,projectionVersion:manifest?.projectionVersion??1,entities:state.entities.length,transcriptTurns:parsed.transcript.length,idCollisions:collisions,conflictPolicy:'isolated-child-timeline',overwritesLiveCampaign:false,visibility:manifest?.visibility??'preserved',mediaStrategy:manifest?.mediaStrategy??'inline',migrations,changes:['create-child-timeline','rebuild-state-projection','restore-world-history','restore-transcript']}};
+  return {state,parsed,bundleChecksum:checksum(raw),report:{valid:true,formatVersion:manifest?.formatVersion??1,snapshotVersion:parsed.version,sourceSchemaVersion:manifest?.schemaVersion??null,targetSchemaVersion:47,projectionVersion:manifest?.projectionVersion??1,entities:state.entities.length,transcriptTurns:parsed.transcript.length,idCollisions:collisions,conflictPolicy:'isolated-child-timeline',overwritesLiveCampaign:false,visibility:manifest?.visibility??'preserved',mediaStrategy:manifest?.mediaStrategy??'inline',migrations,changes:['create-child-timeline','rebuild-state-projection','restore-world-history','restore-transcript']}};
  }
  async validateImport(actor:Actor,id:string,raw:unknown){return (await this.inspectImport(actor,id,raw)).state;}
  async import(actor:Actor,id:string,name:string,raw:unknown,dryRun=true,confirmationToken?:string){

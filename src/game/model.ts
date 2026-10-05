@@ -1,3 +1,4 @@
+import {voiceProfileSchema,communicationProfileSchema,locationNarrativeSchema} from './narrative-profile.ts';
 import {z} from 'zod';
 import {campaignConfigSchema} from '../campaign-config.ts';
 import type {CanonSource} from './canon.ts';
@@ -7,7 +8,7 @@ const text=z.string().max(16000), short=z.string().max(1000), ref=id.nullable().
 const cents=z.number().int().min(0).max(100000000000), score=z.number().min(-100).max(100), unit=z.number().min(0).max(100), openNumber=z.number().finite().min(-1000000).max(1000000);
 const tags=z.array(z.string().max(80)).max(100).default([]);
 export const attributes=['Strength','Agility','Endurance','Intellect','Perception','Presence','Will'] as const;
-export const planTypes=['work','socialize','offer','share','travel','crime','care','message','call','breakup','scene'] as const;
+export const planTypes=['speak','work','socialize','offer','share','travel','crime','care','message','call','breakup','scene'] as const;
 export const romanceIntents=['flirt','date','confess','commit','exclusive','cohabit','marry','reconcile','intimacy','confront-jealousy'] as const;
 export const matureContentModes=['off','implicit','fade-to-black','allowed-description'] as const;
 export const simulationTierNames=['active','relevant','distant'] as const;
@@ -113,7 +114,7 @@ const trainingRecord=z.strictObject({id,skillId:ref,attribute:z.enum(attributes)
 const npcActivity=z.strictObject({id,at:z.iso.datetime(),tier:z.enum(simulationTierNames),outcome:z.enum(npcActivityOutcomes),source:z.enum(['schedule','goal','health','justice','relationship','faction','event']),sourceEntityId:ref,summary:short,eventId:short});
 const activeSubstance=z.strictObject({id,itemId:ref,name:short,kind:z.enum(['alcohol','medication','drug','toxin','other']),startedAt:z.iso.datetime(),expiresAt:z.iso.datetime(),dose:unit,intoxicationDelta:openNumber,capabilityModifiers:z.partialRecord(z.enum(attributes),openNumber).default({}),painRelief:unit.default(0),sourceEventId:ref});
 const healthSummary=z.strictObject({condition:z.enum(['conscious','unconscious','dead']),blood:z.enum(['stable','reduced','critical']),pain:z.enum(['low','moderate','high','severe']),fatigue:z.enum(['low','moderate','high','severe']),intoxication:z.enum(['low','moderate','high','severe']),withdrawal:z.enum(['not-enabled','low','moderate','high','severe']),activeEffects:z.array(z.strictObject({name:short,kind:z.enum(['alcohol','medication','drug','toxin','other']),expiresAt:z.iso.datetime()})).max(1000)}).nullable().default(null);
-const character=z.strictObject({...common,characterSchemaVersion:z.number().int().positive().default(9),identityDisclosure:z.strictObject({concealed:z.boolean().default(false),label:short.default('a stranger'),knownByIds:z.array(id).default([])}).nullable().default(null),playable:z.boolean().default(false),controllerUserId:ref,
+const character=z.strictObject({...common,characterSchemaVersion:z.number().int().positive().default(10),identityDisclosure:z.strictObject({concealed:z.boolean().default(false),label:short.default('a stranger'),knownByIds:z.array(id).default([])}).nullable().default(null),playable:z.boolean().default(false),controllerUserId:ref,
  registryStatus:z.enum(npcRegistryStatuses).default('active'),lastActiveAt:z.iso.datetime().nullable().default(null),arrested:z.boolean().default(false),retirementNarrative:text.default(''),mergedIntoId:ref,mergeRecordId:ref,
  profileVisibility:z.record(z.string(),visibility).default(legacyProfileVisibility),portraitMediaId:ref,
  legalName:short.default(''),aliases:tags,dob:z.iso.date().nullable().default(null),ageYears:z.number().int().min(0).max(200).nullable().default(null),sex:short.default(''),gender:short.default(''),pronouns:short.default(''),
@@ -123,7 +124,7 @@ const character=z.strictObject({...common,characterSchemaVersion:z.number().int(
  complexion:short.default(''),features:tags,scars:tags,tattoos:tags,disabilities:tags,presentation:short.default(''),
  socialPresentation:z.record(z.string(),short).default({}),attractivenessContext:text.default(''),background:z.record(z.string(),text).default({}),familyBackground:text.default(''),
  employerOccupation:short.default(''),occupations:z.array(occupationProfile).max(3).default([]),dossierRatings,personalityProfile,psychologyNotes:text.default(''),education:text.default(''),beliefsContext:text.default(''),
- voice:text.default(''),instructions:text.default(''),aiBehavior:text.default(''),secrets:text.default(''),notes:text.default(''),needsContext:text.default(''),
+ voice:text.default(''),voiceProfile:voiceProfileSchema.nullable().default(null),communication:communicationProfileSchema.nullable().default(null),instructions:text.default(''),aiBehavior:text.default(''),secrets:text.default(''),notes:text.default(''),needsContext:text.default(''),
  attributes:z.record(z.enum(attributes),openNumber).default({Strength:0,Agility:0,Endurance:0,Intellect:0,Perception:0,Presence:0,Will:0}),
  skills:z.record(z.string(),openNumber).default({}),traits:z.array(id).default([]),
  locationId:ref,homeId:ref,factionIds:z.array(id).default([]),socialConnections:z.strictObject({friendIds:z.array(id).max(1000),followingIds:z.array(id).max(1000),followerIds:z.array(id).max(1000)}).default({friendIds:[],followingIds:[],followerIds:[]}),cash:cents.default(0),bank:cents.default(0),
@@ -133,7 +134,7 @@ const character=z.strictObject({...common,characterSchemaVersion:z.number().int(
  dependence:unit.default(0),withdrawal:unit.default(0),lastDoseAt:z.iso.datetime().nullable().default(null),
  training:z.array(trainingRecord).max(500).default([]),
  schedule:z.array(schedule).max(100).default([]),lastSimulated:z.iso.datetime().nullable().default(null),simulationTier:z.enum(simulationTierNames).default('distant'),simulationTierReason:short.default('not currently material'),activityTimeline:z.array(npcActivity).max(2000).default([]),
- plans:z.array(z.strictObject({id,type:z.enum(planTypes),targetId:id,auxiliaryId:ref,
+ plans:z.array(z.strictObject({id,type:z.enum(planTypes),targetId:id,auxiliaryId:ref,speechMethod:z.enum(['say','sign','write']).default('say'),speechLanguage:z.string().max(40).default('en'),speechExact:z.boolean().default(true),speechFactIds:z.array(id).max(30).default([]),speechRequiresResponse:z.boolean().optional(),repeatedQuestionText:short.optional(),answerToLatestQuestion:z.boolean().optional(),
    priority:z.number().int().default(0),cooldownMinutes:z.number().int().min(15).max(10080).default(60),
    lastRun:z.iso.datetime().nullable().default(null),enabled:z.boolean().default(true),text:short.default(''),conditions:z.array(condition).max(32).default([]),constraints:z.array(condition).max(32).default([]),expiresAt:z.iso.datetime().nullable().default(null),fallback:z.enum(['skip','retry','disable','next-plan']).default('skip'),maxRunsPerDay:z.number().int().min(1).max(1440).default(4),runDate:z.iso.date().nullable().default(null),runsToday:z.number().int().min(0).max(1440).default(0),failedAttempts:z.number().int().min(0).max(1000000).default(0),lastOutcome:z.enum(['performed','blocked','expired']).nullable().default(null)})).max(100).default([]),
  traitEffectTrace:z.array(z.strictObject({at:z.iso.datetime(),traitId:id,effectId:id,type:z.enum(['schedule-priority','ai-priority','need-rate','first-impression']),target:short,value:openNumber,decision:short})).max(500).default([]),
@@ -145,7 +146,7 @@ const tacticalZone=z.strictObject({id,name,description:text.default(''),position
 const tacticalFeature=z.strictObject({id,name,description:text.default(''),kind:z.enum(['cover','hazard','improvised','obstacle','exit']),position:z.number().min(0).max(10000),zoneId:ref,cover:unit.default(0),difficulty:openNumber.default(50),damage:unit.default(0),noise:unit.default(0),actions:z.array(z.enum(['strike','shove','obstruct','break-cover'])).max(4).default([])});
 const placeHours=z.strictObject({opens:z.number().int().min(0).max(23),closes:z.number().int().min(0).max(24),days:z.array(z.number().int().min(0).max(6)).max(7).default([0,1,2,3,4,5,6]),closedOnHolidays:z.boolean().default(false)});
 const locationAccess=z.strictObject({policy:z.enum(['public','restricted','private']).default('public'),requiredItemIds:z.array(id).max(100).default([]),requiredTags:tags,allowedCharacterIds:z.array(id).max(1000).default([]),description:short.default('')});
-const location=z.strictObject({...common,parentId:ref,category:z.enum(['city','district','neighborhood','street','block','building','business','home','room','interior','road','highway','outside','surrounding-area']).default('room'),
+const location=z.strictObject({...common,narrative:locationNarrativeSchema.nullable().default(null),parentId:ref,category:z.enum(['city','district','neighborhood','street','block','building','business','home','room','interior','road','highway','outside','surrounding-area']).default('room'),
  exits:z.array(z.strictObject({to:id,minutes:z.number().int().min(1).max(10080),modes:z.array(z.enum(['walk','drive','transit','taxi'])).default(['walk']),locked:z.boolean().default(false),keyId:ref,fare:cents.default(0),
  interruption:z.strictObject({locationId:id,afterMinutes:z.number().int().min(1).max(10080),questId:ref,whenWeather:z.enum(weatherTypes).nullable().default(null)}).nullable().default(null),terrainPenalty:unit.default(0),trafficPenalty:unit.default(0),distanceKm:z.number().min(0).max(100000).nullable().optional(),weatherPenalties:z.partialRecord(z.enum(weatherTypes),z.number().int().min(0).max(10080)).optional()})).default([]),
  hours:placeHours.nullable().default(null),access:locationAccess.default({policy:'public',requiredItemIds:[],requiredTags:[],allowedCharacterIds:[],description:''}),
@@ -419,6 +420,7 @@ export function validateEntity(raw:unknown):Entity{
  return e;
 }
 export const actionSchema=z.discriminatedUnion('type',[
+ z.strictObject({type:z.literal('communicate'),method:z.enum(['say','sign','write']),language:z.string().min(1).max(40).default('en'),targetId:ref,text:z.string().min(1).max(1000),tone:z.enum(['neutral','quiet','firm','warm']).default('neutral'),volume:z.enum(['whisper','normal','shout']).default('normal')}),
  z.strictObject({type:z.literal('physical'),operation:z.enum(['open','close','unlock','lockpick','force','push','throw','place','attempt']),targetId:id,instrumentId:ref,destinationId:ref,quiet:z.boolean().default(false),goal:short.default('interact'),approach:short.default('')}),
  z.strictObject({type:z.literal('persuade'),targetId:id,goal:short,approach:short}),
  z.strictObject({type:z.literal('quit-job'),jobId:id}),
