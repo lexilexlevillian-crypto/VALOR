@@ -1,3 +1,4 @@
+import {captureInformationScope,assertInformationScope} from './information-context.ts';
 import {randomUUID} from 'node:crypto';
 import {z} from 'zod';
 import {ensure} from '../contracts.ts';
@@ -47,7 +48,8 @@ export class IntentGateway{
   const context=intentContext(s,characterId,text);ensure(context.candidates.length&&Buffer.byteLength(JSON.stringify(context))+512<=s.settings.contextTokens,400,'context_limit');
   const prior=this.failures.get(providerId);ensure(!prior||prior.until<Date.now(),503,'provider_circuit_open');ensure(!this.inflight.has(timelineId),409,'narration_busy');
   const tokens=provider.estimateIntentTokens(context);ensure(Number.isSafeInteger(tokens)&&tokens>0,400,'invalid_provider_estimate');const traceId=randomUUID(),identity=provider.identity?.('classification')??{provider:provider.id,model:provider.id,configurationId:'classification-'+provider.id+'-v1'};
-  const request=makeAiRequest({traceId,purpose:'classification',model:identity,budget:{maxInputTokens:s.settings.contextTokens,maxOutputTokens:256,maxTotalTokens:s.settings.contextTokens+256,timeoutMs:12000,maxAttempts:2},allowedTools:['interpretation.propose'],response:responseContract('intent-choice','1',intentJsonSchema),prompt:{id:'intent-classification',version:context.version,instructions:intentInstructions+' '+untrustedDataInstruction},context:{provenance:[
+  const informationScope=await captureInformationScope(this.game,timelineId,characterId);ensure(informationScope.stateVersion===t.revision,409,'stale_information_context');
+  const request=makeAiRequest({traceId,purpose:'classification',model:identity,budget:{maxInputTokens:s.settings.contextTokens,maxOutputTokens:256,maxTotalTokens:s.settings.contextTokens+256,timeoutMs:12000,maxAttempts:2},allowedTools:['interpretation.propose'],response:responseContract('intent-choice','1',intentJsonSchema),prompt:{id:'intent-classification',version:context.version,instructions:intentInstructions+' '+untrustedDataInstruction},context:{snapshot:{...informationScope,purpose:'input-parser'},provenance:[
    {id:'player-input',source:'player-input',trust:'untrusted',privacy:'private',revision:String(t.revision),content:text},
    {id:'candidate-set',source:'lore',trust:'untrusted',privacy:'private',revision:String(t.revision),content:context.candidates}
   ]},cache:{kind:'none'}});
@@ -61,6 +63,7 @@ export class IntentGateway{
     await this.game.store.run('INSERT INTO ai_intent_usage (id,timeline_id,user_id,provider,reserved_tokens,status,created_at) VALUES (?,?,?,?,?,?,?)',traceId,timelineId,actor.id,providerId,tokens,'pending',new Date().toISOString());
    });
    const result=await this.runtime.execute({request,validate:raw=>{const parsed=intentResult.parse(raw);if(parsed.choice!==null&&!context.candidates.some(candidate=>candidate.id===parsed.choice))throw new Error('invalid_proposal_choice');return parsed;},fallback:()=>({choice:null}),toolAuthorization:{interpretationCandidates:new Set(context.candidates.map(candidate=>candidate.id))}});
+   await assertInformationScope(this.game,informationScope);
    if(result.status==='fallback'){
     this.failures.set(providerId,{count:(prior?.count??0)+1,until:(prior?.count??0)>=2?Date.now()+60000:0});await this.game.store.run('UPDATE ai_intent_usage SET status=? WHERE id=?','failed',traceId);await this.game.authorizeCharacter(actor,timelineId,characterId);
     return {action:null,requiresConfirmation:true,originalText:text,classification:'clarification',clarification:result.fallbackMessage};

@@ -518,7 +518,7 @@ export type Knowledge={observerId:string;factId:string;source:string;at:string;c
 export type Belief={id:string;observerId:string;proposition:string;subjectId?:string|null;predicate?:string;objectId?:string|null;value?:unknown;qualifiers?:Record<string,unknown>;confidence:number;source:string;truthStatus?:'believed'|'doubted'|'disproven'|'confirmed';audience?:string[];observedAt?:string|null;validFrom?:string|null;validUntil?:string|null;eventIds?:string[];evidenceIds?:string[];tags?:string[];at:string;correctedBy:string|null};
 export type RecallConditions={entityIds:string[];tags:string[];locationId:string|null;from:string|null;until:string|null};
 export type Memory={id:string;observerId:string;text:string;interpretation?:string;salience:number;decayPerDay:number;eventId:string;eventRefs?:string[];at:string;private:boolean;privacy?:'private'|'shared';recallConditions?:RecallConditions;lastRefreshedAt?:string|null;refreshCount?:number;expiresAt?:string|null;tags?:string[]};
-export type State={canon?:CanonSource|null;clock:string;settings:Settings;entities:Entity[];facts:Fact[];knowledge:Knowledge[];beliefs:Belief[];memories:Memory[];eventIds?:string[]};
+export type State={canon?:CanonSource|null;clock:string;settings:Settings;entities:Entity[];facts:Fact[];knowledge:Knowledge[];beliefs:Belief[];memories:Memory[];eventIds?:string[];information?:import('./information-contracts.ts').InformationState};
 export const getEntity=(s:State,id:string,kind?:Kind)=>{const e=s.entities.find(e=>e.id===id&&!e.archived);if(!e||kind&&e.kind!==kind)throw new Error('entity_unavailable');return e;};
 export function refs(e:Entity):string[]{
  const result:string[]=[];const walk=(v:unknown,key='')=>{if(!v)return;if(typeof v==='string'&&((key.endsWith('Id')&&!['controllerUserId','sourceEventId','responseEventId','eventId','effectId','factId','hypothesisId','tipId','optionId','sourceTipId','parentId','mergeRecordId','threadId','zoneId','coverSourceId','rankId','parentRankId','goalId','hookId','sourceHookId','branchId','activeBranchId','objectiveId','outcomeId','bankId'].includes(key))||['parentId','to'].includes(key)&&e.kind==='location'))result.push(v);
@@ -540,6 +540,16 @@ export function remapEntityReference(e:Entity,sourceId:string,targetId:string):E
 }
 export function validateState(s:State){
  const ids=new Set(s.entities.map(e=>e.id));if(ids.size!==s.entities.length)throw new Error('duplicate_entity_id');
+ if(s.information){const i=s.information,characters=new Set(s.entities.filter(e=>e.kind==='character').map(e=>e.id)),propositions=new Set(i.propositions.map(p=>p.id));
+  for(const rows of [i.propositions,i.entries,i.observations,i.records,i.transmissions,i.active,i.summaries,i.conflicts])if(new Set(rows.map(r=>r.id)).size!==rows.length)throw new Error('duplicate_information_id');
+  for(const p of i.propositions)if(p.subjectId&&!ids.has(p.subjectId))throw new Error('invalid_information_subject');
+  for(const e of i.entries)if(!characters.has(e.characterId)||!propositions.has(e.propositionId)||e.supersedesId&&!i.entries.some(old=>old.id===e.supersedesId&&old.characterId===e.characterId))throw new Error('invalid_information_entry');
+  for(const o of i.observations)if(!characters.has(o.observerId)||o.targetId&&!ids.has(o.targetId)||o.propositionIds.some(id=>!propositions.has(id)))throw new Error('invalid_information_observation');
+  for(const t of i.transmissions)if(t.senderId&&!characters.has(t.senderId)||t.intendedRecipientIds.some(id=>!characters.has(id))||t.propositionIds.some(id=>!propositions.has(id))||t.parentId&&!i.transmissions.some(p=>p.id===t.parentId))throw new Error('invalid_information_transmission');
+  for(const r of i.records)if(r.propositionIds.some(id=>!propositions.has(id))||r.allowedCharacterIds.some(id=>!characters.has(id))||r.requiredItemIds.some(id=>!ids.has(id)))throw new Error('invalid_information_record');
+  for(const a of i.active)if(!characters.has(a.characterId)||a.entityIds.some(id=>!ids.has(id)))throw new Error('invalid_active_information');
+  for(const summary of i.summaries)if(!characters.has(summary.viewerId))throw new Error('invalid_information_summary');
+ }
  for(const e of s.entities){validateEntity(e);for(const r of refs(e))if(!ids.has(r))throw new Error('broken_reference');}
  for(const e of s.entities.filter(e=>!e.archived&&['location','item'].includes(e.kind))){const seen=new Set([e.id]);let p=(e.data.parentId??e.data.containerId) as string|null;while(p){if(seen.has(p))throw new Error('containment_cycle');seen.add(p);const parent=getEntity(s,p);p=(parent.data.parentId??parent.data.containerId) as string|null;}}
  for(const k of s.knowledge)if(!s.facts.some(f=>f.id===k.factId)||!ids.has(k.observerId))throw new Error('invalid_knowledge_reference');

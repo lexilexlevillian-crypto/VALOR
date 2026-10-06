@@ -39,7 +39,7 @@ export const aiRequestSchema=z.strictObject({
  traceId:z.uuid(),purpose:aiPurposeSchema,model:modelIdentitySchema,budget:aiBudgetSchema,
  allowedTools:z.array(aiToolNameSchema).max(8).refine(value=>new Set(value).size===value.length,'duplicate_tool'),response:responseContractSchema,
  prompt:z.strictObject({id:z.string().trim().min(1).max(120),version:z.string().trim().min(1).max(80),instructions:z.string().min(1).max(32_000)}),
- context:z.strictObject({provenance:z.array(aiContextEntrySchema).max(500)}),cache:cachePolicySchema,queuedAt:z.iso.datetime()
+ context:z.strictObject({provenance:z.array(aiContextEntrySchema).max(500),snapshot:z.strictObject({campaignId:z.uuid(),timelineId:z.uuid(),viewerId:z.uuid(),stateVersion:z.number().int(),eventCursor:z.string(),purpose:z.string()}).optional()}),cache:cachePolicySchema,queuedAt:z.iso.datetime()
 });
 export type AiRequest=z.infer<typeof aiRequestSchema>;
 export const aiUsageSchema=z.strictObject({inputTokens:z.number().int().nonnegative(),outputTokens:z.number().int().nonnegative()});
@@ -70,6 +70,7 @@ export function safeCacheKey(request:AiRequest){
 }
 // Logs contain identities and hashes only; story text, player input, NPC text and secrets stay out.
 export function redactedRequestLog(request:AiRequest){return {
+ snapshot:request.context.snapshot,
  traceId:request.traceId,purpose:request.purpose,model:request.model,budget:request.budget,allowedTools:request.allowedTools,
  response:{id:request.response.id,version:request.response.version,digest:request.response.digest},
  prompt:{id:request.prompt.id,version:request.prompt.version,instructionsDigest:createHash('sha256').update(request.prompt.instructions).digest('hex')},

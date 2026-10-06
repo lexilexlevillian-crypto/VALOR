@@ -1,5 +1,24 @@
 # Integrated game API
 
+## System 3 information
+
+These paths are relative to `/game/timelines/:id/information`. Mutations use the normal session, CSRF, idempotency key, and current `revision`.
+
+| Method and path | Access and behavior |
+| --- | --- |
+| `GET /?characterId=…&query=…&offset=0&limit=100` | Controlled character; searches acquired information without time advance; at most 100 entries with `nextOffset` |
+| `POST /author` | Controlled character; `{revision,characterId,kind,text,sourceIds?,confidence?}`; kind is `belief`, `note`, `ooc-note`, `hypothesis`, or `lead`; no time advance |
+| `POST /active/:recordId` | Controlled character; `{revision,characterId,status?,confidence?,sourceIds?,contradictsIds?}`; preserves assessment history and does not promote a claim to truth |
+| `POST /research` | Controlled character; `{revision,characterId,query,depth}`; `quick`, `standard`, or `thorough` costs 1, 10, or 30 game minutes |
+| `GET /diagnostics` | Campaign Creator/admin; truth, acquisitions, observer matrix, propagation, conflicts, freshness, access audit, and summaries |
+| `GET /context?characterId=…&purpose=…&query=…` | Campaign Creator/admin; stores and returns a purpose-specific bundle and manifest |
+| `POST /retcon-preview` | Campaign Creator/admin; `{sourceIds:[…]}`; read-only transitive impact graph |
+| `POST /developer` | Campaign Creator/admin; `{revision,command}`; validated authoring, transmission/exposure, active information, summary, invalidation, cohort, and canary operations |
+
+Developer command schemas are in `src/game/information-contracts.ts` and `src/game/information-routes.ts`. Call purposes and profiles are in `src/game/information-context.ts`. Authored record permissions determine the searchable corpus; research never falls back to hidden World Truth. Full behavior and validation evidence are in [the System 3 report](SYSTEM_03_INFORMATION_IMPLEMENTATION.md).
+
+## Existing game endpoints
+
 All `/game/*` endpoints require the existing authenticated session. Mutations require the exact configured Origin and `x-csrf-token`. Entity, settings, epistemic, catalog and turn mutations also require `Idempotency-Key` and the current timeline `revision`. Clients never supply a random seed, successful result, NPC action or authoritative consequence. Stale revisions fail atomically with 409.
 
 `GET /game/catalog` returns supported entity kinds, their strict JSON Schemas, action schemas and installed narration provider IDs. The Creator and explicit-action UI are generated from these contracts; `src/game/model.ts` is the authoritative schema, not an independent client copy.

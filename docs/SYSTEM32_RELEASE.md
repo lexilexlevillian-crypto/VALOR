@@ -8,7 +8,7 @@ Status: **release-candidate implementation; not production-certified**. The appl
 - Every draft, publish, archive and restore produces immutable version history. Restore creates a new draft version and does not rewrite the published entity or event history. Validated drafts can become reusable world templates and template use creates a new identity.
 - Creation Studio exposes search, typed editors, duplicate/archive, impact references, safe atomic batches, draft status, publication review, history/restore and templates across all registered entity kinds. Existing profile-layout templates remain available for character dossiers.
 - Authorized Developer tools are read-first: source-of-truth labels, raw state, Player projection, event/turn/simulation trace, AI prompt/schema version metadata, usage/error data and operations metrics. Deterministic fixtures and projection repair require expiring actor/revision-bound previews and exact confirmation. Repairs preserve the canonical state checksum and create immutable audit/report records.
-- `/readyz` requires schema 44. CI performs type checks, the complete test suite, Chromium accessibility/responsive tests and a high-severity production-dependency audit. `release:rehearse` proves a new independently openable backup with migration, integrity, foreign-key and critical row-count checks.
+- `/readyz` requires schema 49. CI performs type checks, the complete test suite, Chromium accessibility/responsive tests and a high-severity production-dependency audit. `release:rehearse` proves a new independently openable backup with migration, integrity, foreign-key and critical row-count checks.
 
 ## Acceptance evidence and exact tests
 
@@ -27,7 +27,7 @@ Focused System 32 coverage is `npm run test:release`:
 
 - `Creator Studio drafts validate both perspectives, publish atomically, retain versions, and produce templates`
 - `deterministic fixtures and projection repair require fresh exact previews and preserve source history`
-- `read-first debug and operational views identify their sources and readiness requires schema 44`
+- `read-first debug and operational views identify their sources and readiness requires schema 49`
 
 The final acceptance is intentionally composed from stable domain tests rather than a brittle click-through monolith:
 
@@ -50,7 +50,7 @@ The final acceptance is intentionally composed from stable domain tests rather t
 
 Use the exact sequence in `OPERATIONS.md`: freeze writes, capture a verified backup/rehearsal and immutable artifact ID, pass CI, migrate and validate staging, require both health endpoints, exercise the acceptance matrix, then promote the same artifact. Reopen production only after metrics establish a clean baseline.
 
-Rollback never down-migrates and never overwrites the live database. Redeploy an older artifact only when it is schema-44 compatible. Otherwise keep writes stopped, restore the verified pre-release backup into a new destination, validate it, switch credentials, and retain the failed database for investigation.
+Rollback never down-migrates and never overwrites the live database. Redeploy an older artifact only when it is schema-49 compatible. Otherwise keep writes stopped, restore the verified pre-release backup into a new destination, validate it, switch credentials, and retain the failed database for investigation.
 
 ## Operational signals
 

@@ -16,6 +16,9 @@ import {turnCommandSchema,type PendingDecision,type PlayMode,type TurnClause,typ
 
 export {turnAffordances} from './turn-affordances.ts';
 import {turnAffordances} from './turn-affordances.ts';
+import {authorInformation,informationProjection} from './information.ts';
+import {observerEffects} from './turn-visibility.ts';
+import type {Effect} from './simulation.ts';
 // Session means an existing timeline. All world writes still use Game.turn,
 // Game.branch, and their database transaction / authorization contracts.
 export class TurnKernel {
@@ -28,12 +31,13 @@ export class TurnKernel {
   const split=input.kind==='freeform'?splitDirectorInput(input.text):null;
   const director=split?parseDirectorText(split.director):null;
   const canonicalText=input.kind==='freeform'?(split?.canonical??input.text):'';
+  const authoredBelief=input.kind==='freeform'&&!split?/^(?:I (?:think|believe|suspect)|my (?:character|PC) (?:thinks|believes|suspects))(?: that)?\s+(.+)$/i.exec(canonicalText.trim()):null;
   // Reserve RNG lineage before the world transaction so rollback cannot reroll.
   const attempt=await beginTurnTrace(this.game.store,{timelineId:id,actorId:actor.id,requestKey:'command_'+checksum(command.commandId),bodyHash:checksum(command),originalText:input.kind==='freeform'?input.text:'',expectedRevision:command.expectedRevision});
   try{
    let proposal:CreativeProposal|null=null;
    // Provider I/O is outside the world transaction. Receipt replay never calls AI.
-   if(input.kind==='freeform'&&canonicalText&&!director?.message&&!director?.query&&this.planner&&!await this.game.store.get('SELECT command_id FROM turn_interactions WHERE command_id=?',command.commandId)){
+   if(input.kind==='freeform'&&canonicalText&&!authoredBelief&&!director?.message&&!director?.query&&this.planner&&!await this.game.store.get('SELECT command_id FROM turn_interactions WHERE command_id=?',command.commandId)){
     const snapshot=await this.game.load(id),parsed=interpretTurn(snapshot,characterId,canonicalText);
     if(parsed.clarification||parsed.clauses.some(c=>c.action.type==='physical'&&c.action.operation==='attempt'))proposal=await this.planner.propose(actor,id,characterId,command.expectedRevision,canonicalText).catch(()=>null);
    }
@@ -50,15 +54,18 @@ export class TurnKernel {
    let directorResult:{text:string;scope?:string}|undefined;
    if(director?.focus){const view=observerView(state,characterId),targets=view.entities.filter(e=>e.name.toLowerCase()===director.focus!.toLowerCase()||director.focus==='environment'&&e.id===state.entities.find(e=>e.id===characterId)?.data.locationId);if(targets.length===1)directorResult=await saveNarrativeDirective(this.game,actor,id,characterId,mode,{focusId:targets[0]!.id,scope:director.scope});else director.message='Focus was not changed. Name one character or object your character can currently identify.';}
    if(input.kind==='narrative_directive'||director?.directive)directorResult=await saveNarrativeDirective(this.game,actor,id,characterId,mode,input.kind==='narrative_directive'?input.directive:director!.directive);
-   if(input.kind==='narrative_directive'||split&&(!canonicalText||director?.message||director?.query)){
+   if(authoredBelief){
+    const mutation=await this.game.mutate(actor,id,t.revision,'belief_'+checksum(command.commandId),command,'information.player-belief',false,async(s,eventId)=>{await this.game.authorizeCharacter(actor,id,characterId);return {result:{entryId:authorInformation(s,characterId,{kind:'belief',text:authoredBelief[1]!},eventId).id}};});
+    result={...base,...mutation,status:'PRESENTED',presentation:{kind:'director',text:'Your character’s belief was recorded. No world time passed.'}};
+   }else if(input.kind==='narrative_directive'||split&&(!canonicalText||director?.message||director?.query)){
     let message=directorResult?.text??director?.message??'No narrative direction was applied.';
     if(director?.query==='recap'){
-     const turns=await this.game.store.all<{narration:string}>('SELECT narration FROM story_turns WHERE timeline_id=? AND character_id=? ORDER BY rowid DESC LIMIT 5',id,characterId);
-     message=turns.reverse().map(t=>t.narration).join('\n\n')||'No events have been narrated for this character.';
+     const events=await this.game.store.all<{effects_json:string}>('SELECT effects_json FROM game_events WHERE timeline_id=? ORDER BY revision DESC LIMIT 20',id);
+     message=events.reverse().flatMap(row=>observerEffects(state,JSON.parse(row.effects_json) as Effect[],characterId,true).map(e=>e.text)).slice(-20).join('\n\n')||'No observed events have been recorded for this character.';
     }else if(director?.query==='knowledge'){
      const view=observerView(state,characterId);
      message='Only your character’s accessible information is shown. Unknown locations and hidden NPC thoughts remain unknown.';
-     result={...base,status:'PRESENTED',inspection:view};
+     result={...base,status:'PRESENTED',inspection:{...view,information:informationProjection(state,characterId)}};
     }else if(director?.query==='options')message='Available actions: '+turnAffordances(state,characterId,t.revision).filter(a=>a.enabled).map(a=>a.label).join('; ')+'.';
     result={...base,...result!,status:'PRESENTED',presentation:{kind:'director',text:message}};
    }else if(input.kind==='mode_switch'){mode=input.targetMode;result={...base,status:'PRESENTED'};}

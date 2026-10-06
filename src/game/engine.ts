@@ -17,6 +17,9 @@ import {Domain} from '../domain.ts';
 import {ensure} from '../contracts.ts';
 import type {Actor} from '../contracts.ts';
 import {actionSchema,applyCharacterProfileTemplate,beliefSchema,characterProfileTemplateSchema,data,entitySchema,factSchema,getEntity,knowledgeSchema,kinds,memorySchema,refs,remapEntityReference,settingsSchema,validateEntity,validateState} from './model.ts';
+import {informationStateSchema} from './information-contracts.ts';
+import {syncInformation,informationProjection,playerInformationProjection,information,recordObservation} from './information.ts';
+import {buildInformationContext,rebuildInformationSummary} from './information-context.ts';
 import type {Action,Entity,Kind,State} from './model.ts';
 import {observerView,project,retrieve,observe,fact,gossip,remember,visible} from './epistemics.ts';
 import {phoneView} from './phone.ts';
@@ -90,7 +93,7 @@ const presentTranscript=(turn:z.infer<typeof transcriptSchema>)=>{
 };
 const snapshotMetadataSchema=z.strictObject({schemaVersion:z.literal(1),campaignId:z.uuid(),timelineId:z.uuid(),revision:z.number().int().positive(),clock:z.iso.datetime(),eventCursor:z.string().min(16).max(128),eventId:z.uuid().nullable(),projectionVersion:z.literal(1),contentChecksum:z.string().length(64),createdAt:z.iso.datetime()});
 const snapshotSchema=z.strictObject({version:z.literal(1),metadata:snapshotMetadataSchema.optional(),worldHistory:z.array(z.strictObject({eventId:z.uuid(),canonRevisionId:z.uuid().nullable(),configuration:z.json()})).default([]),transcript:z.array(transcriptSchema).default([]),state:z.strictObject({canon:canonSourceSchema.nullable().optional(),clock:z.iso.datetime(),settings:settingsSchema,entities:z.array(entitySchema).max(20000),
- facts:z.array(factSchema),knowledge:z.array(knowledgeSchema),beliefs:z.array(beliefSchema),memories:z.array(memorySchema),eventIds:z.array(z.uuid()).max(100000).optional()
+ facts:z.array(factSchema),knowledge:z.array(knowledgeSchema),beliefs:z.array(beliefSchema),memories:z.array(memorySchema),eventIds:z.array(z.uuid()).max(100000).optional(),information:informationStateSchema.optional()
 })});
 const snapshotCore=(snapshot:z.infer<typeof snapshotSchema>)=>({version:snapshot.version,worldHistory:snapshot.worldHistory,transcript:snapshot.transcript,state:snapshot.state});
 const verifySnapshotMetadata=(snapshot:z.infer<typeof snapshotSchema>)=>{if(!snapshot.metadata)return snapshot;ensure(snapshot.metadata.clock===snapshot.state.clock,409,'snapshot_clock_mismatch');ensure(snapshot.metadata.contentChecksum===checksum(snapshotCore(snapshot)),409,'snapshot_content_checksum_mismatch');return snapshot;};
@@ -100,6 +103,7 @@ export class Game {
   this.store=store;this.domain=new Domain(store);
   this.exportBytes=limits.exportBytes??8*1024*1024;this.importBytes=limits.importBytes??8*1024*1024;
  }
+ private async informationSchemaReady(){return Boolean(await this.store.get("SELECT 1 FROM sqlite_master WHERE type='table' AND name='timeline_information'"));}
  private async coreTurnSchemaReady(){return Boolean(await this.store.get<{ready:number}>("SELECT 1 ready FROM sqlite_master WHERE type='table' AND name='turn_resolution_batches'"));}
  private async recoverySchemaReady(){return Boolean(await this.store.get<{ready:number}>("SELECT 1 ready FROM sqlite_master WHERE type='table' AND name='save_manifests'"));}
  async access(actor:Actor,id:string,write=false){
@@ -144,11 +148,13 @@ export class Game {
   const beliefs=(await this.store.all<Record<string,unknown>>('SELECT * FROM character_beliefs WHERE timeline_id=?',id)).map(r=>beliefSchema.parse({id:r.id,observerId:r.observer_id,proposition:r.proposition,subjectId:r.subject_id,predicate:r.predicate,objectId:r.object_id,value:JSON.parse(String(r.value_json)),qualifiers:JSON.parse(String(r.qualifiers_json)),confidence:r.confidence,source:r.source,truthStatus:r.truth_status,audience:JSON.parse(String(r.audience_json)),observedAt:r.observed_at,validFrom:r.valid_from,validUntil:r.valid_until,eventIds:JSON.parse(String(r.event_ids_json)),evidenceIds:JSON.parse(String(r.evidence_ids_json)),tags:JSON.parse(String(r.tags_json)),at:r.updated_at,correctedBy:r.corrected_by}));
   const memories=(await this.store.all<Record<string,unknown>>('SELECT * FROM character_memories WHERE timeline_id=?',id)).map(r=>memorySchema.parse({id:r.id,observerId:r.observer_id,text:r.text,interpretation:r.interpretation,salience:r.salience,decayPerDay:r.decay_per_day,eventId:r.source_event_id,eventRefs:JSON.parse(String(r.event_refs_json)),at:r.created_at,private:!!r.private,privacy:r.privacy,recallConditions:JSON.parse(String(r.recall_conditions_json)),lastRefreshedAt:r.last_refreshed_at,refreshCount:r.refresh_count,expiresAt:r.expires_at,tags:JSON.parse(String(r.tags_json))}));
   const inherited=await this.store.get<{history_json:string}>('SELECT history_json FROM timeline_world_history WHERE timeline_id=?',id),currentEvents=await this.store.all<{id:string}>('SELECT id FROM game_events WHERE timeline_id=? ORDER BY revision',id),eventIds=[...new Set([...(inherited?JSON.parse(inherited.history_json).map((row:{eventId:string})=>row.eventId):[]),...currentEvents.map(row=>row.id)])];
-  const state={canon:await this.canon(id),clock:t.clock,settings:settingsSchema.parse(JSON.parse(t.settings_json)),entities,facts,knowledge,beliefs,memories,eventIds};syncWeather(state);return state;
+  const storedInformation=await this.informationSchemaReady()?await this.store.get<{state_json:string}>('SELECT state_json FROM timeline_information WHERE timeline_id=?',id):undefined;
+  const state:State={canon:await this.canon(id),clock:t.clock,settings:settingsSchema.parse(JSON.parse(t.settings_json)),entities,facts,knowledge,beliefs,memories,eventIds,...(storedInformation?{information:informationStateSchema.parse(JSON.parse(storedInformation.state_json))}:{})};syncWeather(state);return state;
   },'read');
  }
  async persist(id:string,s:State,incremental=false){
-  validateState(s);const timestamp=now();
+  validateState(s);const informationReady=await this.informationSchemaReady();if(informationReady)syncInformation(s);const timestamp=now();
+  if(informationReady&&!await this.store.get('SELECT timeline_id FROM timeline_information WHERE timeline_id=?',id)){information(s).summaries=[];information(s).generation++;}
   const statements:InStatement[]=[];
   const write=(sql:string,...args:InValue[])=>{statements.push({sql,args});};
   const previousRows=await this.store.all<{id:string;revision:number;name:string;visibility:string;data_json:string;archived_at:string|null}>('SELECT id,revision,name,visibility,data_json,archived_at FROM game_entities WHERE timeline_id=?',id);
@@ -177,6 +183,7 @@ export class Game {
   for(const raw of s.knowledge){const k=knowledgeSchema.parse(raw);write('INSERT INTO character_knowledge(timeline_id,observer_id,fact_id,source,learned_at,confidence,observed_at,expires_at,evidence_ids_json) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING',id,k.observerId,k.factId,k.source,k.at,k.confidence,k.observedAt,k.expiresAt,JSON.stringify(k.evidenceIds));}
   for(const raw of s.beliefs){const b=beliefSchema.parse(raw);write('INSERT INTO character_beliefs(timeline_id,id,observer_id,proposition,confidence,source,updated_at,corrected_by,subject_id,predicate,object_id,value_json,qualifiers_json,truth_status,audience_json,observed_at,valid_from,valid_until,event_ids_json,evidence_ids_json,tags_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(timeline_id,id) DO UPDATE SET proposition=excluded.proposition,confidence=excluded.confidence,source=excluded.source,updated_at=excluded.updated_at,corrected_by=excluded.corrected_by,truth_status=excluded.truth_status,audience_json=excluded.audience_json,valid_until=excluded.valid_until,event_ids_json=excluded.event_ids_json,evidence_ids_json=excluded.evidence_ids_json,tags_json=excluded.tags_json',id,b.id,b.observerId,b.proposition,b.confidence,b.source,b.at,b.correctedBy,b.subjectId,b.predicate,b.objectId,JSON.stringify(b.value),JSON.stringify(b.qualifiers),b.truthStatus,JSON.stringify(b.audience),b.observedAt,b.validFrom,b.validUntil,JSON.stringify(b.eventIds),JSON.stringify(b.evidenceIds),JSON.stringify(b.tags));}
   for(const raw of s.memories){const m=memorySchema.parse(raw),eventRefs=[...new Set([m.eventId,...m.eventRefs])];write('INSERT INTO character_memories(timeline_id,id,observer_id,text,salience,decay_per_day,source_event_id,created_at,private,interpretation,privacy,recall_conditions_json,last_refreshed_at,refresh_count,expires_at,event_refs_json,tags_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(timeline_id,id) DO UPDATE SET text=excluded.text,interpretation=excluded.interpretation,salience=excluded.salience,decay_per_day=excluded.decay_per_day,created_at=excluded.created_at,private=excluded.private,privacy=excluded.privacy,recall_conditions_json=excluded.recall_conditions_json,last_refreshed_at=excluded.last_refreshed_at,refresh_count=excluded.refresh_count,expires_at=excluded.expires_at,event_refs_json=excluded.event_refs_json,tags_json=excluded.tags_json',id,m.id,m.observerId,m.text,m.salience,m.decayPerDay,m.eventId,m.at,m.private?1:0,m.interpretation,m.privacy,JSON.stringify(m.recallConditions),m.lastRefreshedAt,m.refreshCount,m.expiresAt,JSON.stringify(eventRefs),JSON.stringify(m.tags));}
+  if(informationReady)write('INSERT INTO timeline_information(timeline_id,state_json) VALUES (?,?) ON CONFLICT(timeline_id) DO UPDATE SET state_json=excluded.state_json',id,JSON.stringify(informationStateSchema.parse(s.information)));
   write('UPDATE timelines SET clock=?,settings_json=? WHERE id=?',s.clock,JSON.stringify(s.settings),id);
   for(let offset=0;offset<statements.length;offset+=100)await this.store.batch(statements.slice(offset,offset+100));
  }
@@ -305,7 +312,7 @@ export class Game {
   const inputState=await this.store.get<{mode:string;pending_json:string|null}>('SELECT mode,pending_json FROM turn_input_state WHERE timeline_id=? AND user_id=? AND character_id=?',id,actor.id,characterId);
   const activeScene=await currentScene(this.store,id,characterId);
   const writing=await resolveNarrativeProfile(this.store,actor.id,t.campaign_id,characterId,activeScene?.sceneId??null,inputState?.mode==='GAME'?'GAME':'STORY');
-  return {feedbackStyle:writing.profile.mechanicalFeedbackStyle,activeScene,affordances:turnAffordances(s,characterId,t.revision).map(({action,...safe})=>safe),playMode:inputState?.mode??'STORY',pendingDecision:inputState?.pending_json?JSON.parse(inputState.pending_json):null,timeline:{id:t.id,name:t.name,revision:cursor.revision,turnCursor:cursor.cursor},...observerView(s,characterId),control:inputState?.pending_json?{holder:'PLAYER',reasonCode:'CLARIFICATION_REQUIRED',actingEntityId:characterId}:activeScene?.sceneRevision===t.revision?activeScene.control:controlState(s,characterId),journal:journalView(s,characterId),caseFiles:s.entities.filter(entity=>entity.kind==='case'&&!entity.archived&&entity.data.investigatorId===characterId).map(entity=>caseFileView(s,entity.id,characterId)),checks:await this.checkHistory(id,characterId,false,s),turns:(await this.transcript(id)).filter(turn=>turn.character_id===characterId&&turn.user_id===actor.id).slice(-100).map(presentTranscript)};},'read');}
+  return {feedbackStyle:writing.profile.mechanicalFeedbackStyle,activeScene,affordances:turnAffordances(s,characterId,t.revision).map(({action,...safe})=>safe),playMode:inputState?.mode??'STORY',pendingDecision:inputState?.pending_json?JSON.parse(inputState.pending_json):null,timeline:{id:t.id,name:t.name,revision:cursor.revision,turnCursor:cursor.cursor},...observerView(s,characterId),information:playerInformationProjection(s,characterId),control:inputState?.pending_json?{holder:'PLAYER',reasonCode:'CLARIFICATION_REQUIRED',actingEntityId:characterId}:activeScene?.sceneRevision===t.revision?activeScene.control:controlState(s,characterId),journal:journalView(s,characterId),caseFiles:s.entities.filter(entity=>entity.kind==='case'&&!entity.archived&&entity.data.investigatorId===characterId).map(entity=>caseFileView(s,entity.id,characterId)),checks:await this.checkHistory(id,characterId,false,s),turns:(await this.transcript(id)).filter(turn=>turn.character_id===characterId&&turn.user_id===actor.id).slice(-100).map(presentTranscript)};},'read');}
  async relationships(actor:Actor,id:string,characterId:string){const {access}=await this.access(actor,id),state=await this.load(id);this.controlled(actor,state,characterId,access.role);return playerRelationships(state,characterId);}
  async phone(actor:Actor,id:string,characterId:string){const {access}=await this.access(actor,id),state=await this.load(id);this.controlled(actor,state,characterId,access.role);return phoneView(state,characterId);}
  async inventory(actor:Actor,id:string,characterId:string,options:{sort?:'name'|'category'|'condition'|'quantity';category?:string;equipped?:boolean}){const {access}=await this.access(actor,id),state=await this.load(id);this.controlled(actor,state,characterId,access.role);return inventoryView(state,characterId,options);}
@@ -404,7 +411,7 @@ export class Game {
  async reverseNpcMerge(actor:Actor,id:string,input:{revision:number;mergeId:string},key:string){
   return this.mutate(actor,id,input.revision,key,input,'creator.npc.merge-reversed',true,async s=>{
    const row=await this.store.get<{before_json:string;after_checksum:string;reversed_at:string|null}>('SELECT before_json,after_checksum,reversed_at FROM npc_merge_records WHERE id=? AND timeline_id=?',input.mergeId,id);ensure(row,404,'npc_merge_unavailable');ensure(!row.reversed_at,409,'npc_merge_already_reversed');ensure(checksum(mergePayloadForChecksum(s))===row.after_checksum,409,'npc_merge_has_subsequent_changes');
-   const before=JSON.parse(row.before_json) as ReturnType<typeof mergePayload>;s.entities=before.entities;s.facts=before.facts;s.knowledge=before.knowledge;s.beliefs=before.beliefs;s.memories=before.memories;validateState(s);
+   const before=JSON.parse(row.before_json) as ReturnType<typeof mergePayload>;s.entities=before.entities;s.facts=before.facts;s.knowledge=before.knowledge;s.beliefs=before.beliefs;s.memories=before.memories;s.information=before.information;validateState(s);
    await this.store.run('UPDATE npc_merge_records SET reversed_at=?,reversed_by=? WHERE id=? AND reversed_at IS NULL',now(),actor.id,input.mergeId);
    return {result:{mergeId:input.mergeId,reversed:true}};
   });
@@ -563,7 +570,7 @@ export class Game {
   },'read');
  }
  async saveCompatibility(actor:Actor,id:string,saveId:string){await this.access(actor,id,true);const saved=await this.savedSnapshot(id,saveId);saved.state.entities=saved.state.entities.map(validateEntity);validateState(saved.state);return {valid:true,version:1,revision:saved.revision,entities:saved.state.entities.length,transcriptTurns:saved.transcript.length,metadata:saved.metadata??null,projectionRebuild:'validated',migrations:saved.metadata?[]:['legacy-v1-metadata-defaults']};}
- private async mutate<T extends object>(actor:Actor,id:string,expectedRevision:number,key:string,body:unknown,type:string,creator:boolean,fn:(s:State,eventId:string,seed:string,role:string)=>Mutation<T>|Promise<Mutation<T>>,trace?:{recorder:TurnTraceRecorder;expectedCursor?:string;seed?:string}){
+ async mutate<T extends object>(actor:Actor,id:string,expectedRevision:number,key:string,body:unknown,type:string,creator:boolean,fn:(s:State,eventId:string,seed:string,role:string)=>Mutation<T>|Promise<Mutation<T>>,trace?:{recorder:TurnTraceRecorder;expectedCursor?:string;seed?:string}){
   keySchema.parse(key);const recorder=trace?.recorder;
   const run=<R>(stage:string,task:()=>R|Promise<R>,details:Record<string,unknown>={})=>recorder?recorder.run(stage,task,details):Promise.resolve().then(task);
   return (await this.store.transaction(async ()=>{
@@ -577,6 +584,14 @@ export class Game {
    const s=await run('state-load',()=>this.load(id)),beforeState=structuredClone(s),seed=trace?.seed??randomBytes(32).toString('hex'),eventId=deterministicUuid(seed,id+':'+key);
    const beforeDeath=(s.settings.campaign?.saveBehavior.branchOnDeath??true)?structuredClone(s):null;
    const action=await run('deterministic-simulation',()=>fn(s,eventId,seed,access.role),{eventId,seedDigest:checksum(seed)});
+   withTurnRuntime(seed+':information',eventId,s,'information',()=>{
+    syncInformation(s);
+    const witnesses=new Set((action.effects??[]).flatMap(effect=>effect.observers));
+    for(const observerId of witnesses){const observer=s.entities.find(e=>e.id===observerId&&e.kind==='character');if(!observer)continue;
+     for(const effect of observerEffects(s,action.effects??[],observerId,true).filter(effect=>/weapon|injury|crime|evidence|discover|message.read|information.researched/.test(effect.type)))recordObservation(s,{id:deterministicUuid(seed,effect.id+observerId),observerId,eventId,at:s.clock,locationId:observer.data.locationId??null,channel:/message|research/.test(effect.type)?'reading':'technical',targetId:s.entities.some(e=>e.id===effect.subjectId)?effect.subjectId:null,raw:effect.text,clarity:1,confidence:1,attention:'normal',conditions:{resolver:effect.type},recognition:'unidentified',recognizedAsId:null,salience:0.8,propositionIds:[]});
+    }
+    if(action.characterId){const observerId=action.characterId,before=beforeState.entities.find(e=>e.id===observerId),after=s.entities.find(e=>e.id===observerId);if(before&&after&&before.data.locationId!==after.data.locationId){const info=information(s),sourceIds=[...info.observations.filter(o=>o.observerId===observerId&&o.locationId===before.data.locationId).slice(-30).map(o=>o.id),...info.active.filter(a=>a.characterId===observerId&&a.kind!=='ooc-note').slice(-30).map(a=>a.id)];if(sourceIds.length)rebuildInformationSummary(s,observerId,'scene',String(before.data.locationId)+':'+eventId,sourceIds,eventId);}}
+   });
    withTurnRuntime(seed+':story-cards',eventId,s,'story-cards',()=>maintainAutomaticStoryCards(beforeState,s,eventId,action.effects??[]));
    await run('state-projection',()=>this.persist(id,s,true));
    const revision=t.revision+1,nextCursor=randomUUID();
@@ -599,6 +614,8 @@ export class Game {
      Object.assign(action.result,{notices:presentation.notices,scene:presentation.scene,activeScene});
      const safeEffects=permitted.map(({observers,...effect})=>({...effect,observers:[characterId]}));
      const frozenManifest=buildContextManifest(s,characterId,action.turnText??'',{maxTokens:256,currentEvents:safeEffects,projection,sceneOnly:true});
+     const informationContext=buildInformationContext(s,{campaignId:t.campaign_id,timelineId:id,viewerId:characterId,stateVersion:revision,eventCursor:nextCursor},'narration',action.turnText??'',{projection,sceneOnly:true,tokenBudget:Math.max(4000,s.settings.contextTokens),currentEvents:safeEffects});
+     await this.store.run('INSERT INTO information_context_manifests VALUES (?,?,?,?,?,?,?,?)',informationContext.manifest.callId,id,characterId,'narration',revision,nextCursor,JSON.stringify(informationContext),now());
      const sources=frozenManifest.included.map(item=>({id:item.id,layer:item.category,text:item.text,source:item.source,priority:item.priority}));while(sources.length&&Buffer.byteLength(JSON.stringify(sources))>2000)sources.pop();
      const selected=await resolveNarrativeProfile(this.store,actor.id,t.campaign_id,characterId,activeScene.sceneId,action.mode??'GAME');
      const directed=await applyNarrativeDirectives(this.store,actor.id,id,characterId,activeScene.sceneId,action.mode??'GAME',selected.profile,eventId);
@@ -609,7 +626,7 @@ export class Game {
      narration=deterministicNarrative(narrative);
      for(const f of narrative.facts.filter(f=>f.classification==='UI_ONLY'))presentation.notices.push({category:'messages',label:'Game update',detail:f.text.slice(0,1000)});
      Object.assign(action.result,{narration,notices:presentation.notices});
-     const frozen={narrative,scene:storyScene(s,characterId,projection),controls:frozenManifest.controls,dossier:{version:2,observerId:characterId,clock:s.clock,sources}};
+     const frozen={narrative,informationContext,scene:storyScene(s,characterId,projection),controls:frozenManifest.controls,dossier:{version:2,observerId:characterId,clock:s.clock,sources}};
      await this.store.run('INSERT INTO turn_narrative_contexts VALUES (?,?)',eventId,JSON.stringify(frozen));
      const narrationVersionId=randomUUID();await this.store.run('INSERT INTO narration_versions VALUES (?,?,?,?,?)',narrationVersionId,eventId,narration,'grounded',now());
      await this.store.run('INSERT INTO narrative_render_records VALUES (?,?,?,?,?,?,?)',randomUUID(),eventId,id,actor.id,narrationVersionId,JSON.stringify({turnId:eventId,eventIds:narrative.eventIds,profile:narrative.profile,profileLayers:selected.layers,promptVersion:'narrative-v3',model:{provider:'grounded',model:'deterministic-v2'},validatorVersion:narrativeValidatorVersion,retryCount:0,status:'grounded',repairs:[],mechanicsChanged:false}),now());
@@ -817,7 +834,7 @@ export class Game {
  }
  async export(actor:Actor,id:string,options:{mediaStrategy?:'inline'|'references'}={}){
   const {t}=await this.access(actor,id,true),payload={version:1 as const,worldHistory:await this.worldHistory(id),state:(await this.load(id)),transcript:(await this.transcript(id))},cursor=await this.store.get<{cursor:string}>('SELECT cursor FROM timeline_turn_cursors WHERE timeline_id=?',id),latest=await this.store.get<{id:string;created_at:string}>('SELECT id,created_at FROM game_events WHERE timeline_id=? ORDER BY revision DESC LIMIT 1',id);ensure(cursor,409,'turn_cursor_unavailable');
-  const media=payload.state.entities.filter(entity=>entity.kind==='media').map(entity=>({id:entity.id,checksum:checksum(entity.data.body),visibility:entity.visibility})),payloadChecksum=checksum(payload),manifest={format:'valor-timeline-export' as const,formatVersion:2 as const,schemaVersion:48,projectionVersion:1 as const,exportedAt:latest?.created_at??payload.state.clock,campaignId:t.campaign_id,timeline:{id,name:t.name,revision:t.revision,clock:payload.state.clock,eventCursor:cursor.cursor,eventId:latest?.id??null},payloadChecksum,dependencies:{canonRevisionId:payload.state.canon?.revisionId??null,entityKinds:[...new Set(payload.state.entities.map(entity=>entity.kind))].sort(),media},mediaStrategy:options.mediaStrategy??'inline',visibility:'preserved' as const,migration:{sourceSnapshotVersion:1,targetSnapshotVersion:1,steps:[] as string[]}},envelope={manifest,payload};
+  const media=payload.state.entities.filter(entity=>entity.kind==='media').map(entity=>({id:entity.id,checksum:checksum(entity.data.body),visibility:entity.visibility})),payloadChecksum=checksum(payload),manifest={format:'valor-timeline-export' as const,formatVersion:2 as const,schemaVersion:49,projectionVersion:1 as const,exportedAt:latest?.created_at??payload.state.clock,campaignId:t.campaign_id,timeline:{id,name:t.name,revision:t.revision,clock:payload.state.clock,eventCursor:cursor.cursor,eventId:latest?.id??null},payloadChecksum,dependencies:{canonRevisionId:payload.state.canon?.revisionId??null,entityKinds:[...new Set(payload.state.entities.map(entity=>entity.kind))].sort(),media},mediaStrategy:options.mediaStrategy??'inline',visibility:'preserved' as const,migration:{sourceSnapshotVersion:1,targetSnapshotVersion:1,steps:[] as string[]}},envelope={manifest,payload};
   const result={...envelope,checksum:checksum(envelope)};ensureJsonBytes(result,this.exportBytes,'export_too_large');return result;
  }
  private async inspectImport(actor:Actor,id:string,raw:unknown){
@@ -829,7 +846,7 @@ export class Game {
   const target=await this.load(id),targetIds=new Set(target.entities.map(entity=>entity.id)),collisions=state.entities.filter(entity=>targetIds.has(entity.id)).map(entity=>entity.id);
   for(const e of state.entities.filter(e=>e.kind==='character'))e.data.controllerUserId=e.data.playable?actor.id:null;
   const migrations=[...(manifest?.migration.steps??[])];if(!manifest)migrations.push('legacy-export-envelope');if(!parsed.metadata)migrations.push('legacy-snapshot-metadata-defaults');
-  return {state,parsed,bundleChecksum:checksum(raw),report:{valid:true,formatVersion:manifest?.formatVersion??1,snapshotVersion:parsed.version,sourceSchemaVersion:manifest?.schemaVersion??null,targetSchemaVersion:48,projectionVersion:manifest?.projectionVersion??1,entities:state.entities.length,transcriptTurns:parsed.transcript.length,idCollisions:collisions,conflictPolicy:'isolated-child-timeline',overwritesLiveCampaign:false,visibility:manifest?.visibility??'preserved',mediaStrategy:manifest?.mediaStrategy??'inline',migrations,changes:['create-child-timeline','rebuild-state-projection','restore-world-history','restore-transcript']}};
+  return {state,parsed,bundleChecksum:checksum(raw),report:{valid:true,formatVersion:manifest?.formatVersion??1,snapshotVersion:parsed.version,sourceSchemaVersion:manifest?.schemaVersion??null,targetSchemaVersion:49,projectionVersion:manifest?.projectionVersion??1,entities:state.entities.length,transcriptTurns:parsed.transcript.length,idCollisions:collisions,conflictPolicy:'isolated-child-timeline',overwritesLiveCampaign:false,visibility:manifest?.visibility??'preserved',mediaStrategy:manifest?.mediaStrategy??'inline',migrations,changes:['create-child-timeline','rebuild-state-projection','restore-world-history','restore-transcript']}};
  }
  async validateImport(actor:Actor,id:string,raw:unknown){return (await this.inspectImport(actor,id,raw)).state;}
  async import(actor:Actor,id:string,name:string,raw:unknown,dryRun=true,confirmationToken?:string){

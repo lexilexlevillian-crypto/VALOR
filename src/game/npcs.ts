@@ -78,8 +78,9 @@ export function remapNpcReferences(state:State,sourceId:string,targetId:string,k
  state.knowledge=[...new Map(state.knowledge.map(row=>[row.observerId+':'+row.factId,row])).values()];
  state.beliefs=state.beliefs.map(row=>({...row,observerId:row.observerId===sourceId?targetId:row.observerId,subjectId:row.subjectId===sourceId?targetId:row.subjectId,objectId:row.objectId===sourceId?targetId:row.objectId}));
  state.memories=state.memories.map(row=>({...row,observerId:row.observerId===sourceId?targetId:row.observerId,recallConditions:row.recallConditions?{...row.recallConditions,entityIds:row.recallConditions.entityIds.map(id=>id===sourceId?targetId:id)}:row.recallConditions}));
+ if(state.information){state.information=JSON.parse(JSON.stringify(state.information,(key,value)=>typeof value==='string'&&value===sourceId&&!['text','raw','label','title'].includes(key)?targetId:value));state.information!.summaries=[];}
 }
 
 export function npcReferrers(state:State,npcId:string){return state.entities.filter(entity=>!entity.archived&&entity.id!==npcId&&refs(entity).includes(npcId)).map(entity=>({id:entity.id,name:entity.name,kind:entity.kind}));}
-export function mergePayload(state:State){return {entities:structuredClone(state.entities),facts:structuredClone(state.facts),knowledge:structuredClone(state.knowledge),beliefs:structuredClone(state.beliefs),memories:structuredClone(state.memories)};}
+export function mergePayload(state:State){return {entities:structuredClone(state.entities),facts:structuredClone(state.facts),knowledge:structuredClone(state.knowledge),beliefs:structuredClone(state.beliefs),memories:structuredClone(state.memories),...(state.information?{information:structuredClone(state.information)}:{})};}
 export function mergePayloadForChecksum(state:State){const payload=mergePayload(state);payload.entities=payload.entities.map(entity=>({...entity,revision:1}));return payload;}

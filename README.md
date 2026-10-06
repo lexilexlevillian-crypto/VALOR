@@ -10,6 +10,8 @@ The supplied [System 1 gameplay specification](docs/SYSTEM_01_CORE_SPEC.md) now 
 
 The supplied System 2 Behavior Bible is implemented in the [narrative and storytelling report](docs/SYSTEM_02_IMPLEMENTATION.md), including its 52-scenario acceptance matrix. Writing preferences are under Phone → Settings → Writing preferences; Game Mode adds Say / Sign / Write.
 
+The supplied System 3 context, knowledge, and information specification is covered in the [System 3 implementation report](docs/SYSTEM_03_INFORMATION_IMPLEMENTATION.md). Phone → Journal separates knowledge, beliefs, notes, hypotheses, observations, and record research. Information provenance, rumor ancestry, purpose-specific context, and save/branch isolation use schema 49.
+
 The latest [lifecycle systems guide](docs/LIFECYCLE_SYSTEMS.md) covers NPC route travel and fixed-step catch-up, production, quest branches, social consequences, dispatch, court/estate flows, private image assets, deduplicated saves, Creator diagnostics and confirmed AI action proposals.
 
 ## Run locally

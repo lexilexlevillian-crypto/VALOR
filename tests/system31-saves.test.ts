@@ -63,7 +63,7 @@ test('legacy upgraded saves remain readable and versioned exports expose compati
   const manual=await f.game.save(f.creator,f.timeline.id,{name:'Versioned checkpoint'});
   const compatibility=await f.game.saveCompatibility(f.creator,f.timeline.id,manual.id);assert.equal(compatibility.metadata?.schemaVersion,1);assert.deepEqual(compatibility.migrations,[]);
   const bundle=await f.game.export(f.creator,f.timeline.id,{mediaStrategy:'references'});
-  assert.equal(bundle.manifest.formatVersion,2);assert.equal(bundle.manifest.schemaVersion,48);assert.equal(bundle.manifest.mediaStrategy,'references');assert.equal(bundle.manifest.visibility,'preserved');assert.equal(bundle.manifest.payloadChecksum,checksum(bundle.payload));
+  assert.equal(bundle.manifest.formatVersion,2);assert.equal(bundle.manifest.schemaVersion,49);assert.equal(bundle.manifest.mediaStrategy,'references');assert.equal(bundle.manifest.visibility,'preserved');assert.equal(bundle.manifest.payloadChecksum,checksum(bundle.payload));
   const legacy={payload:structuredClone(bundle.payload),checksum:checksum(bundle.payload)};
   const preview=await f.game.import(f.creator,f.timeline.id,'Upgraded legacy export',legacy,true) as {migrations:string[]};
   assert.ok(preview.migrations.includes('legacy-export-envelope'));assert.ok(preview.migrations.includes('legacy-snapshot-metadata-defaults'));

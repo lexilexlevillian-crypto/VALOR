@@ -1,3 +1,4 @@
+import {captureInformationScope,assertInformationScope} from './information-context.ts';
 import {z} from 'zod';
 import {randomUUID} from 'node:crypto';
 import {ensure,type Actor} from '../contracts.ts';
@@ -57,7 +58,8 @@ export class CreativeTurnPlanner implements TurnPlanner {
   // Bytes are a conservative upper bound for input token reservation, including schemas.
   const inputTokens=1024+Buffer.byteLength(JSON.stringify(context)+instructions+JSON.stringify(outputSchema)),outputTokens=2048;
   if(inputTokens>s.settings.contextTokens)return null;
-  const request=makeAiRequest({traceId,purpose:'extraction',model:this.provider.identity?.('extraction')??{provider:this.provider.id,model:this.provider.id,configurationId:'creative-plan-v1'},budget:{maxInputTokens:inputTokens,maxOutputTokens:outputTokens,maxTotalTokens:inputTokens+outputTokens,timeoutMs:12000,maxAttempts:2},allowedTools:[],response:responseContract('creative-turn-plan','1',outputSchema),prompt:{id:'creative-turn-plan',version:'1',instructions},context:{provenance:[{id:'observer-plan-input',source:'player-input',trust:'untrusted',privacy:'private',revision:String(revision),content:context}]},cache:{kind:'none'}});
+  const informationScope=await captureInformationScope(this.game,timelineId,characterId);ensure(informationScope.stateVersion===t.revision,409,'stale_information_context');
+  const request=makeAiRequest({traceId,purpose:'extraction',model:this.provider.identity?.('extraction')??{provider:this.provider.id,model:this.provider.id,configurationId:'creative-plan-v1'},budget:{maxInputTokens:inputTokens,maxOutputTokens:outputTokens,maxTotalTokens:inputTokens+outputTokens,timeoutMs:12000,maxAttempts:2},allowedTools:[],response:responseContract('creative-turn-plan','1',outputSchema),prompt:{id:'creative-turn-plan',version:'1',instructions},context:{snapshot:{...informationScope,purpose:'input-parser'},provenance:[{id:'observer-plan-input',source:'player-input',trust:'untrusted',privacy:'private',revision:String(revision),content:context}]},cache:{kind:'none'}});
   const reserved=(inputTokens+outputTokens)*2;this.inflight.add(timelineId);
   try{
    await this.game.store.transaction(async()=>{
@@ -67,6 +69,7 @@ export class CreativeTurnPlanner implements TurnPlanner {
     await this.game.store.run('INSERT INTO ai_intent_usage (id,timeline_id,user_id,provider,reserved_tokens,status,created_at) VALUES (?,?,?,?,?,?,?)',traceId,timelineId,actor.id,this.provider.id,reserved,'pending',new Date().toISOString());
    });
    const result=await this.runtime.execute({request,validate:raw=>validateCreativeProposal(raw,s,characterId,text),fallback:()=>({clauses:[],evidence:[],clarification:'Describe your intended action and target. Nothing has happened.'})});
+   await assertInformationScope(this.game,informationScope);
    await this.game.store.run('UPDATE ai_intent_usage SET status=? WHERE id=?',result.status==='fallback'?'failed':'succeeded',traceId);
    await this.game.authorizeCharacter(actor,timelineId,characterId);return result.output;
   }finally{this.inflight.delete(timelineId);}
