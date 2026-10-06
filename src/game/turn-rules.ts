@@ -5,7 +5,7 @@ import {resolveAction,type CheckRecord} from './actions.ts';
 import type {Effect} from './simulation.ts';
 import type {actionTime} from './calendar.ts';
 
-export const coreRulesetVersion='core-turn-v4';
+export const coreRulesetVersion='core-turn-v5';
 
 export type RuleResolution={
  status:'SUCCEEDED'|'FAILED'|'PARTIAL'|'INTERRUPTED'|'NO_EFFECT';

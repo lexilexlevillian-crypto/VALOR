@@ -141,7 +141,7 @@ test('validated narration HTTP stream preserves event correlation and requires o
   const result=await f.turn({type:'look'}),revision=await f.revision(),session=await login(f,'player@example.test');
   const response=await f.app.inject({method:'POST',url:'/game/timelines/'+f.timeline.id+'/narrate/stream',headers:{cookie:session.cookie,origin:f.settings.origin,'x-csrf-token':session.csrf},payload:{turnId:result.eventId}});
   assert.equal(response.statusCode,200,response.body);assert.match(String(response.headers['content-type']),/ndjson/);
-  const lines=response.body.trim().split('\n').map(line=>JSON.parse(line));assert.equal(lines.at(-1).type,'complete');assert.equal(lines.at(-1).promptVersion,'narrative-v1');assert.equal(await f.revision(),revision);
+  const lines=response.body.trim().split('\n').map(line=>JSON.parse(line));assert.equal(lines.at(-1).type,'complete');assert.equal(lines.at(-1).promptVersion,'narrative-v3');assert.equal(await f.revision(),revision);
  }finally{await f.close();}
 });
 

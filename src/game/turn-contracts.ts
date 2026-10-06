@@ -1,5 +1,6 @@
 import {z} from 'zod';
 import {actionSchema} from './model.ts';
+import {narrativeDirectiveSchema,narrativePatchSchema} from './narrative-directives-contract.ts';
 
 export const playModeSchema=z.enum(['GAME','STORY']);
 export type PlayMode=z.infer<typeof playModeSchema>;
@@ -22,7 +23,8 @@ export const turnCommandSchema=z.strictObject({
   z.strictObject({kind:z.literal('mode_switch'),targetMode:playModeSchema}),
   z.strictObject({kind:z.literal('clarification_answer'),pendingDecisionId:z.uuid(),answer:z.string().trim().min(1).max(1000)}),
   z.strictObject({kind:z.literal('cancel_pending'),pendingActionId:z.string().min(16).max(128)}),
-  z.strictObject({kind:z.literal('regenerate_narration'),turnId:z.uuid()}),
+  z.strictObject({kind:z.literal('narrative_directive'),directive:narrativeDirectiveSchema}),
+  z.strictObject({kind:z.literal('regenerate_narration'),turnId:z.uuid(),patch:narrativePatchSchema.optional()}),
   z.strictObject({kind:z.literal('edit_request'),edit:z.strictObject({saveId:z.uuid(),reason:z.string().trim().min(1).max(1000),name:z.string().trim().min(1).max(160)})}),
  ]),
 });

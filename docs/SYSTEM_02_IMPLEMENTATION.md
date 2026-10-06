@@ -1,5 +1,7 @@
 # System 02 — Narrative and AI Storytelling
 
+The later supplied master specification is implemented in the [System 2 master-spec update](SYSTEM_02_MASTER_SPEC_REPORT.md). That report supersedes the schema, directive, control, and verification details below where noted.
+
 Implements the supplied [Behavior Bible](SYSTEM_02_NARRATIVE_SPEC.md) in the existing turn, AI gateway, Chronicle and Creator architecture. The simulation commits first; presentation uses a frozen, observer-filtered bundle. The narrative renderer never receives a world-mutation tool.
 
 ## Data and versioning

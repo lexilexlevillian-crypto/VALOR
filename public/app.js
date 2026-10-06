@@ -235,13 +235,13 @@ async function act(action,text,clearDraft=false){
  if(!navigator.onLine)throw new Error('Reconnect before taking an action.');
  const key=crypto.randomUUID();
  const timelineId=S.timeline.id,characterId=S.character.id;
- const input=action?.kind?action:action?{kind:'action',action,text:text??''}:S.view.pendingDecision?{kind:'clarification_answer',pendingDecisionId:S.view.pendingDecision.pendingDecisionId,answer:text}:{kind:'freeform',text};
+ const input=action?.kind?action:action?{kind:'action',action,text:text??''}:S.view.pendingDecision&&!/^(?:OOC:|\[OOC\]|\/ooc\b)/i.test(text?.trim()??'')?{kind:'clarification_answer',pendingDecisionId:S.view.pendingDecision.pendingDecisionId,answer:text}:{kind:'freeform',text};
  const payload={commandId:key,sessionId:timelineId,expectedRevision:S.view.timeline.revision,actorId:characterId,mode:S.view.playMode??'STORY',input};
  const result=await api(endpoint('commands'),payload,'POST',key);
  if(!acceptsTurnResponse({timelineId:S.timeline?.id,characterId:S.character?.id,viewTimelineId:S.view?.timeline.id,revision:S.view?.timeline.revision},{timelineId:result.sessionId,revision:result.revision},{timelineId,characterId}))return result;
  S.view.pendingDecision=result.pendingDecision;
  if(result.status==='NEEDS_CLARIFICATION'){await render();return result;}
- if(result.status==='PRESENTED'){if(result.presentation?.text)notify(result.presentation.text);await render();return result;}
+ if(result.status==='PRESENTED'){if(clearDraft)sessionRemove(draftKey());await render();if(result.presentation?.kind==='director'){const dialog=$('dialog',{class:'mode-dialog','aria-label':'Narrative direction'},$('div',{class:'mode-dialog-inner'},$('h2',{},'Narrative direction'),...result.presentation.text.split('\n\n').map(text=>$('p',{},text)),result.inspection?renderValue(result.inspection):null,button('Close',()=>dialog.close())));document.body.append(dialog);dialog.addEventListener('close',()=>dialog.remove(),{once:true});dialog.showModal();}else if(result.presentation?.text)notify(result.presentation.text);return result;}
  if(result.deathTransition)S.deathTransition=result.deathTransition;
  if(clearDraft){sessionRemove(draftKey());S.page='Chronicle';}
  await render();

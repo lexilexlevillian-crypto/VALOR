@@ -85,7 +85,7 @@ function visibleTo(s:State,e:Entity,observerId:string,observer:Data<'character'>
 }
 export function project(s:State,e:Entity,observerId:string):Entity {
  const copy=structuredClone(e);
- if(e.kind==='character'){const identity=data(e,'character').identityDisclosure;if(identity?.concealed&&e.id!==observerId&&!identity.knownByIds.includes(observerId))copy.name=identity.label;}
+ if(e.kind==='character'){delete copy.data.perception;const identity=data(e,'character').identityDisclosure;if(identity?.concealed&&e.id!==observerId&&!identity.knownByIds.includes(observerId))copy.name=identity.label;}
  if(e.kind==='item'&&e.data.mechanism){const {attempts,lockDifficulty,forceDifficulty,noiseDifficulty,throwDifficulty,keyId,...safe}=e.data.mechanism as Record<string,unknown>;for(const field of ['destinationId','obstructedById'])if(typeof safe[field]==='string'&&!s.entities.some(target=>target.id===safe[field]&&visible(s,target,observerId)))delete safe[field];copy.data.mechanism=safe as Entity['data'][string];}
  if(e.kind==='media')delete copy.data.body;
  copy.data.mediaIds=((e.data.mediaIds??[]) as string[]).filter(id=>{const media=s.entities.find(e=>e.id===id&&e.kind==='media');return media&&visible(s,media,observerId);});
@@ -105,7 +105,7 @@ export function project(s:State,e:Entity,observerId:string):Entity {
  const own=e.id===observerId||e.kind==='item'&&carriedBy(s,e,observerId)||e.data.ownerId===observerId||e.kind==='vehicle'&&vehicleHasPermission(s,e,observerId,'manage')||e.kind==='item'&&e.data.category==='phone'&&(e.data.authorizedUserIds as string[]??[]).includes(observerId);
  if(e.kind==='item'&&!own){delete copy.data.secretContents;delete copy.data.provenanceRecords;delete copy.data.eventHistory;}
  if(e.kind==='vehicle'&&!own){for(const key of ['vin','registration','keyId','keyIds','accessGrants','authorizedDriverIds','hotwiredByIds','custodianId','custodyRole','custodyHistory','theftReports','repairRecords','history'])delete copy.data[key];if(!(e.data.discoveredByIds as string[]).includes(observerId)){delete copy.data.stolen;delete copy.data.theftStatus;}}
- if(e.kind==='character'&&!own){
+ if(e.kind==='character'&&!own){delete copy.data.perception;
   const d=data(e,'character'),actor=data(getEntity(s,observerId),'character');
   const learned=knows(s,observerId,e.id),permitted=(field:string)=>{const policy=d.profileVisibility[field];return policy==='campaign'||policy==='owner'&&own||policy==='knowledge'&&learned;};
   const presentation:Record<string,unknown>={locationId:d.locationId===actor.locationId?d.locationId:null,condition:d.condition,characterSchemaVersion:d.characterSchemaVersion,sections:d.sections};
@@ -151,7 +151,7 @@ export function project(s:State,e:Entity,observerId:string):Entity {
  }
  if(e.kind==='character'&&e.id===observerId){const character=data(e,'character'),band=(value:number)=>value<25?'low':value<50?'moderate':value<75?'high':'severe',needs=needsPresentation(s);copy.data.healthSummary={condition:character.condition,blood:character.blood>75?'stable':character.blood>25?'reduced':'critical',pain:band(character.pain),fatigue:band(character.fatigue),intoxication:band(character.intoxication),withdrawal:character.withdrawalEnabled?band(character.withdrawal):'not-enabled',activeEffects:character.activeSubstances.filter(exposure=>Date.parse(exposure.expiresAt)>Date.parse(s.clock)).map(exposure=>({name:exposure.name,kind:exposure.kind,expiresAt:exposure.expiresAt}))};if(needsEnabled(s)&&needs.ui==='summary'){copy.data.needsSummary={hunger:band(character.hunger),thirst:band(character.thirst),hygiene:character.hygiene>75?'clean':character.hygiene>25?'needs-attention':'poor'};for(const key of ['hunger','thirst','hygiene'])delete copy.data[key];}else if(!needsEnabled(s)||needs.ui==='hidden')for(const key of ['hunger','thirst','hygiene','needsContext'])delete copy.data[key];for(const key of ['blood','pain','intoxication','withdrawal','withdrawalEnabled','dependence','lastDoseAt','activeSubstances','restUntil'])delete copy.data[key];}
  if(e.kind==='character'&&e.id!==observerId){delete copy.data.voiceProfile;delete copy.data.communication;}
- if(e.kind==='location'&&copy.data.narrative){const rich=copy.data.narrative as {details:Array<{visibility:string}>};rich.details=rich.details.filter(detail=>detail.visibility==='public');}
+ if(e.kind==='location'&&copy.data.narrative){const rich=copy.data.narrative as {details:Array<{visibility:string;skillId?:string|null;minimumSkill?:number}>},skills=data(getEntity(s,observerId,'character'),'character').skills;rich.details=rich.details.filter(detail=>detail.visibility==='public'&&(!detail.skillId||(skills[detail.skillId]??0)>=(detail.minimumSkill??0)));}
  const sections=(copy.data.sections??[]) as {id:string;parentId:string|null;visibility?:string;archived?:boolean;fields:{visibility:string;archived?:boolean}[]}[];
  // Custom section containers reveal only those fields explicitly allowed to this observer.
  const canSee=(v:string|undefined)=>v==='campaign'||v==='owner'&&own||v==='knowledge'&&knows(s,observerId,e.id);

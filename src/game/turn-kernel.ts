@@ -1,4 +1,6 @@
 import {deterministicNarrative,narrativeValidatorVersion} from './narrative-runtime.ts';
+import {parseDirectorText,saveNarrativeDirective,splitDirectorInput} from './narrative-directives.ts';
+import {narrativeProfileSchema} from './narrative-profile.ts';
 import {coreRulesetVersion} from './turn-rules.ts';
 import {validatePlanReferences,validateCreativeProposal,describeCreativePlan,observerReferenceIds,type TurnPlanner,type CreativeProposal} from './turn-planner.ts';
 import {beginTurnTrace,persistTurnTrace,failureReason} from './turn-pipeline.ts';
@@ -23,14 +25,17 @@ export class TurnKernel {
  async execute(actor:Actor,raw:unknown):Promise<Record<string,any>>{
   const command=turnCommandSchema.parse(raw),id=command.sessionId,characterId=command.actorId,input=command.input;
   await this.game.authorizeCharacter(actor,id,characterId);
+  const split=input.kind==='freeform'?splitDirectorInput(input.text):null;
+  const director=split?parseDirectorText(split.director):null;
+  const canonicalText=input.kind==='freeform'?(split?.canonical??input.text):'';
   // Reserve RNG lineage before the world transaction so rollback cannot reroll.
   const attempt=await beginTurnTrace(this.game.store,{timelineId:id,actorId:actor.id,requestKey:'command_'+checksum(command.commandId),bodyHash:checksum(command),originalText:input.kind==='freeform'?input.text:'',expectedRevision:command.expectedRevision});
   try{
    let proposal:CreativeProposal|null=null;
    // Provider I/O is outside the world transaction. Receipt replay never calls AI.
-   if(input.kind==='freeform'&&this.planner&&!await this.game.store.get('SELECT command_id FROM turn_interactions WHERE command_id=?',command.commandId)){
-    const snapshot=await this.game.load(id),parsed=interpretTurn(snapshot,characterId,input.text);
-    if(parsed.clarification||parsed.clauses.some(c=>c.action.type==='physical'&&c.action.operation==='attempt'))proposal=await this.planner.propose(actor,id,characterId,command.expectedRevision,input.text).catch(()=>null);
+   if(input.kind==='freeform'&&canonicalText&&!director?.message&&!director?.query&&this.planner&&!await this.game.store.get('SELECT command_id FROM turn_interactions WHERE command_id=?',command.commandId)){
+    const snapshot=await this.game.load(id),parsed=interpretTurn(snapshot,characterId,canonicalText);
+    if(parsed.clarification||parsed.clauses.some(c=>c.action.type==='physical'&&c.action.operation==='attempt'))proposal=await this.planner.propose(actor,id,characterId,command.expectedRevision,canonicalText).catch(()=>null);
    }
    const response=await this.game.store.transaction(async()=>{
    const receipt=await this.game.store.get<{timeline_id:string;user_id:string;body_hash:string;result_json:string}>('SELECT * FROM turn_interactions WHERE command_id=?',command.commandId);
@@ -42,7 +47,21 @@ export class TurnKernel {
    let result:Record<string,unknown>,clauses:TurnClause[]|undefined,text='';let interpreted:unknown=null;
    const scene=await currentScene(this.game.store,id,characterId);
    const base={commandId:command.commandId,sessionId:id,revision:t.revision,worldTime:state.clock,control:pending?{holder:'PLAYER',reasonCode:'CLARIFICATION_REQUIRED',actingEntityId:characterId}:scene?.sceneRevision===t.revision?scene.control:controlState(state,characterId)};
-   if(input.kind==='mode_switch'){mode=input.targetMode;result={...base,status:'PRESENTED'};}
+   let directorResult:{text:string;scope?:string}|undefined;
+   if(director?.focus){const view=observerView(state,characterId),targets=view.entities.filter(e=>e.name.toLowerCase()===director.focus!.toLowerCase()||director.focus==='environment'&&e.id===state.entities.find(e=>e.id===characterId)?.data.locationId);if(targets.length===1)directorResult=await saveNarrativeDirective(this.game,actor,id,characterId,mode,{focusId:targets[0]!.id,scope:director.scope});else director.message='Focus was not changed. Name one character or object your character can currently identify.';}
+   if(input.kind==='narrative_directive'||director?.directive)directorResult=await saveNarrativeDirective(this.game,actor,id,characterId,mode,input.kind==='narrative_directive'?input.directive:director!.directive);
+   if(input.kind==='narrative_directive'||split&&(!canonicalText||director?.message||director?.query)){
+    let message=directorResult?.text??director?.message??'No narrative direction was applied.';
+    if(director?.query==='recap'){
+     const turns=await this.game.store.all<{narration:string}>('SELECT narration FROM story_turns WHERE timeline_id=? AND character_id=? ORDER BY rowid DESC LIMIT 5',id,characterId);
+     message=turns.reverse().map(t=>t.narration).join('\n\n')||'No events have been narrated for this character.';
+    }else if(director?.query==='knowledge'){
+     const view=observerView(state,characterId);
+     message='Only your character’s accessible information is shown. Unknown locations and hidden NPC thoughts remain unknown.';
+     result={...base,status:'PRESENTED',inspection:view};
+    }else if(director?.query==='options')message='Available actions: '+turnAffordances(state,characterId,t.revision).filter(a=>a.enabled).map(a=>a.label).join('; ')+'.';
+    result={...base,...result!,status:'PRESENTED',presentation:{kind:'director',text:message}};
+   }else if(input.kind==='mode_switch'){mode=input.targetMode;result={...base,status:'PRESENTED'};}
    else if(input.kind==='inspection'){
     const view=observerView(state,characterId);
     if(input.targetId){const target=view.entities.find(e=>e.id===input.targetId);ensure(target,404,'target_unavailable');result={...base,status:'PRESENTED',inspection:target};}
@@ -60,9 +79,11 @@ export class TurnKernel {
     const batch=await this.game.store.get<{batch_json:string}>('SELECT batch_json FROM turn_resolution_batches WHERE event_id=?',input.turnId);
     const original=batch?JSON.parse(batch.batch_json):null;
     const frozen=await this.game.store.get<{context_json:string}>('SELECT context_json FROM turn_narrative_contexts WHERE event_id=?',turn.id),narrative=frozen?JSON.parse(frozen.context_json).narrative:null;
+    if(narrative&&input.patch)narrative.profile=narrativeProfileSchema.parse({...narrative.profile,...input.patch});
     const narration=narrative?deterministicNarrative(narrative):(JSON.parse(turn.permitted_json) as Array<{text:string}>).map(e=>e.text).join('\n\n')||'The action resolved. No observer-visible change was recorded.';
     const versionId=randomUUID();await this.game.store.run('INSERT INTO narration_versions VALUES (?,?,?,?,?)',versionId,turn.id,narration,'grounded',new Date().toISOString());
-    if(narrative)await this.game.store.run('INSERT INTO narrative_render_records VALUES (?,?,?,?,?,?,?)',randomUUID(),turn.id,id,actor.id,versionId,JSON.stringify({turnId:turn.id,eventIds:narrative.eventIds,profile:narrative.profile,promptVersion:'narrative-v1',model:{provider:'grounded',model:'deterministic-v2'},validatorVersion:narrativeValidatorVersion,retryCount:0,status:'regenerated',mechanicsChanged:false}),new Date().toISOString());
+    await this.game.store.run('UPDATE story_turns SET narration=?,narration_status=? WHERE id=?',narration,'grounded',turn.id);
+    if(narrative)await this.game.store.run('INSERT INTO narrative_render_records VALUES (?,?,?,?,?,?,?)',randomUUID(),turn.id,id,actor.id,versionId,JSON.stringify({turnId:turn.id,eventIds:narrative.eventIds,profile:narrative.profile,promptVersion:'narrative-v3',model:{provider:'grounded',model:'deterministic-v2'},validatorVersion:narrativeValidatorVersion,retryCount:0,status:'regenerated',mechanicsChanged:false}),new Date().toISOString());
     result={...base,status:'PRESENTED',turnId:turn.id,narration,versionId,turnRevision:original?original.baseRevision+1:null,control:original?.resolution?.control??original?.nextControl??base.control,rerolled:false};
    }else if(input.kind==='edit_request'){
     const branch=await this.game.branch(actor,id,input.edit.saveId,input.edit.name);
@@ -73,7 +94,7 @@ export class TurnKernel {
      ensure(pending.basedOnRevision===t.revision,409,'clarification_stale');
      if(pending.proposedClauses&&input.answer==='confirm_plan'){clauses=pending.proposedClauses;text=pending.originalText;}
      else text=input.answer;const option=pending.options?.find(option=>option.id===input.answer||option.label.toLowerCase()===input.answer.toLowerCase());if(!clauses&&option?.answerText)text=option.answerText;else if(!clauses&&option)text=pending.originalText.replace(/\b(him|her|them|he|she|it)\b/gi,()=>option.label);
-    }else if(input.kind==='freeform'){text=input.text;}
+    }else if(input.kind==='freeform'){text=canonicalText;}
     else if(input.kind==='action'){text=input.text??'';clauses=[{clauseId:'1',dependency:'NONE',action:input.action}];}
     else {
      const choice=turnAffordances(state,characterId,t.revision).find(item=>item.affordanceId===input.affordanceId);

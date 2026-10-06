@@ -7,6 +7,8 @@ const safeCodes=new Set([
  'invalid_narrative_sources','incomplete_narrative_sources','player_dialogue_not_preserved','player_agency_violation','narration_too_large','story_requires_third_person','story_requires_past_tense','invalid_proposal_choice',
  'narrative_unknown_source','narrative_duplicate_event','narrative_endpoint_order','narrative_missing_required_fact','narrative_unsupported_claim','narration_cannot_mutate_world','narrative_period_violation','narrative_control_retry','narrative_mechanical_claim_rejected','narrative_repetition_rejected','narrative_content_rejected',
  'story_retry_cannot_expand','story_addition_not_allowed','story_location_required','story_world_limit','story_name_already_exists','story_detail_already_exists','story_npc_requires_public_scene','story_place_requires_public_outdoors',
+ ...['state','agency','knowledge','identity','space','time','inventory','health','handoff','dialogue','voice','style','combat','consent','audibility','professional','subjective','lore','montage','incomplete','context_limit','failed'].map(check=>'narrative_review_'+check),
+ 'narrative_literal_changed','narrative_invented_dialogue','narrative_numeric_claim','narrative_offscreen_claim','narrative_voice_drift','narrative_voice_ownership','narrative_style_profanity',
  'narrative_context_unavailable','intent_context_unavailable','creator_assistance_not_configured',
  ...['deepinfra','gemini','provider'].flatMap(provider=>['request_failed','empty_response','response_too_large','invalid_response','incomplete_response','invalid_output','invalid_json','route_mismatch'].map(code=>provider+'_'+code))
 ]);

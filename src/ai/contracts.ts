@@ -83,6 +83,6 @@ export function providerRequestContent(request:AiRequest){
  if(request.purpose!=='narration')return {traceId:request.traceId,purpose:request.purpose,allowedTools:request.allowedTools,context:request.context};
  return {context:{provenance:request.context.provenance.map(({id,source,trust,content})=>{
   const fragment=content as {id?:unknown;text?:unknown}|null;
-  return {id,source,trust,content:fragment&&fragment.id===id&&typeof fragment.text==='string'?{text:fragment.text}:content};
+  return {id,source,trust,content:fragment&&fragment.id===id&&typeof fragment.text==='string'?{...fragment,id:undefined}:content};
  })}};
 }

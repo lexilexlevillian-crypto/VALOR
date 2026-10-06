@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {fixture,key} from './helpers.ts';
 import {Game,checksum} from '../src/game/engine.ts';
-import {validateEntity} from '../src/game/model.ts';
+import {validateEntity,data} from '../src/game/model.ts';
 
 async function setup(){
  const f=await fixture(),game=new Game(f.store),timeline=await game.initialize(f.creator,f.campaign.id);
@@ -63,12 +63,20 @@ test('legacy upgraded saves remain readable and versioned exports expose compati
   const manual=await f.game.save(f.creator,f.timeline.id,{name:'Versioned checkpoint'});
   const compatibility=await f.game.saveCompatibility(f.creator,f.timeline.id,manual.id);assert.equal(compatibility.metadata?.schemaVersion,1);assert.deepEqual(compatibility.migrations,[]);
   const bundle=await f.game.export(f.creator,f.timeline.id,{mediaStrategy:'references'});
-  assert.equal(bundle.manifest.formatVersion,2);assert.equal(bundle.manifest.schemaVersion,47);assert.equal(bundle.manifest.mediaStrategy,'references');assert.equal(bundle.manifest.visibility,'preserved');assert.equal(bundle.manifest.payloadChecksum,checksum(bundle.payload));
+  assert.equal(bundle.manifest.formatVersion,2);assert.equal(bundle.manifest.schemaVersion,48);assert.equal(bundle.manifest.mediaStrategy,'references');assert.equal(bundle.manifest.visibility,'preserved');assert.equal(bundle.manifest.payloadChecksum,checksum(bundle.payload));
   const legacy={payload:structuredClone(bundle.payload),checksum:checksum(bundle.payload)};
   const preview=await f.game.import(f.creator,f.timeline.id,'Upgraded legacy export',legacy,true) as {migrations:string[]};
   assert.ok(preview.migrations.includes('legacy-export-envelope'));assert.ok(preview.migrations.includes('legacy-snapshot-metadata-defaults'));
   const legacyId=randomUUID();await f.store.run('INSERT INTO saves VALUES (?,?,?,?,?,?,?,?,?)',legacyId,f.timeline.id,'Legacy checkpoint',1,JSON.stringify(legacy.payload),legacy.checksum,f.creator.id,new Date().toISOString(),0);
   const legacyCompatibility=await f.game.saveCompatibility(f.creator,f.timeline.id,legacyId);assert.ok(legacyCompatibility.migrations.includes('legacy-v1-metadata-defaults'));
+  // Schema-47 saves with metadata must be verified before adding new defaults.
+  const historicalCore=structuredClone(legacy.payload);delete historicalCore.state.settings.narrationAttempts;
+  for(const entity of historicalCore.state.entities)if(entity.kind==='character')delete entity.data.perception;
+  const historical={...historicalCore,metadata:{...compatibility.metadata!,contentChecksum:checksum(historicalCore)}},historicalId=randomUUID();
+  await f.store.run('INSERT INTO saves VALUES (?,?,?,?,?,?,?,?,?)',historicalId,f.timeline.id,'Pre-System-2 metadata',historical.metadata.revision,JSON.stringify(historical),checksum(historical),f.creator.id,new Date().toISOString(),0);
+  assert.equal((await f.game.saveCompatibility(f.creator,f.timeline.id,historicalId)).projectionRebuild,'validated');
+  const restored=await f.game.branch(f.creator,f.timeline.id,historicalId,'Older metadata restored');
+  assert.equal(data((await f.game.load(restored.id)).entities.find(entity=>entity.id===f.pc)!,'character').perception.hearing,100);
  }finally{await f.close();}
 });
 

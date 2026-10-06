@@ -92,7 +92,7 @@ export function buildApp(store:Store,settings:Config,logging:boolean|{write(chun
     return {name:'VALOR',version:'0.2.0-alpha',status:'integrated-alpha',playable:true,client:'/app'};
   });
   app.get('/healthz',async()=>{(await store.get('SELECT 1'));return {status:'ok'};});
-  app.get('/readyz',async()=>{const schema=await store.get<{version:number}>('SELECT max(version) version FROM schema_migrations');ensure(schema?.version===47,503,'schema_not_ready');return {status:'ready',schemaVersion:schema.version};});
+  app.get('/readyz',async()=>{const schema=await store.get<{version:number}>('SELECT max(version) version FROM schema_migrations');ensure(schema?.version===48,503,'schema_not_ready');return {status:'ready',schemaVersion:schema.version};});
   app.post('/auth/login',async(request,reply)=>{
     const input=credentials.parse(request.body);
     (await auth.limit('login-account',input.email,settings.loginLimit,900000));

@@ -33,7 +33,7 @@ class GatewayQueue {
 
 type CacheEntry={expires:number;response:AiProviderResponse};
 export type GatewayOptions={maxConcurrent?:number;maxQueued?:number;maxQueueWaitMs?:number;audit?:AiAuditSink;now?:()=>number;};
-export type ExecuteOptions<T>={request:AiRequest;validate:(output:unknown)=>T;toolAuthorization?:ToolAuthorization;onRetry?:(request:AiRequest,reason:string,attempt:number)=>void;fallback?:(reason:string)=>T;signal?:AbortSignal;};
+export type ExecuteOptions<T>={request:AiRequest;validate:(output:unknown)=>T|Promise<T>;toolAuthorization?:ToolAuthorization;onRetry?:(request:AiRequest,reason:string,attempt:number)=>void;fallback?:(reason:string)=>T;signal?:AbortSignal;};
 export type GatewayResult<T>={traceId:string;status:'succeeded'|'cached'|'fallback';output:T;usage:{inputTokens:number;outputTokens:number};attempts:number;toolResults:unknown[];fallbackMessage?:string;failureReason?:string;};
 
 export class AiGateway {
@@ -54,30 +54,30 @@ export class AiGateway {
   const log=redactedRequestLog(request);await this.audit.record({traceId:request.traceId,status:'queued',attempts:0,inputTokens:0,outputTokens:0,request:log,at:new Date(this.now()).toISOString()});
   const key=safeCacheKey(request),cached=key&&this.cache.get(key);
   if(cached&&cached.expires>this.now()){
-   const output=options.validate(cached.response.output);await this.audit.record({traceId:request.traceId,status:'cached',attempts:0,...cached.response.usage,at:new Date(this.now()).toISOString()});
+   const output=await options.validate(cached.response.output);await this.audit.record({traceId:request.traceId,status:'cached',attempts:0,...cached.response.usage,at:new Date(this.now()).toISOString()});
    return {traceId:request.traceId,status:'cached',output,usage:cached.response.usage,attempts:0,toolResults:[]};
   }
   try{await this.queue.enter();}catch(error){return this.useFallback(options,error instanceof Error?error.message:'ai_queue_rejected',0,'queue-rejected');}
-  let attempts=0,lastReason='ai_provider_failed';
+  let attempts=0,lastReason='ai_provider_failed';const usage={inputTokens:0,outputTokens:0};
   try{
    await this.audit.record({traceId:request.traceId,status:'running',attempts:0,inputTokens:0,outputTokens:0,at:new Date(this.now()).toISOString()});
    for(;attempts<request.budget.maxAttempts;attempts++){
     if(options.signal?.aborted){await this.audit.record({traceId:request.traceId,status:'canceled',attempts,inputTokens:0,outputTokens:0,reason:'ai_canceled',at:new Date(this.now()).toISOString()});throw new Error('ai_canceled');}
     let stage:FailureStage='provider';
     try{
-     const response=await this.invoke(provider,request,options.signal);stage='tools';
+     const response=await this.invoke(provider,request,options.signal);usage.inputTokens+=response.usage.inputTokens;usage.outputTokens+=response.usage.outputTokens;stage='tools';
      const toolResults=validateToolCalls(response.toolCalls,request.allowedTools,options.toolAuthorization??{});stage='output';
-     const output=options.validate(response.output);
+     const output=await options.validate(response.output);
      if(response.usage.inputTokens>request.budget.maxInputTokens||response.usage.outputTokens>request.budget.maxOutputTokens||response.usage.inputTokens+response.usage.outputTokens>request.budget.maxTotalTokens)throw new Error('ai_usage_exceeded_budget');
      if(key&&request.cache.kind==='reproducible')this.cache.set(key,{response,expires:this.now()+request.cache.ttlSeconds*1000});
-     await this.audit.record({traceId:request.traceId,status:'succeeded',attempts:attempts+1,...response.usage,at:new Date(this.now()).toISOString()});
-     return {traceId:request.traceId,status:'succeeded',output,usage:response.usage,attempts:attempts+1,toolResults};
+     await this.audit.record({traceId:request.traceId,status:'succeeded',attempts:attempts+1,...usage,at:new Date(this.now()).toISOString()});
+     return {traceId:request.traceId,status:'succeeded',output,usage,attempts:attempts+1,toolResults};
     }catch(error){
      if(options.signal?.aborted){await this.audit.record({traceId:request.traceId,status:'canceled',attempts:attempts+1,inputTokens:0,outputTokens:0,reason:'ai_canceled',at:new Date(this.now()).toISOString()});throw new Error('ai_canceled',{cause:error});}
      lastReason=safeAiFailure(error,stage);if(attempts+1<request.budget.maxAttempts)options.onRetry?.(request,lastReason,attempts+1);
     }
    }
-   return this.useFallback(options,lastReason,attempts,lastReason==='ai_timeout'?'timed-out':'failed');
+   return this.useFallback(options,lastReason,attempts,lastReason==='ai_timeout'?'timed-out':'failed',usage);
   }finally{this.queue.leave();}
  }
  async *stream<T>(options:ExecuteOptions<T>):AsyncGenerator<{type:'complete';result:GatewayResult<T>}>{
@@ -95,11 +95,11 @@ export class AiGateway {
    return response;
   }catch(error){if(timeout.aborted&&!external?.aborted)throw new Error('ai_timeout',{cause:error});throw error;}finally{clearTimeout(timer);if(abort)external?.removeEventListener('abort',abort);}
  }
- private async useFallback<T>(options:ExecuteOptions<T>,reason:string,attempts:number,status:Extract<AiAuditStatus,'failed'|'timed-out'|'queue-rejected'>):Promise<GatewayResult<T>>{
+ private async useFallback<T>(options:ExecuteOptions<T>,reason:string,attempts:number,status:Extract<AiAuditStatus,'failed'|'timed-out'|'queue-rejected'>,usage={inputTokens:0,outputTokens:0}):Promise<GatewayResult<T>>{
   const fallbackMessage=options.request.purpose==='narration'?narrationFailureMessage(reason):options.request.purpose==='classification'?fallbackMessages.interpretation:options.request.purpose==='creator-assistance'?fallbackMessages.creator:fallbackMessages.extraction;
-  await this.audit.record({traceId:options.request.traceId,status:options.fallback?'fallback':status,attempts,inputTokens:0,outputTokens:0,reason,at:new Date(this.now()).toISOString()});
+  await this.audit.record({traceId:options.request.traceId,status:options.fallback?'fallback':status,attempts,...usage,reason,at:new Date(this.now()).toISOString()});
   if(!options.fallback)throw new Error(reason);
-  return {traceId:options.request.traceId,status:'fallback',output:options.fallback(reason),usage:{inputTokens:0,outputTokens:0},attempts,toolResults:[],fallbackMessage,failureReason:reason};
+  return {traceId:options.request.traceId,status:'fallback',output:options.fallback(reason),usage,attempts,toolResults:[],fallbackMessage,failureReason:reason};
  }
 }
 

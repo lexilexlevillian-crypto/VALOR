@@ -78,6 +78,8 @@ Command inspection panels include scene, inventory, phone, journal, health and c
 
 ## System 02 narrative preferences and communication
 
+Schema 48 adds noncanonical OOC commands, temporary directives, and style-patched regeneration through the turn command endpoint. See the [master-spec implementation report](SYSTEM_02_MASTER_SPEC_REPORT.md) for payloads, expiration, private PC authorship, and validation behavior.
+
 All endpoints require the existing authenticated session and tenant/character access. POST requests require the existing CSRF protections.
 
 | Method | Path | Input / access |

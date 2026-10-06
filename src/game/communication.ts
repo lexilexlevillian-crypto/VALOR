@@ -1,3 +1,4 @@
+import {reception} from './narrative-perception.ts';
 import {data,getEntity,type State} from './model.ts';
 import {emit,type Effect} from './simulation.ts';
 import {fact,visible} from './epistemics.ts';
@@ -12,9 +13,9 @@ export function communicate(s:State,speakerId:string,input:Communication,eventId
  const audience=s.entities.filter(e=>e.kind==='character'&&!e.archived&&e.data.condition==='conscious'&&(e.id===speakerId||c.locationId!==null&&e.data.locationId===c.locationId));
  const understood:string[]=[];
  for(const person of audience){
-  const self=person.id===speakerId,isTarget=person.id===target?.id,canReceive=self||(input.method==='write'?(target?isTarget:visible(s,speaker,person.id)):input.method==='sign'?visible(s,speaker,person.id):input.volume!=='whisper'||isTarget||noise<25);
-  if(!canReceive)continue;
-  const receiver=communicationProfileSchema.parse(data(person,'character').communication??{}),level=self?100:Math.min(profile.languages[input.language]?.[channel]??0,receiver.languages[input.language]?.[channel]??0),comprehension=level>=80?'full':level>0?'partial':'none';
+  const self=person.id===speakerId,isTarget=person.id===target?.id,canReceive=self||(input.method==='write'?(target?isTarget:visible(s,speaker,person.id)):input.method==='sign'?visible(s,speaker,person.id):input.volume==='whisper'?noise<25&&(target?isTarget:true):noise<(input.volume==='shout'?100:70));
+  const received=reception(s,speakerId,person.id,input.method,input.volume);if(!canReceive||received===0)continue;
+  const receiver=communicationProfileSchema.parse(data(person,'character').communication??{}),level=self?100:Math.min(received,profile.languages[input.language]?.[channel]??0,receiver.languages[input.language]?.[channel]??0),comprehension=level>=80?'full':level>0?'partial':'none';
   const text=comprehension==='full'?(input.method==='say'?input.text:speaker.name+(input.method==='sign'?' signed, *':' wrote, “')+input.text+(input.method==='sign'?'*':'”')):speaker.name+(input.method==='sign'?' signed':input.method==='write'?' wrote':' spoke')+' in '+input.language+(comprehension==='partial'?'; only fragments were understood.':'; the words were not understood.');
   emit(effects,text,[person.id],c.playable?'player.dialogue':'npc.dialogue',speakerId);
   const relation=target?s.entities.find(e=>e.kind==='relationship'&&e.data.fromId===speakerId&&e.data.toId===target.id):undefined,labels=(relation?.data.labels??[]) as string[],register=labels.some(l=>['marry','date','commit','cohabit'].includes(l))?'intimate':labels.some(l=>['sibling','family','parent','child'].includes(l))?'family':labels.includes('enemy')?'enemy':labels.some(l=>['coworker','boss','employee','professional'].includes(l))?'professional':'stranger';
