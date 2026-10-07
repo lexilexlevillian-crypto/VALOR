@@ -58,21 +58,21 @@ test('deterministic fixtures and projection repair require fresh exact previews 
  }finally{await f.close();}
 });
 
-test('read-first debug and operational views identify their sources and readiness requires schema 50',async()=>{
+test('read-first debug and operational views identify their sources and readiness requires schema 51',async()=>{
  const f=await setup();try{
   await f.store.run('INSERT INTO operational_metric_events(campaign_id,timeline_id,metric,value,status,dimensions_json,created_at) VALUES (?,?,?,?,?,?,?)',f.campaign.id,f.timeline.id,'api_latency_ms',12,'succeeded','{}',new Date().toISOString());
   const debug=await f.game.developerDebugSnapshot(f.creator,f.timeline.id),operations=await f.game.operationalMetrics(f.creator,f.timeline.id);
-  assert.match(debug.sourceOfTruth.events,/immutable/);assert.equal(debug.timeline.id,f.timeline.id);assert.equal(operations.schemaVersion,50);assert.equal(operations.sourceOfTruth.queue,'game_outbox');assert.equal(operations.sourceOfTruth.simulation,'turn_trace_steps deterministic-simulation');assert.ok(operations.api.some(row=>row.metric==='api_latency_ms'));
-  const ready=await f.app.inject({method:'GET',url:'/readyz'});assert.equal(ready.statusCode,200);assert.deepEqual(ready.json(),{status:'ready',schemaVersion:50});
+  assert.match(debug.sourceOfTruth.events,/immutable/);assert.equal(debug.timeline.id,f.timeline.id);assert.equal(operations.schemaVersion,51);assert.equal(operations.sourceOfTruth.queue,'game_outbox');assert.equal(operations.sourceOfTruth.simulation,'turn_trace_steps deterministic-simulation');assert.ok(operations.api.some(row=>row.metric==='api_latency_ms'));
+  const ready=await f.app.inject({method:'GET',url:'/readyz'});assert.equal(ready.statusCode,200);assert.deepEqual(ready.json(),{status:'ready',schemaVersion:51});
   assert.ok(await f.store.get('SELECT 1 FROM operational_metric_events WHERE metric=?','api_latency_ms'));
  }finally{await f.close();}
 });
 
-test('release rehearsal creates and independently verifies a schema-50 recovery database',async()=>{
+test('release rehearsal creates and independently verifies a schema-51 recovery database',async()=>{
  const dir=mkdtempSync(join(tmpdir(),'valor-release-')),source=join(dir,'source.sqlite'),destination=join(dir,'restored.sqlite');
  try{
   const result=spawnSync(process.execPath,['src/cli.ts','release:rehearse',destination],{cwd:process.cwd(),encoding:'utf8',env:{...process.env,DATABASE_PATH:source,TURSO_DATABASE_URL:'',TURSO_AUTH_TOKEN:'',NODE_ENV:'test'}});
-  assert.equal(result.status,0,result.stderr);const report=JSON.parse(result.stdout.trim());assert.equal(report.status,'ready');assert.equal(report.schemaVersion,50);assert.equal(report.integrity,'ok');assert.deepEqual(report.sourceCounts,report.restoredCounts);
-  const restored=new Store(destination);try{assert.equal((await restored.get<{version:number}>('SELECT max(version) AS version FROM schema_migrations'))?.version,50);assert.deepEqual(await restored.all('PRAGMA foreign_key_check'),[]);}finally{restored.close();}
+  assert.equal(result.status,0,result.stderr);const report=JSON.parse(result.stdout.trim());assert.equal(report.status,'ready');assert.equal(report.schemaVersion,51);assert.equal(report.integrity,'ok');assert.deepEqual(report.sourceCounts,report.restoredCounts);
+  const restored=new Store(destination);try{assert.equal((await restored.get<{version:number}>('SELECT max(version) AS version FROM schema_migrations'))?.version,51);assert.deepEqual(await restored.all('PRAGMA foreign_key_check'),[]);}finally{restored.close();}
  }finally{cleanupTestDirectory(dir);}
 });

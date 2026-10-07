@@ -25,8 +25,8 @@ import type {Effect} from './simulation.ts';
 // Game.branch, and their database transaction / authorization contracts.
 export class TurnKernel {
  readonly game:Game;
- private planner?:TurnPlanner;
- constructor(game:Game,planner?:TurnPlanner){this.game=game;this.planner=planner;}
+ private planner?:TurnPlanner;private npcPlanner?:import('./behavior-planner.ts').NpcBehaviorPlanner;
+ constructor(game:Game,planner?:TurnPlanner,npcPlanner?:import('./behavior-planner.ts').NpcBehaviorPlanner){this.game=game;this.planner=planner;this.npcPlanner=npcPlanner;}
  async execute(actor:Actor,raw:unknown):Promise<Record<string,any>>{
   const command=turnCommandSchema.parse(raw),id=command.sessionId,characterId=command.actorId,input=command.input;
   await this.game.authorizeCharacter(actor,id,characterId);
@@ -49,6 +49,7 @@ export class TurnKernel {
     const snapshot=await this.game.load(id),parsed=interpretTurn(snapshot,characterId,canonicalText);
     if(parsed.clarification||parsed.clauses.some(c=>c.action.type==='physical'&&c.action.operation==='attempt'))proposal=await this.planner.propose(actor,id,characterId,command.expectedRevision,canonicalText).catch(()=>null);
    }
+   const npcPlans=this.npcPlanner&&!memoryAnchor&&!memoryQuery&&!informationQuery&&!authoredBelief&&!director?.message&&!director?.query&&(!split||!!canonicalText)&&['action','freeform','affordance','clarification_answer'].includes(input.kind)&&!await this.game.store.get('SELECT command_id FROM turn_interactions WHERE command_id=?',command.commandId)?await this.npcPlanner.prepare(actor,id,characterId,command.expectedRevision,command.commandId).catch(()=>[]):[];
    const response=await this.game.store.transaction(async()=>{
    const receipt=await this.game.store.get<{timeline_id:string;user_id:string;body_hash:string;result_json:string}>('SELECT * FROM turn_interactions WHERE command_id=?',command.commandId);
    if(receipt){ensure(receipt.timeline_id===id&&receipt.user_id===actor.id&&receipt.body_hash===checksum(command),409,'idempotency_conflict');return JSON.parse(receipt.result_json);}
@@ -141,7 +142,7 @@ export class TurnKernel {
      validatePlanReferences(clauses,visibleIds);
      const cursor=await this.game.store.get<{cursor:string}>('SELECT cursor FROM timeline_turn_cursors WHERE timeline_id=?',id);
      ensure(cursor,409,'turn_cursor_unavailable');
-     const turn=await this.game.turn(actor,id,{revision:t.revision,cursor:cursor.cursor,characterId,action:clauses[0]!.action,clauses,text,mode},'kernel_'+checksum(command.commandId),attempt.seed);
+     const turn=await this.game.turn(actor,id,{revision:t.revision,cursor:cursor.cursor,characterId,action:clauses[0]!.action,clauses,text,mode},'kernel_'+checksum(command.commandId),attempt.seed,npcPlans);
      pending=null;result={...base,...turn,status:'COMMITTED',worldTime:(await this.game.load(id)).clock};
     }
    }

@@ -1,5 +1,6 @@
 import {NarrativePreferences} from './narrative-preferences.ts';
 import {memoryRoutes} from './memory-routes.ts';
+import {behaviorRoutes} from './behavior-routes.ts';
 import {informationRoutes} from './information-routes.ts';
 import {phraseCommunication} from './communication.ts';
 import {CreativeTurnPlanner} from './turn-planner.ts';
@@ -18,14 +19,15 @@ import type {NarrativeProvider} from './ai.ts';
 import {Readable} from 'node:stream';
 import {directProviderIds,directProvidersFromEnvironment,preferredDirectProvider,preferredDirectProviderId} from './direct-provider.ts';
 import {storyActionClarification,storyIntent} from './story-intent.ts';
+import {NpcBehaviorPlanner} from './behavior-planner.ts';
 import {IntentGateway} from './ai-intent.ts';
 import {simulationTiers} from './simulation.ts';
 import {listMasterBank} from './master-bank.ts';
 export function gameRoutes(app:FastifyInstance,game:Game,actor:(r:object)=>Actor,key:(headers:Record<string,unknown>)=>string){
- memoryRoutes(app,game,actor,key);
+  memoryRoutes(app,game,actor,key);behaviorRoutes(app,game,actor,key);
  const world=new SharedWorld(game);
  const directProviders=directProvidersFromEnvironment(),preferredProvider=preferredDirectProvider(directProviders);
- const kernel=new TurnKernel(game,preferredProvider?new CreativeTurnPlanner(game,preferredProvider):undefined);
+ const kernel=new TurnKernel(game,preferredProvider?new CreativeTurnPlanner(game,preferredProvider):undefined,new NpcBehaviorPlanner(game,directProviders));
  app.post('/game/timelines/:id/commands',async r=>{const p=z.object({id}).parse(r.params),body=z.object({sessionId:z.literal(p.id)}).passthrough().parse(r.body);return wrap(()=>kernel.execute(actor(r),body));});
  app.get('/game/lives',async r=>world.lives(actor(r)));
  app.post('/game/lives/:id/delete',async r=>{const p=z.strictObject({id}).parse(r.params);z.strictObject({confirmed:z.literal(true)}).parse(r.body);return world.setLifeDeleted(actor(r),p.id,true);});

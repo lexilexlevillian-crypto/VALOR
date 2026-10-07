@@ -185,7 +185,7 @@ export const systemInterfaces=[
   {
     "id": 16,
     "name": "NPC Autonomy, Schedules, Goals, and Tiered Simulation",
-    "owners": [],
+    "owners": ["npc_behavior"],
     "source": "tests/system16-npc-autonomy.test.ts",
     "reference": {
       "indexPage": 2,

@@ -8,7 +8,7 @@ export function authorityFor(kind:string){const owner=(entityAuthorities as Reco
 export type StateDelta={ownerSystem:string;entityId:string;preconditionRevision:number;operation:'entity.create'|'entity.update'|'entity.archive'|'state.set';value:Record<string,unknown>;causeEventIndex:number};
 export type WriteGrant={ownerSystem:string;kind?:string;fields?:readonly string[];create?:boolean;archive?:boolean;root?:keyof State};
 const encoded=(v:unknown)=>JSON.stringify(v);
-const rootOwner:Record<string,string>={clock:'spacetime',settings:'spacetime',facts:'knowledge',knowledge:'knowledge',beliefs:'knowledge',memories:'knowledge'};
+const rootOwner:Record<string,string>={clock:'spacetime',settings:'spacetime',facts:'knowledge',knowledge:'knowledge',beliefs:'knowledge',memories:'knowledge',information:'knowledge',npcBehavior:'npc_behavior'};
 export function buildDeltas(before:State,after:State,causeEventIndex:number):StateDelta[]{
  const previous=new Map(before.entities.map(e=>[e.id,e])),deltas:StateDelta[]=[];
  for(const entity of after.entities){

@@ -6,6 +6,8 @@ The subsequent System 02 Behavior Bible work adds persistent narrative profiles,
 
 The supplied System 4 memory specification is covered by [SYSTEM_04_MEMORY_IMPLEMENTATION.md](SYSTEM_04_MEMORY_IMPLEMENTATION.md), including schema 50, subjective recall, conservative consolidation, game-time decay, player agency, branch lineage, and Creator repair.
 
+The supplied System 5 NPC character and behavior work is described in [SYSTEM_05_NPC_BEHAVIOR_IMPLEMENTATION.md](SYSTEM_05_NPC_BEHAVIOR_IMPLEMENTATION.md): schema 51, opt-in deterministic profiles, observer-scoped decisions, goals, causal appraisal, lifecycle receipts, real domain outcomes, consent withdrawal and Creator tooling. This includes delayed domain tasks, resource leases, routines, bounded optional AI proposals, versioned milestones and recorded variation. The report records automated evidence and operational limits.
+
 ## System coverage
 
 Current expansion: see [LIFECYCLE_SYSTEMS.md](LIFECYCLE_SYSTEMS.md) for migrations 006–007, gameplay controls, Gemini proposals, media, save deduplication and exact remaining boundaries. [SYSTEMS_EXPANSION.md](SYSTEMS_EXPANSION.md) records the previous checkpoint.

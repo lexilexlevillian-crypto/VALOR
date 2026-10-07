@@ -14,6 +14,8 @@ The supplied System 3 context, knowledge, and information specification is cover
 
 The supplied System 4 memory specification is implemented in the [memory system report](docs/SYSTEM_04_MEMORY_IMPLEMENTATION.md). Journal supports subjective recall and memory anchors; Creator supports provenance inspection and repair. Memory retention, consolidation, source confidence, and branch lineage use schema 50.
 
+The supplied System 5 NPC behavior specification has an [implementation and release report](docs/SYSTEM_05_NPC_BEHAVIOR_IMPLEMENTATION.md). Creator → NPC Registry → Behavior and decisions enables versioned profiles, deterministic decisions, private traces and preview. Schema 51 preserves behavior through saves and branches.
+
 The latest [lifecycle systems guide](docs/LIFECYCLE_SYSTEMS.md) covers NPC route travel and fixed-step catch-up, production, quest branches, social consequences, dispatch, court/estate flows, private image assets, deduplicated saves, Creator diagnostics and confirmed AI action proposals.
 
 ## Run locally

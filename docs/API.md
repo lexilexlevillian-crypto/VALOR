@@ -74,3 +74,8 @@ Example request (replace both IDs with returned UUIDs):
 Success: {id,revision,eventId}, with sectionId or fieldId when created. These IDs are stable and must be retained by clients. No mechanics or AI tool receives arbitrary write access.
 
 Errors: 400 invalid input, 401 unauthenticated/invalid credentials, 403 forbidden/CSRF/origin rejection, 404 unavailable resource, 409 stale revision or idempotency conflict, 413 oversized request, 429 rate limit, 500 generic internal failure. Responses include a server requestId for log correlation, never a stack trace.
+
+
+## NPC behavior (schema 51)
+
+Creator-only profile, preview, inspection, proposal-validation and command routes are documented in [System 5 NPC behavior](SYSTEM_05_NPC_BEHAVIOR_IMPLEMENTATION.md#persistence-and-api). Behavior commands use the normal timeline revision, idempotency key and CSRF requirements. Preview and proposal validation do not execute actions or advance time.

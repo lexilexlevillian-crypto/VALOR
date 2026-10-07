@@ -4,6 +4,8 @@ import {emit,type Effect} from './simulation.ts';
 import {fact,visible} from './epistemics.ts';
 import {communicationProfileSchema} from './narrative-profile.ts';
 import {ensure} from '../contracts.ts';
+import {wakeBehavior} from './behavior.ts';
+import {memoryEffectKind} from './memory.ts';
 import {information,recordObservation} from './information.ts';
 import {simulationId as randomUUID} from './turn-runtime.ts';
 export type Communication={method:'say'|'sign'|'write';language:string;targetId:string|null;text:string;tone?:string;volume?:'whisper'|'normal'|'shout';replyToFactId?:string;requiresResponse?:boolean};
@@ -23,7 +25,8 @@ export function communicate(s:State,speakerId:string,input:Communication,eventId
   const relation=target?s.entities.find(e=>e.kind==='relationship'&&e.data.fromId===speakerId&&e.data.toId===target.id):undefined,labels=(relation?.data.labels??[]) as string[],register=labels.some(l=>['marry','date','commit','cohabit'].includes(l))?'intimate':labels.some(l=>['sibling','family','parent','child'].includes(l))?'family':labels.includes('enemy')?'enemy':labels.some(l=>['coworker','boss','employee','professional'].includes(l))?'professional':'stranger';
   effects.at(-1)!.dialogue={speakerId,register,tone:input.tone??'neutral',volume:input.volume??'normal',targetId:input.targetId,requiresResponse:input.requiresResponse??false,method:input.method,language:input.language,exact:exact||c.playable,text:comprehension==='full'?input.text:'',comprehension};
   const significant=/\b(?:promise|swear|owe|confess|threat|kill|hurt|break|pay|code)\b/i.test(input.text),question=input.text.trim().endsWith('?');
-  recordObservation(s,{id:randomUUID(),observerId:person.id,eventId,at:s.clock,locationId:c.locationId,channel:input.method==='say'?'hearing':input.method==='write'?'reading':'vision',targetId:speakerId,raw:text,clarity:received/100,confidence:level/100,attention:'normal',conditions:{method:input.method,language:input.language,comprehension},recognition:'unidentified',recognizedAsId:null,salience:significant||question?0.9:0.1,propositionIds:[]});
+  const observed=recordObservation(s,{id:randomUUID(),observerId:person.id,eventId,at:s.clock,locationId:c.locationId,channel:input.method==='say'?'hearing':input.method==='write'?'reading':'vision',targetId:speakerId,raw:text,clarity:received/100,confidence:level/100,attention:'normal',conditions:{method:input.method,language:input.language,comprehension,memoryKind:comprehension==='full'?memoryEffectKind('communication',input.text):'communication'},recognition:'unidentified',recognizedAsId:null,salience:significant||question?0.9:0.1,propositionIds:[]});
+  if(observed.durable&&!self&&s.npcBehavior?.actors.some(a=>a.actorId===person.id))wakeBehavior(s,person.id,observed.observation.id,'communication',isTarget);
   if(comprehension==='full'&&(significant||question))information(s).active.push({id:randomUUID(),characterId:person.id,kind:question?'question':/\b(?:kill|hurt|break|threat)\b/i.test(input.text)?'threat':'promise',text:speaker.name+' said: '+input.text,status:'open',sourceIds:[eventId],contradictsIds:[],entityIds:[speakerId],confidence:1,at:s.clock,updatedAt:s.clock,exact:true});
   if(input.replyToFactId){const questionFact=s.facts.find(f=>f.id===input.replyToFactId);if(questionFact)for(const entry of information(s).active)if(entry.characterId===person.id&&entry.kind==='question'&&entry.sourceIds.includes(questionFact.eventId)){entry.status='resolved';entry.updatedAt=s.clock;}}
   if(comprehension==='full')understood.push(person.id);

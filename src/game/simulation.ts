@@ -1,4 +1,6 @@
 import {formExperiencedMemory} from './memory.ts';
+import {stageBehaviorDomain,resolveBehaviorDomain} from './behavior-extensions.ts';
+import {behaviorAwake,behaviorProfile,behaviorActor,behaviorId,decideNpcBehavior,finishNpcBehavior,recoverBehavior,resumeBehaviorAttempt} from './behavior.ts';
 import {communicate,conversationState} from './communication.ts';
 import {eventMetadata} from './turn-runtime.ts';
 import {skillStatus} from '../../public/creation-rules.js';
@@ -12,7 +14,7 @@ import {matchesCondition} from './conditions.ts';
 import {advanceLifecycle,startNpcJourney,finishNpcJourney} from './lifecycle.ts';
 import {recordCrime} from './law.ts';
 import {authoredCompatibility} from './compatibility.ts';
-import {campaignRelationshipSafety,expireConsentRequests,isRomanceIntent,openConsentRequest,respondToConsentRequest,romanceEligibility} from './romance.ts';
+import {cancelPendingConsent,campaignRelationshipSafety,expireConsentRequests,isRomanceIntent,openConsentRequest,respondToConsentRequest,romanceEligibility} from './romance.ts';
 import {acceptsCommunication,communicationDelayMinutes,conversationThread,phonePowered,recipientPhone} from './phone.ts';
 import {injuryRate,needsRate} from './policy.ts';
 import {resolveTraitEffects,socialPresentationDescriptors} from './traits.ts';
@@ -20,7 +22,7 @@ import {applyRelationshipMovement,decayReputations,recordRelationshipHistory,rel
 import {carriedBy,itemPossessor} from './items.ts';
 import {creditCharacter,debitBusiness,jobEligible,postTransaction} from './economy.ts';
 import {advanceEventDeadlines,evaluateEventWatchers} from './events.ts';
-export type Effect={id:string;text:string;observers:string[];type:string;subjectId:string;occurredAt?:string;sourceSystem?:string;causeRefs?:string[];travel?:{originId:string;destinationId:string;mode:string;minutes:number;passengerIds:string[]};dialogue?:{speakerId:string;method:'say'|'sign'|'write';language:string;exact:boolean;text:string;comprehension:'full'|'partial'|'none';register?:string;tone?:string;volume?:string;targetId?:string|null;requiresResponse?:boolean};}
+export type Effect={id:string;text:string;observers:string[];type:string;subjectId:string;occurredAt?:string;sourceSystem?:string;requiresPlayerResponse?:boolean;causeRefs?:string[];travel?:{originId:string;destinationId:string;mode:string;minutes:number;passengerIds:string[]};dialogue?:{speakerId:string;method:'say'|'sign'|'write';language:string;exact:boolean;text:string;comprehension:'full'|'partial'|'none';register?:string;tone?:string;volume?:string;targetId?:string|null;requiresResponse?:boolean};}
 export const simulationTiers={
  active:{
   updateFrequencyMinutes:1,
@@ -105,17 +107,24 @@ export function advance(s:State,minutes:number,eventId:string,effects:Effect[],p
  const began=Date.parse(s.clock),end=began+minutes*60000;
  const mandatory=s.entities.filter(e=>!e.archived&&(e.kind==='watcher'||e.kind==='message')&&e.data.requiresPlayerResponse);
  const speechWindows=s.entities.some(e=>e.kind==='character'&&!e.archived&&!e.data.playable&&e.data.condition==='conscious'&&(e.data.plans as Array<{type:string;targetId:string;enabled:boolean;speechRequiresResponse?:boolean}>).some(p=>p.type==='speak'&&p.enabled&&p.targetId===playerId&&p.speechRequiresResponse!==false));
- const dynamic=Boolean(options.interruptible&&(mandatory.length||speechWindows||options.condition));
+ const managed=Boolean(s.npcBehavior?.actors.length),dynamic=Boolean(options.interruptible&&(mandatory.length||speechWindows||options.condition));
  const cost=minutes*Math.max(1,s.entities.filter(e=>!e.archived&&['character','watcher','production','transition','socialRule'].includes(e.kind)).length);
- if((s.settings.deterministicCatchup||dynamic)&&cost>s.settings.npcCatchupWorkBudget)throw new Error('catchup_work_budget_exceeded_use_shorter_wait');
+ if((s.settings.deterministicCatchup||dynamic||managed)&&cost>s.settings.npcCatchupWorkBudget)throw new Error('catchup_work_budget_exceeded_use_shorter_wait');
  let interrupted=false;
  while(Date.parse(s.clock)<end){
   if(options.condition?.())break;
+  // Due-at-current-time wakes run before advancing. Anchoring reevaluation to its
+  // scheduled time makes a long interval equivalent to smaller client intervals.
+  const dueNow=s.npcBehavior?.actors.some(a=>!a.frozen&&behaviorAwake(s,a)&&!a.currentActionId&&Date.parse(a.nextEvaluationAt)<=Date.parse(s.clock)&&npcsCanAct(s,a.actorId));
+  if(dueNow){const first=effects.length;advanceStep(s,0,eventId,effects,playerId);if(effects.slice(first).some(e=>e.observers.includes(playerId)&&(e.dialogue?.requiresResponse&&e.dialogue.targetId===playerId||e.type==='npc.call'||e.requiresPlayerResponse===true))){interrupted=true;break;}}
   const before=Date.parse(s.clock),previous=new Map(mandatory.map(e=>[e.id,e.kind==='watcher'?e.data.lastFired:e.data.status]));
   const times=mandatory.flatMap(e=>[e.data.dueAt,e.data.availableAt].filter((v):v is string=>typeof v==='string').map(Date.parse)).filter(at=>at>before&&at<=end);
-  const boundary=times.length?Math.min(...times):end;
-  const step=(s.settings.deterministicCatchup||dynamic)?Math.min(60000,end-before,boundary-before):end-before;
+  const due=(s.npcBehavior?.actors??[]).filter(a=>!a.frozen).map(a=>Date.parse(a.nextEvaluationAt)).filter(at=>at>before&&at<=end);
+  const boundary=Math.min(end,...times,...due);
+  const step=(s.settings.deterministicCatchup||dynamic||managed)?Math.min(60000,end-before,boundary-before):end-before;
+  if(!Number.isFinite(step)||step<=0)throw new Error('simulation_interval_no_progress');
   const firstEffect=effects.length;advanceStep(s,step/60000,eventId,effects,playerId);
+  if(managed&&effects.slice(firstEffect).some(e=>e.observers.includes(playerId)&&(e.dialogue?.requiresResponse&&e.dialogue.targetId===playerId||e.type==='npc.call'||e.requiresPlayerResponse===true))){interrupted=true;break;}
   if(options.interruptible){
    interrupted=mandatory.some(e=>e.kind==='watcher'?e.data.lastFired!==previous.get(e.id)&&(e.data.notifyCharacterIds as string[]).includes(playerId):e.data.toId===playerId&&e.data.status!==previous.get(e.id)&&!['draft','queued','sent','failed'].includes(String(e.data.status)));
    const pc=s.entities.find(e=>e.id===playerId);
@@ -125,8 +134,9 @@ export function advance(s:State,minutes:number,eventId:string,effects:Effect[],p
  }
  return {minutes:(Date.parse(s.clock)-began)/60000,interrupted};
 }
+function npcsCanAct(s:State,id:string){return s.entities.some(e=>e.id===id&&!e.archived&&!e.data.playable&&e.data.condition==='conscious');}
 function advanceStep(s:State,minutes:number,eventId:string,effects:Effect[],playerId:string){
- const start=Date.parse(s.clock),end=start+minutes*60000,npcs=s.entities.filter(e=>e.kind==='character'&&!e.archived&&!e.data.playable);
+ const start=Date.parse(s.clock),end=start+minutes*60000,npcs=s.entities.filter(e=>e.kind==='character'&&!e.archived&&!e.data.playable).sort((a,b)=>s.npcBehavior?.actors.length?(a.id<b.id?-1:a.id>b.id?1:0):0);
  if(npcs.length>s.settings.npcBudget)throw new Error('npc_budget_exceeded');
  const slots:{at:number;minute:number;day:number}[]=[];
  if(npcs.some(n=>Array.isArray(n.data.schedule)&&n.data.schedule.length))for(let t=(Math.floor(start/60000)+1)*60000;t<=end;t+=60000){const p=timeParts(new Date(t).toISOString(),s.settings.timezone);slots.push({at:t,minute:p.minute,day:p.day});}
@@ -143,14 +153,14 @@ function advanceStep(s:State,minutes:number,eventId:string,effects:Effect[],play
    for(const scheduled of due){const entry=scheduled.entry,location=getEntity(s,entry.locationId,'location');
     traitTrace(d,scheduled.resolution.applied,entry.activity,'schedule selected at priority '+scheduled.priority,new Date(parts.at).toISOString());
     if(d.condition!=='conscious'){if(entry.required)recordNpcActivity(s,npc,d,eventId,'missed-appointment','schedule',location.id,'Missed '+entry.activity+' because the NPC could not attend.',new Date(parts.at).toISOString());continue;}
-    if(s.settings.npcRouteTravel){if(d.locationId===location.id)d.activity=entry.activity;else startNpcJourney(s,npc,d,location.id,parts.at,entry.activity);continue;}
+    if(s.settings.npcRouteTravel||behaviorProfile(s,npc.id)){if(d.locationId===location.id)d.activity=entry.activity;else startNpcJourney(s,npc,d,location.id,parts.at,entry.activity);continue;}
     d.locationId=location.id;d.activity=entry.activity;
     if(entry.kind==='travel-home'&&location.id===d.homeId&&previousLocation!==location.id)recordNpcActivity(s,npc,d,eventId,'traveled-home','schedule',location.id,'Traveled home according to schedule.',new Date(parts.at).toISOString());
     const observers=atLocation(s,location.id).filter(e=>e.data.playable).map(e=>e.id);
     if(observers.length)emit(effects,npc.name+' arrives and begins '+entry.activity+'.',observers,'npc.schedule',npc.id);
    }
   }
-  if(s.settings.npcRouteTravel)finishNpcJourney(s,npc,d,end,eventId,effects);
+  if(s.settings.npcRouteTravel||behaviorProfile(s,npc.id))finishNpcJourney(s,npc,d,end,eventId,effects);
   d.lastSimulated=new Date(end).toISOString();npc.data=d as Entity['data'];npc.revision++;
   if(previousLocation!==d.locationId)fact(s,npc.id,'location',d.locationId,eventId,atLocation(s,d.locationId).map(e=>e.id));
  }
@@ -263,25 +273,33 @@ function advanceStep(s:State,minutes:number,eventId:string,effects:Effect[],play
  // Bounded deterministic planning; all voluntary actions belong to NPCs.
  let initiatives=0;const initiativeTierContext=npcTierContext(s,playerId,effects);
  for(const npc of npcs){
-  if(initiatives>=s.settings.npcInitiativeBudget)break;
-  const d=data(npc,'character');if(d.condition!=='conscious')continue;
+  if(initiatives>=s.settings.npcInitiativeBudget&&!behaviorProfile(s,npc.id))continue;
+  const d=data(npc,'character'),profile=behaviorProfile(s,npc.id);
+  if(profile){const state=behaviorActor(s,npc.id);if(state.frozen)continue;const resolved=resolveBehaviorDomain(s,state,eventId);if(resolved){effects.push(...resolved.effects);finishNpcBehavior(s,resolved.decision,resolved.performed,resolved.effects,eventId,playerId);continue;}recoverBehavior(state,profile,s.clock);if(state.currentActionId&&state.attempts.some(t=>t.id===state.currentActionId&&t.status==='INTERRUPTED'))resumeBehaviorAttempt(s,npc.id,eventId);if(state.frozen||state.continuation?.waitingForPlayer||!behaviorAwake(s,state)||Date.parse(state.nextEvaluationAt)>Date.parse(s.clock)||state.currentActionId)continue;}
+  if(d.condition!=='conscious')continue;
   const classification=npcSimulationTier(s,npc.id,playerId,effects,initiativeTierContext),tier=classification.tier;d.simulationTier=tier;d.simulationTierReason=classification.reason;
-  const minInterval=simulationTiers[tier].updateFrequencyMinutes;
+  const minInterval=profile?1:simulationTiers[tier].updateFrequencyMinutes;
+  if(profile&&behaviorActor(s,npc.id).tier!=='DORMANT')behaviorActor(s,npc.id).tier=tier==='active'?'ACTIVE':tier==='relevant'?'NEARBY':'BACKGROUND';
+  const decision=profile?decideNpcBehavior(s,npc.id,eventId,new Date(start).toISOString()):null,decisionEffectStart=effects.length;
+  if(decision&&decision.result!=='WAIT')effects.push({id:behaviorId(decision.id,'intent-event'),text:'NPC behavior '+decision.result.toLowerCase()+'.',observers:[],subjectId:npc.id,type:decision.result==='BLOCKED'?'npc.decision.blocked':'npc.intent.selected',sourceSystem:'npc_behavior',occurredAt:s.clock,causeRefs:[eventId]});
+  if(decision&&decision.result!=='SELECTED'){npc.data=d as Entity['data'];continue;}
   const plans=[...d.plans].filter(p=>p.enabled).map(plan=>{const resolution=resolveTraitEffects(s,npc.id,'ai-priority',{planType:plan.type,context:plan.type}),target=s.entities.find(entity=>entity.id===plan.targetId&&!entity.archived),socialTarget=target?.kind==='character'?target.id:target?.kind==='relationship'&&target.data.fromId===npc.id?String(target.data.toId):null;return {plan,resolution,priority:plan.priority+resolution.applied.reduce((sum,effect)=>sum+effect.value,0)+(socialTarget?relationshipBehaviorSignal(s,npc.id,socialTarget,plan.type):0)};}).sort((a,b)=>b.priority-a.priority||a.plan.id.localeCompare(b.plan.id));
   for(const candidate of plans){const plan=candidate.plan;
+   if(decision&&decision.selectedPlanId!==plan.id)continue;
    if(d.preferences[plan.type]==='off')continue;
-   if(!plan.conditions.every(c=>matchesCondition(s,c)))continue;
+   if(!decision&&!plan.conditions.every(c=>matchesCondition(s,c)))continue;
    if(!plan.lastRun)plan.lastRun=new Date(start).toISOString();
    const interval=Math.max(minInterval,plan.cooldownMinutes),previous=Date.parse(plan.lastRun);
    const due=Math.floor((end-previous)/(interval*60000));if(due<1)continue;
    const date=timeParts(s.clock,s.settings.timezone).date;if(plan.runDate!==date){plan.runDate=date;plan.runsToday=0;}
-   const fail=(outcome:'blocked'|'expired')=>{plan.failedAttempts++;plan.lastOutcome=outcome;plan.lastRun=s.clock;if(plan.fallback==='disable'||outcome==='expired')plan.enabled=false;};
+   const fail=(outcome:'blocked'|'expired')=>{plan.failedAttempts++;plan.lastOutcome=outcome;plan.lastRun=s.clock;if(plan.fallback==='disable'||outcome==='expired')plan.enabled=false;if(decision)finishNpcBehavior(s,decision,false,effects.slice(decisionEffectStart),eventId,playerId);};
    if(plan.expiresAt&&Date.parse(plan.expiresAt)<=end){fail('expired');if(plan.fallback==='next-plan')continue;break;}
    if(plan.runsToday>=plan.maxRunsPerDay)continue;
-   if(!plan.constraints.every(c=>matchesCondition(s,c))){fail('blocked');if(plan.fallback==='next-plan')continue;break;}
+   if(!decision&&!plan.constraints.every(c=>matchesCondition(s,c))){fail('blocked');if(plan.fallback==='next-plan')continue;break;}
    const target=s.entities.find(e=>e.id===plan.targetId&&!e.archived);if(!target){fail('blocked');if(plan.fallback==='next-plan')continue;break;}
    const observers=atLocation(s,d.locationId).filter(e=>e.data.playable).map(e=>e.id);
    let performed=false,activityOutcome:Data<'character'>['activityTimeline'][number]['outcome']|null=null,activitySummary='',secondaryOutcome:Data<'character'>['activityTimeline'][number]['outcome']|null=null,secondarySummary='';
+   if(plan.type==='domain'&&decision){const staged=stageBehaviorDomain(s,decision,eventId);if(!staged)fail('blocked');else{npc.data=d as Entity['data'];}break;}
    if(plan.type==='speak'&&target.kind==='character'&&target.data.locationId===d.locationId&&d.locationId&&plan.text&&(plan.speechMethod!=='say'||d.communication?.canSpeak!==false)&&((d.communication?.languages??{en:{spoken:100,written:100,signed:0}})[plan.speechLanguage]?.[plan.speechMethod==='say'?'spoken':plan.speechMethod==='sign'?'signed':'written']??0)>0&&plan.speechFactIds.every(id=>s.knowledge.some(k=>k.observerId===npc.id&&k.factId===id&&(!k.expiresAt||k.expiresAt>s.clock))&&s.facts.some(f=>f.id===id&&!f.retiredAt&&(!f.validFrom||f.validFrom<=s.clock)&&(!f.validUntil||f.validUntil>s.clock)))){const conversation=conversationState(s,npc.id,target.id),text=conversation.repeatCount>1&&plan.repeatedQuestionText?plan.repeatedQuestionText:plan.text;communicate(s,npc.id,{method:plan.speechMethod,language:plan.speechLanguage,targetId:target.id,text,requiresResponse:plan.speechRequiresResponse!==false,...(plan.answerToLatestQuestion&&conversation.latestQuestion?{replyToFactId:conversation.latestQuestion.id}:{})},eventId,effects,plan.speechExact);performed=true;activityOutcome='socialized';activitySummary='Delivered an authored, knowledge-validated speech intent.';}
    if(plan.type==='message'&&target.kind==='character'&&plan.text){
     const device=s.entities.find(e=>e.kind==='item'&&!e.archived&&carriedBy(s,e,npc.id)&&phonePowered(e)&&(e.data.contacts as {characterId:string|null;blocked?:boolean}[]).some(c=>c.characterId===target.id&&!c.blocked));
@@ -295,6 +313,7 @@ function advanceStep(s:State,minutes:number,eventId:string,effects:Effect[],play
     const receiver=recipientPhone(s,target.id,'','call');
     if(device){const accepted=receiver&&acceptsCommunication(receiver,npc.id,'call'),call=add(s,'message','Call from '+npc.name,{fromId:npc.id,toId:target.id,phoneId:device.id,recipientPhoneId:receiver?.id??null,fromNumber:String(device.data.phoneNumber??''),toNumber:String(receiver?.data.phoneNumber??''),participants:[npc.id,target.id],threadId:conversationThread(s,npc.id,target.id,String(receiver?.data.phoneNumber??'')),medium:'call',body:'',at:s.clock,sentAt:s.clock,deliveredAt:accepted?s.clock:null,receivedAt:accepted?s.clock:null,status:accepted?'delivered':'failed',callState:accepted?'ringing':'missed',endedAt:accepted?null:s.clock,sourceEventId:eventId,failureReason:accepted?'':'recipient-unavailable'},'owner');if(device.data.batteryRequired)device.data.battery=Math.max(0,Number(device.data.battery)-1);fact(s,call.id,'call-started',{fromId:npc.id,toId:target.id},eventId,accepted?[npc.id,target.id]:[npc.id]);if(accepted)emit(effects,npc.name+' is calling. No answer has been supplied.',target.data.playable?[target.id]:observers,'npc.call',call.id);performed=true;activityOutcome='called-friend';activitySummary='Placed an authored call without supplying the recipient response.';}
    }
+   if(plan.type==='withdraw'&&target.kind==='character'&&target.id!==npc.id){performed=cancelPendingConsent(s,npc.id,target.id,eventId)>0;if(performed){activityOutcome='relationship-changed';activitySummary='Withdrew a pending advance through the consent owner.';if(target.data.locationId===d.locationId)emit(effects,npc.name+' withdraws the pending advance.',[target.id],'npc.consent-withdrawn',npc.id);}}
    if(plan.type==='breakup'&&target.kind==='relationship'&&target.data.fromId===npc.id){
     const r=data(target,'relationship');if(r.labels.some(label=>['date','commit','cohabit','marry','intimacy'].includes(label))){r.labels=r.labels.filter(label=>!['date','commit','cohabit','marry','intimacy'].includes(label));for(const label of r.labelRecords)if(label.category==='romantic'&&label.status==='active'){label.status='ended';label.endedAt=s.clock;}r.pending='';target.data=r as Entity['data'];recordRelationshipHistory(s,target,eventId,'NPC ended relationship','label',npc.id,'private');
      const recipient=getEntity(s,r.toId,'character');if(recipient.data.locationId===d.locationId&&d.locationId){fact(s,target.id,'relationship-ended',true,eventId,[npc.id,recipient.id]);emit(effects,npc.name+' ends the relationship.',[recipient.id],'npc.relationship',npc.id);}performed=true;activityOutcome='relationship-changed';activitySummary='Ended an authored relationship.';
@@ -322,7 +341,7 @@ function advanceStep(s:State,minutes:number,eventId:string,effects:Effect[],play
       const recipient=getEntity(s,r.toId,'character'),recipientData=data(recipient,'character'),pending=r.consentRequests.some(request=>request.status==='pending'&&request.intent===intent&&request.initiatorId===npc.id&&request.recipientId===recipient.id),eligibility=romanceEligibility(s,npc.id,recipient.id,intent);
       if(!pending&&recipientData.contentFilters.allowNpcInitiative&&eligibility.allowed&&authoredCompatibility(s,npc.id,recipient.id)>=d.compatibility.minimum){
        openConsentRequest(s,target,intent,npc.id,recipient.id,deterministicUuid(eventId+'|consent|'+target.id+'|'+intent+'|'+s.clock));
-       emit(effects,npc.name+' presents a '+intent+' advance. The recipient chooses whether to respond.',recipient.data.playable?[recipient.id]:observers,'npc.offer',npc.id);performed=true;activityOutcome='relationship-changed';activitySummary='Presented one authored advance and waited for a response.';
+       emit(effects,npc.name+' presents a '+intent+' advance. The recipient chooses whether to respond.',recipient.data.playable?[recipient.id]:observers,'npc.offer',npc.id);if(decision&&recipient.id===playerId)effects.at(-1)!.requiresPlayerResponse=true;performed=true;activityOutcome='relationship-changed';activitySummary='Presented one authored advance and waited for a response.';
       }
      }else if(r.toId===npc.id){
       const request=r.consentRequests.find(candidate=>candidate.status==='pending'&&candidate.recipientId===npc.id&&candidate.intent===intent),initiator=request?getEntity(s,request.initiatorId,'character'):null,eligibility=request?romanceEligibility(s,request.initiatorId,npc.id,intent):{allowed:false};
@@ -338,7 +357,7 @@ function advanceStep(s:State,minutes:number,eventId:string,effects:Effect[],play
    }
    if(plan.type==='travel'&&target.kind==='location'&&d.locationId&&target.id!==d.locationId){
     const current=data(getEntity(s,d.locationId,'location'),'location'),route=current.exits.find(e=>e.to===target.id&&e.modes.includes('walk')&&!e.locked);
-    if(s.settings.npcRouteTravel){performed=startNpcJourney(s,npc,d,target.id,Math.max(start,previous+interval*60000),'travel');finishNpcJourney(s,npc,d,end,eventId,effects);}
+    if(s.settings.npcRouteTravel||profile){performed=startNpcJourney(s,npc,d,target.id,Math.max(start,previous+interval*60000),'travel');finishNpcJourney(s,npc,d,end,eventId,effects);}
     else if(route&&route.minutes<=minutes&&isOpen(data(target,'location').hours,s,data(target,'location').closedWeather,data(target,'location').closedDates)){d.locationId=target.id;fact(s,npc.id,'location',target.id,eventId,atLocation(s,target.id).map(e=>e.id));performed=true;}
     if(performed&&d.locationId===target.id){activityOutcome=target.id===d.homeId?'traveled-home':'traveled';activitySummary=target.id===d.homeId?'Traveled home through a supported route.':'Traveled through a supported route.';}
    }
@@ -354,10 +373,12 @@ function advanceStep(s:State,minutes:number,eventId:string,effects:Effect[],play
     }
    }
    if(plan.type==='scene'&&target.kind==='quest'&&target.data.status==='active'&&tier==='active'&&(target.data.characterId===playerId||!target.data.characterId)){emit(effects,npc.name+' initiates: '+(plan.text||target.name),observers,'npc.scene',npc.id);performed=true;activityOutcome='scene-initiated';activitySummary='Initiated an authored active-quest scene at the player location.';}
-   if(performed){plan.lastRun=new Date(previous+due*interval*60000).toISOString();plan.runsToday++;plan.failedAttempts=0;plan.lastOutcome='performed';initiatives++;traitTrace(d,candidate.resolution.applied,plan.type,'plan selected at effective priority '+candidate.priority,s.clock);formExperiencedMemory(s,{ownerId:npc.id,text:'Pursued goal: '+plan.type,eventId,kind:'goal.'+plan.type,sourceKind:'event',salience:0.4,entityIds:[target.id],locationId:d.locationId});if(activityOutcome)recordNpcActivity(s,npc,d,eventId,activityOutcome,'goal',target.id,activitySummary);if(secondaryOutcome)recordNpcActivity(s,npc,d,eventId,secondaryOutcome,'justice',target.id,secondarySummary);break;}
+   if(performed){plan.lastRun=new Date(previous+due*interval*60000).toISOString();plan.runsToday++;plan.failedAttempts=0;plan.lastOutcome='performed';initiatives++;traitTrace(d,candidate.resolution.applied,plan.type,'plan selected at effective priority '+candidate.priority,s.clock);formExperiencedMemory(s,{ownerId:npc.id,text:'Pursued goal: '+plan.type,eventId,kind:'goal.'+plan.type,sourceKind:'event',salience:0.4,entityIds:[target.id],locationId:d.locationId});if(activityOutcome)recordNpcActivity(s,npc,d,eventId,activityOutcome,'goal',target.id,activitySummary);if(secondaryOutcome)recordNpcActivity(s,npc,d,eventId,secondaryOutcome,'justice',target.id,secondarySummary);if(decision){npc.data=d as Entity['data'];finishNpcBehavior(s,decision,true,effects.slice(decisionEffectStart),eventId,playerId);}break;}
    fail('blocked');if(plan.fallback==='next-plan')continue;break;
   }
   npc.data=d as Entity['data'];
+  if(decision&&decision.attemptId&&!behaviorActor(s,npc.id).pendingDomain&&behaviorActor(s,npc.id).attempts.find(a=>a.id===decision.attemptId)?.status==='READY')finishNpcBehavior(s,decision,false,effects.slice(decisionEffectStart),eventId,playerId);
+  if(effects.slice(decisionEffectStart).some(e=>e.observers.includes(playerId)&&(e.dialogue?.requiresResponse&&e.dialogue.targetId===playerId||e.type==='npc.call'||e.requiresPlayerResponse===true)))break;
  }
  advanceLifecycle(s,start,end,eventId,effects);
 }

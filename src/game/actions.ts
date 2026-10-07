@@ -31,19 +31,20 @@ import {analyzeEvidence,consultInformant,raiseSceneHeat,recordEvidenceHistory} f
 import {correctRumor,spreadRumor} from './factions.ts';
 import {applyEventAction} from './events.ts';
 const assert=(ok:unknown,code:string)=>{if(!ok)throw new Error(code);};
-export function resolveAction(s:State,actorId:string,action:Action,eventId:string,seed:string){
+export function resolveAction(s:State,actorId:string,action:Action,eventId:string,seed:string,options:{coordinatedNpc?:boolean}={}){
  ensureCityAtlas(s);
  enforceActionPolicy(s,action);
  const actor=getEntity(s,actorId,'character');let pc=data(actor,'character');const effects:Effect[]=[];
  const rng=randomSource(seed);let minutes=0;let arrivalId:string|null=null;let explicitStatus:'SUCCEEDED'|'FAILED'|'PARTIAL'|undefined;let alreadyAdvanced=false;let intervalInterrupted=false;
- const advanceInterval=(duration:number,condition?:()=>boolean)=>{const result=advance(s,duration,eventId,effects,actorId,{interruptible:true,condition});alreadyAdvanced=true;intervalInterrupted=result.interrupted;pc=data(actor,'character');return result.minutes;};
+ const advanceInterval=(duration:number,condition?:()=>boolean)=>{if(options.coordinatedNpc)throw new Error('npc_interval_action_unregistered');const result=advance(s,duration,eventId,effects,actorId,{interruptible:true,condition});alreadyAdvanced=true;intervalInterrupted=result.interrupted;pc=data(actor,'character');return result.minutes;};
  if(action.type==='content-filter'){pc.contentFilters={romance:action.romance,matureContent:action.matureContent,blockedIntents:[...new Set(action.blockedIntents)],allowNpcInitiative:action.allowNpcInitiative};actor.data=pc as Entity['data'];return {effects,draws:rng.draws,checks:[],time:actionTime(action,0)};}
  if(action.type==='safety-exit'){cancelPendingConsent(s,actorId,action.targetId??null,eventId);actor.data=pc as Entity['data'];emit(effects,'The scene ends here. No relationship or narrative penalty is applied.',[actorId],'safety.exit',actorId);return {effects,draws:rng.draws,checks:[],time:actionTime(action,0)};}
  assert(pc.condition==='conscious','character_cannot_act');
  assert(!pc.journey?.mode||['travel','look','inspect','say','communicate','wait','sleep','phone-call','text','call-response','call-speak'].includes(action.type),'journey_in_progress');
  assert(!pc.restrainedBy||['look','inspect','say','communicate','wait','fast-forward','surrender','pay-bail','escape-restraint'].includes(action.type),'character_restrained');
  const choice=choiceAccess(s,actorId,action.type,action.type);assert(choice.allowed,'trait_choice_restricted');
- const say=(text:string,type:string=action.type,subjectId=actorId,observers=[actorId])=>emit(effects,text,observers,type,subjectId);
+ const publicNpcAction=options.coordinatedNpc&&['combat','attack','defend','restrain','escape-restraint','disarm','shove','surrender','ready-weapon','reload','cover','tactical-move'].includes(action.type);
+ const say=(text:string,type:string=action.type,subjectId=actorId,observers=publicNpcAction?atLocation(s,pc.locationId).filter(e=>visible(s,actor,e.id)).map(e=>e.id):[actorId])=>emit(effects,text,observers,type,subjectId);
  const nearby=(target:Entity)=>{assert(target.data.locationId===pc.locationId&&pc.locationId&&visible(s,target,actorId),'target_not_present');};
  const owned=(id:string)=>{const item=getEntity(s,id,'item');assert(carriedBy(s,item,actorId)&&visible(s,item,actorId),'item_not_possessed');return item;};
  const moveWeaponParts=(weapon:Entity,possessorId:string|null,locationId:string|null,historyAction:'transferred'|'stolen'|'discarded'|'disarmed'|'recovered',fromId:string|null,toId:string|null,transferOwnership=false)=>{const w=data(weapon,'item');if(!['firearm','weapon'].includes(w.category))return;for(const id of [...new Set([...(w.installedMagazineId?[w.installedMagazineId]:[]),...w.attachmentIds])]){const part=getEntity(s,id,'item'),d=data(part,'item');d.possessorId=possessorId;d.locationId=locationId;d.containerId=null;if(transferOwnership&&toId)d.ownerId=toId;d.equipped=false;d.wearState='stowed';part.data=d as Entity['data'];recordItemEvent(s,part,eventId,historyAction,actorId,{fromId,toId,locationId,note:'Moved with weapon '+weapon.id+'.'});}};
@@ -618,7 +619,7 @@ export function resolveAction(s:State,actorId:string,action:Action,eventId:strin
  }
  actor.data=pc as Entity['data'];
  const interrupted=intervalInterrupted;
- if(minutes>0&&!alreadyAdvanced)advance(s,minutes,eventId,effects,actorId);
+ if(minutes>0&&!alreadyAdvanced&&!options.coordinatedNpc)advance(s,minutes,eventId,effects,actorId);
  if(interrupted)say('The interval stops here for your response.','turn.interrupted');
  if(arrivalId){actor.data.locationId=arrivalId;const arrived=data(getEntity(s,arrivalId,'location'),'location');if(!arrived.discoveredByIds.includes(actorId))arrived.discoveredByIds.push(actorId);if(!arrived.visitedByIds.includes(actorId))arrived.visitedByIds.push(actorId);getEntity(s,arrivalId,'location').data=arrived as Entity['data'];fact(s,arrivalId,'visited',true,eventId,[actorId]);}
  // Non-player initiative is deterministic; it never supplies an action for a playable character.
@@ -626,8 +627,13 @@ export function resolveAction(s:State,actorId:string,action:Action,eventId:strin
  if(combat&&['combat','attack','defend','grapple','restrain','escape-restraint','disarm','shove','environmental-action','ready-weapon','reload','cover','consume','treat','say','flee','tactical-move'].includes(action.type)){
   const c=data(combat,'combat'),order=c.turnOrder.length?c.turnOrder:c.participants;c.phase='engaged';if(action.type!=='combat'){const acted=c.actorStates[actorId];if(acted)acted.actionPoints=0;c.turnIndex=(c.turnIndex+1)%order.length;if(c.turnIndex===0)c.round++;}
   let steps=0;
-  while(steps++<order.length&&c.active){
+  while(!options.coordinatedNpc&&steps++<order.length&&c.active){
    const next=getEntity(s,order[c.turnIndex]!,'character'),state=c.actorStates[next.id];if(next.data.playable){if(state)state.actionPoints=s.settings.tactics?.actionPointsPerTurn??1;break;}
+   if(s.npcBehavior?.actors.some(a=>a.actorId===next.id)){
+    // Published profiles own NPC choices. Give their scheduled action its real interval,
+    // then consume an unused initiative as the controller's bounded wait fallback.
+    if(state)state.actionPoints=s.settings.tactics?.actionPointsPerTurn??1;combat.data=c as Entity['data'];const index=c.turnIndex;advance(s,1,eventId,effects,actorId);Object.assign(c,data(combat,'combat'));if(c.turnIndex===index){if(c.actorStates[next.id])c.actorStates[next.id]!.actionPoints=0;emit(effects,next.name+' waits during this initiative.',atLocation(s,pc.locationId).map(e=>e.id),'npc.wait',next.id);c.turnIndex=(c.turnIndex+1)%order.length;if(c.turnIndex===0)c.round++;}continue;
+   }
    if(next.data.condition==='conscious'&&state&&!state.surrendered&&!state.escaped){
     state.actionPoints=s.settings.tactics?.actionPointsPerTurn??1;const allies=c.participants.filter(id=>c.sides[id]===state.side&&id!==next.id&&getEntity(s,id,'character').data.condition==='conscious'&&!c.actorStates[id]?.surrendered),opponents=combatOpponents(combat,next.id),injuries=s.entities.filter(entity=>entity.kind==='injury'&&!entity.archived&&entity.data.characterId===next.id),injuryBurden=injuries.reduce((sum,injury)=>sum+Number(injury.data.severity),0),morale=(s.settings.tactics?.moraleBase??50)+allies.length*(s.settings.tactics?.allyMorale??10)-Math.min(100,injuryBurden)/100*(s.settings.tactics?.injuryMorale??30)-state.fear-Math.max(0,opponents.length-allies.length-1)*10;state.morale=Math.max(0,Math.min(100,morale));
     const nextLocationId=typeof next.data.locationId==='string'?next.data.locationId:null,observers=atLocation(s,nextLocationId).map(entity=>entity.id),exit=nextLocationId?data(getEntity(s,nextLocationId,'location'),'location').exits.find(route=>!route.locked&&route.modes.includes('walk')):null;
@@ -644,10 +650,10 @@ export function resolveAction(s:State,actorId:string,action:Action,eventId:strin
     state.actionPoints=0;const capableSides=[...new Set(c.participants.filter(id=>!c.actorStates[id]?.escaped&&!c.actorStates[id]?.surrendered&&getEntity(s,id,'character').data.condition==='conscious').map(id=>c.sides[id]))];if(capableSides.length<=1){c.active=false;c.phase='ended';c.endedReason='all-opposition-incapacitated';}
    }
    c.turnIndex=(c.turnIndex+1)%order.length;if(c.turnIndex===0)c.round++;
-  }combat.data=c as Entity['data'];
+  }if(options.coordinatedNpc){const next=c.actorStates[order[c.turnIndex]!];if(next)next.actionPoints=s.settings.tactics?.actionPointsPerTurn??1;}combat.data=c as Entity['data'];
  }
  const chase=activeChase();
- if(chase&&['chase','chase-action'].includes(action.type)){
+ if(!options.coordinatedNpc&&chase&&['chase','chase-action'].includes(action.type)){
   const c=data(chase,'chase'),tactics=s.settings.tactics,rule=s.settings.rules;let steps=0;while(c.status==='active'&&steps++<c.turnOrder.length){const nextId=c.turnOrder[c.turnIndex]!,next=getEntity(s,nextId,'character');if(next.data.playable)break;const state=c.actorStates[nextId]!,maneuver=state.role==='pursuer'?'pursue':state.fatigueRisk>50?'hide':'evade',vehicle=state.vehicleId?getEntity(s,state.vehicleId,'vehicle'):null,driving=vehicle?s.entities.find(entity=>entity.kind==='skill'&&entity.name.toLowerCase()==='driving'):null,skillValue=driving?Number((next.data.skills as Record<string,number>)[driving.id]??0):0,difficulty=(vehicle?tactics?.chaseVehicleDifficulty:tactics?.chaseFootDifficulty)??rule?.threshold??50,total=Number((next.data.attributes as Record<string,number>)[vehicle?'Perception':'Agility']??0)+skillValue+(rule?.formula==='additive-die'?rng.integer(rule.dieSides)+1:0),success=total>=difficulty+c.terrainPenalty+(vehicle?c.trafficPenalty+vehiclePenaltyFor(data(vehicle,'vehicle')):0),delta=success?(tactics?.chaseProgressPerSuccess??1):0,risk=success?0:10;state.progress+=delta;if(vehicle)state.collisionRisk=Math.min(100,state.collisionRisk+risk);else{state.fatigueRisk=Math.min(100,state.fatigueRisk+risk);next.data.fatigue=Math.min(100,Number(next.data.fatigue)+risk/2);}c.history.push({at:s.clock,eventId,actorId:nextId,maneuver,success,progressDelta:delta,risk,summary:success?'NPC maneuver gains ground.':'NPC maneuver adds risk without gaining ground.'});emit(effects,next.name+(success?' gains ground in the chase.':' fails to gain ground in the chase.'),[actorId],'npc.chase',nextId);const bestPursuer=Math.max(...c.pursuerIds.map(id=>c.actorStates[id]!.progress)),bestQuarry=Math.max(...c.quarryIds.map(id=>c.actorStates[id]!.progress));if(bestPursuer>=c.targetProgress){c.status='caught';c.phase='resolved';c.outcome='pursuer closes the route gap';}else if(bestQuarry>=c.targetProgress){c.status='escaped';c.phase='resolved';c.outcome='quarry opens an unrecoverable gap';}c.turnIndex=(c.turnIndex+1)%c.turnOrder.length;if(c.turnIndex===0)c.round++;}
   chase.data=c as Entity['data'];settleChase(chase);
  }

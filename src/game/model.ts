@@ -10,7 +10,7 @@ const text=z.string().max(16000), short=z.string().max(1000), ref=id.nullable().
 const cents=z.number().int().min(0).max(100000000000), score=z.number().min(-100).max(100), unit=z.number().min(0).max(100), openNumber=z.number().finite().min(-1000000).max(1000000);
 const tags=z.array(z.string().max(80)).max(100).default([]);
 export const attributes=['Strength','Agility','Endurance','Intellect','Perception','Presence','Will'] as const;
-export const planTypes=['speak','work','socialize','offer','share','travel','crime','care','message','call','breakup','scene'] as const;
+export const planTypes=['speak','work','socialize','offer','share','travel','crime','care','message','call','breakup','withdraw','scene','domain'] as const;
 export const romanceIntents=['flirt','date','confess','commit','exclusive','cohabit','marry','reconcile','intimacy','confront-jealousy'] as const;
 export const matureContentModes=['off','implicit','fade-to-black','allowed-description'] as const;
 export const simulationTierNames=['active','relevant','distant'] as const;
@@ -519,7 +519,7 @@ export type Knowledge={observerId:string;factId:string;source:string;at:string;c
 export type Belief={id:string;observerId:string;proposition:string;subjectId?:string|null;predicate?:string;objectId?:string|null;value?:unknown;qualifiers?:Record<string,unknown>;confidence:number;source:string;truthStatus?:'believed'|'doubted'|'disproven'|'confirmed';audience?:string[];observedAt?:string|null;validFrom?:string|null;validUntil?:string|null;eventIds?:string[];evidenceIds?:string[];tags?:string[];at:string;correctedBy:string|null};
 export type RecallConditions={entityIds:string[];tags:string[];locationId:string|null;from:string|null;until:string|null};
 export type Memory={cognition?:Cognition;id:string;observerId:string;text:string;interpretation?:string;salience:number;decayPerDay:number;eventId:string;eventRefs?:string[];at:string;private:boolean;privacy?:'private'|'shared';recallConditions?:RecallConditions;lastRefreshedAt?:string|null;refreshCount?:number;expiresAt?:string|null;tags?:string[]};
-export type State={canon?:CanonSource|null;clock:string;settings:Settings;entities:Entity[];facts:Fact[];knowledge:Knowledge[];beliefs:Belief[];memories:Memory[];eventIds?:string[];information?:import('./information-contracts.ts').InformationState};
+export type State={canon?:CanonSource|null;clock:string;settings:Settings;entities:Entity[];facts:Fact[];knowledge:Knowledge[];beliefs:Belief[];memories:Memory[];eventIds?:string[];information?:import('./information-contracts.ts').InformationState;npcBehavior?:import('./behavior-contracts.ts').NpcBehavior};
 export const getEntity=(s:State,id:string,kind?:Kind)=>{const e=s.entities.find(e=>e.id===id&&!e.archived);if(!e||kind&&e.kind!==kind)throw new Error('entity_unavailable');return e;};
 export function refs(e:Entity):string[]{
  const result:string[]=[];const walk=(v:unknown,key='')=>{if(!v)return;if(typeof v==='string'&&((key.endsWith('Id')&&!['controllerUserId','sourceEventId','responseEventId','eventId','effectId','factId','hypothesisId','tipId','optionId','sourceTipId','parentId','mergeRecordId','threadId','zoneId','coverSourceId','rankId','parentRankId','goalId','hookId','sourceHookId','branchId','activeBranchId','objectiveId','outcomeId','bankId'].includes(key))||['parentId','to'].includes(key)&&e.kind==='location'))result.push(v);

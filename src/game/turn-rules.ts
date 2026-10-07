@@ -42,7 +42,7 @@ export function existingTurnRules(){
  // scheduler; authored catalogs, canon, revisions and settings stay protected.
  const runtimeKinds=kinds.filter(kind=>!['itemType','trait','traitTemplate','skill','checkDefinition','recipe','service','socialRule','media','law','transportService'].includes(kind));
  const grants:WriteGrant[]=runtimeKinds.map(kind=>({ownerSystem:authorityFor(kind),kind,fields:['data.*','name','visibility','archived','revision'],create:true,archive:true}));
- for(const root of ['clock','facts','knowledge','beliefs','memories'] as const)grants.push({ownerSystem:root==='clock'?'spacetime':'knowledge',root,fields:['value']});
+ for(const root of ['clock','facts','knowledge','beliefs','memories','information','npcBehavior'] as const)grants.push({ownerSystem:root==='clock'?'spacetime':root==='npcBehavior'?'npc_behavior':'knowledge',root,fields:['value']});
  grants.push({ownerSystem:'spacetime',root:'settings',fields:['weather']});
  // Authored social rules are immutable except for their once-only execution marker.
  grants.push({ownerSystem:'relationships',kind:'socialRule',fields:['data.firedAt']});

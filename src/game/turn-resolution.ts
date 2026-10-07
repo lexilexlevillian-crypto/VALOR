@@ -60,7 +60,7 @@ export function resolveTurnPlan(s:State,actorId:string,rawClauses:TurnClause[],e
   Object.assign(s,candidate);effects.push(...result.effects);checks.push(...result.checks);draws+=result.draws;
   previousSucceeded=result.status==='SUCCEEDED';
   steps.push({clauseId:clause.clauseId,actionType:clause.action.type,status:result.status,ownerSystem:provider.id,stateDeltas:deltas,start,end:s.clock,draws:result.draws,seedRef:createHash('sha256').update(stepSeed).digest('hex')});
-  if(result.status==='INTERRUPTED'||result.effects.some(effect=>effect.type==='turn.interrupted'&&effect.observers.includes(actorId))){interrupted=true;break;}
+  if(result.status==='INTERRUPTED'||Boolean(s.npcBehavior?.actors.length)&&result.effects.some(e=>e.observers.includes(actorId)&&(e.dialogue?.requiresResponse&&e.dialogue.targetId===actorId||e.type==='npc.call'||e.requiresPlayerResponse===true))||result.effects.some(effect=>effect.type==='turn.interrupted'&&effect.observers.includes(actorId))){interrupted=true;break;}
  }
  const elapsedSeconds=(Date.parse(s.clock)-Date.parse(startClock))/1000;
  ensure(Number.isFinite(elapsedSeconds)&&elapsedSeconds>=0,500,'invalid_resolved_time');

@@ -214,3 +214,7 @@ body,button,input,select,textarea,#app *{font-family:var(--serif)}
 .residence-picker{padding:8px;border:1px solid var(--border)}
 .residence-picker h4{margin:0 0 8px}.automatic-traits p{margin:4px 0;font-size:.85rem}
 .oc-identity .field-grid,.player-start .field-grid{min-width:0}
+.npc-profile-preview{overflow-wrap:anywhere}
+.npc-profile-preview dd{margin-inline-start:12px;min-width:0}
+.npc-profile-preview .field-grid{grid-template-columns:repeat(auto-fit,minmax(min(180px,100%),1fr))}
+.npc-profile-preview input,.npc-profile-preview textarea{min-width:0;max-width:100%}
