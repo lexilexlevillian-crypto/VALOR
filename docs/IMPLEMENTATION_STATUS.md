@@ -4,6 +4,8 @@ Build: 0.2.0-alpha, updated 2026-10-02. Systems 30–32 now add authored dynamic
 
 The subsequent System 02 Behavior Bible work adds persistent narrative profiles, exact communication, frozen narrative context, validation/repair and developer diagnostics. See [SYSTEM_02_IMPLEMENTATION.md](SYSTEM_02_IMPLEMENTATION.md) for schema 47, character schema 10, the acceptance matrix and its bounded-prose limitations. This is a local implementation update, not a production deployment claim.
 
+The supplied System 4 memory specification is covered by [SYSTEM_04_MEMORY_IMPLEMENTATION.md](SYSTEM_04_MEMORY_IMPLEMENTATION.md), including schema 50, subjective recall, conservative consolidation, game-time decay, player agency, branch lineage, and Creator repair.
+
 ## System coverage
 
 Current expansion: see [LIFECYCLE_SYSTEMS.md](LIFECYCLE_SYSTEMS.md) for migrations 006–007, gameplay controls, Gemini proposals, media, save deduplication and exact remaining boundaries. [SYSTEMS_EXPANSION.md](SYSTEMS_EXPANSION.md) records the previous checkpoint.

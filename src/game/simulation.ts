@@ -1,3 +1,4 @@
+import {formExperiencedMemory} from './memory.ts';
 import {communicate,conversationState} from './communication.ts';
 import {eventMetadata} from './turn-runtime.ts';
 import {skillStatus} from '../../public/creation-rules.js';
@@ -354,7 +355,7 @@ function advanceStep(s:State,minutes:number,eventId:string,effects:Effect[],play
     }
    }
    if(plan.type==='scene'&&target.kind==='quest'&&target.data.status==='active'&&tier==='active'&&(target.data.characterId===playerId||!target.data.characterId)){emit(effects,npc.name+' initiates: '+(plan.text||target.name),observers,'npc.scene',npc.id);performed=true;activityOutcome='scene-initiated';activitySummary='Initiated an authored active-quest scene at the player location.';}
-   if(performed){plan.lastRun=new Date(previous+due*interval*60000).toISOString();plan.runsToday++;plan.failedAttempts=0;plan.lastOutcome='performed';initiatives++;traitTrace(d,candidate.resolution.applied,plan.type,'plan selected at effective priority '+candidate.priority,s.clock);remember(s,npc.id,'Pursued goal: '+plan.type,eventId,0.4);if(activityOutcome)recordNpcActivity(s,npc,d,eventId,activityOutcome,'goal',target.id,activitySummary);if(secondaryOutcome)recordNpcActivity(s,npc,d,eventId,secondaryOutcome,'justice',target.id,secondarySummary);break;}
+   if(performed){plan.lastRun=new Date(previous+due*interval*60000).toISOString();plan.runsToday++;plan.failedAttempts=0;plan.lastOutcome='performed';initiatives++;traitTrace(d,candidate.resolution.applied,plan.type,'plan selected at effective priority '+candidate.priority,s.clock);formExperiencedMemory(s,{ownerId:npc.id,text:'Pursued goal: '+plan.type,eventId,kind:'goal.'+plan.type,sourceKind:'event',salience:0.4,entityIds:[target.id],locationId:d.locationId});if(activityOutcome)recordNpcActivity(s,npc,d,eventId,activityOutcome,'goal',target.id,activitySummary);if(secondaryOutcome)recordNpcActivity(s,npc,d,eventId,secondaryOutcome,'justice',target.id,secondarySummary);break;}
    fail('blocked');if(plan.fallback==='next-plan')continue;break;
   }
   npc.data=d as Entity['data'];

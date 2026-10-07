@@ -1,0 +1,68 @@
+import {recallMemories} from './memory.ts';
+import {simulationId as randomUUID} from './turn-runtime.ts';
+import {data,getEntity,type State} from './model.ts';
+import {information,acquireInformation,informationProjection,retconImpact,informationHash,addInformationRecord,transmitInformation,exposeTransmission} from './information.ts';
+import {secretSchema,identityKnowledgeSchema,spatialKnowledgeSchema,interpretationSchema,knowledgePackageSchema} from './information-extensions.ts';
+import {acquisitionUsable,recallEligible,safeInformationText,informationSanitizer,spatialMarkers,informationTemperature} from './information-access.ts';
+
+const requireThat=(condition:unknown,error='information_unavailable')=>{if(!condition)throw new Error(error);};
+export function sourceKnown(s:State,characterId:string,id:string){const i=information(s);return i.entries.some(e=>e.characterId===characterId&&acquisitionUsable(s,e)&&(e.id===id||e.sourceId===id||e.propositionId===id))||i.observations.some(o=>o.observerId===characterId&&(o.id===id||o.eventId===id))||i.accessLog.some(a=>a.characterId===characterId&&a.recordIds.includes(id));}
+export function authorSecret(s:State,input:unknown){const secret=secretSchema.parse(input),i=information(s);getEntity(s,secret.subjectId);for(const characterId of secret.authorizedCharacterIds)getEntity(s,characterId,'character');for(const facet of secret.facets)requireThat(i.propositions.some(p=>p.id===facet.propositionId));requireThat(!i.secrets.some(r=>r.id===secret.id),'duplicate_secret');i.secrets.push(secret);return secret;}
+export function grantInformation(s:State,characterId:string,propositionId:string,text:string,eventId:string,type:'knowledge'|'belief'='knowledge',category='creator'){
+ getEntity(s,characterId,'character');const p=information(s).propositions.find(p=>p.id===propositionId);requireThat(p);
+ return acquireInformation(s,{characterId,propositionId,type,confidence:type==='knowledge'?1:0.5,acquisition:category==='creator'?'creator':'background',sourceId:eventId,originIds:[eventId],informationAt:s.clock,lastConfirmedAt:s.clock,freshness:'current',secrecyAwareness:'unknown',text});
+}
+export function revealSecretFacet(s:State,characterId:string,facetId:string,eventId:string,creatorGrant=false){
+ const i=information(s),facet=i.secrets.flatMap(secret=>secret.facets).find(f=>f.id===facetId);requireThat(facet);
+ requireThat(creatorGrant||facet!.requiredSourceIds.length>0&&facet!.requiredSourceIds.every(id=>sourceKnown(s,characterId,id)),'discovery_source_unavailable');
+ const p=i.propositions.find(p=>p.id===facet!.propositionId)!;return grantInformation(s,characterId,p.id,p.predicate+': '+JSON.stringify(p.value),eventId);
+}
+export function changeRecordAccess(s:State,recordId:string,patch:{scope?:'public'|'private'|'institution'|'faction';allowedCharacterIds?:string[];sealed?:boolean},eventId:string){
+ const i=information(s),record=i.records.find(r=>r.id===recordId);requireThat(record);for(const id of patch.allowedCharacterIds??[])getEntity(s,id,'character');
+ const before={scope:record!.scope,allowedCharacterIds:record!.allowedCharacterIds,sealed:record!.sealed};Object.assign(record!,patch);const after={scope:record!.scope,allowedCharacterIds:record!.allowedCharacterIds,sealed:record!.sealed};i.accessChanges.push({id:randomUUID(),eventId,recordId,at:s.clock,before,after});i.summaries=[];i.generation++;return {recordId,before,after};
+}
+export function declassifyFacet(s:State,facetId:string,eventId:string){
+ const i=information(s),facet=i.secrets.flatMap(secret=>secret.facets).find(f=>f.id===facetId);requireThat(facet);facet!.availableTo='public';facet!.declassifiedAt=s.clock;
+ // Only records about this facet become available. Holders remain unchanged.
+ const records=i.records.filter(r=>r.propositionIds.length===1&&r.propositionIds[0]===facet!.propositionId);for(const record of records)changeRecordAccess(s,record.id,{scope:'public',sealed:false},eventId);return {facetId,recordIds:records.map(r=>r.id),acquired:false};
+}
+export function learnIdentity(s:State,input:unknown){const row=identityKnowledgeSchema.parse(input),i=information(s);getEntity(s,row.viewerId,'character');getEntity(s,row.subjectId,'character');requireThat(sourceKnown(s,row.viewerId,row.sourceId),'source_unavailable');requireThat(!i.identities.some(r=>r.id===row.id),'duplicate_information');if(row.previousId)requireThat(i.identities.some(r=>r.id===row.previousId&&r.viewerId===row.viewerId&&r.subjectId===row.subjectId));i.identities.push(row);i.summaries=i.summaries.filter(summary=>summary.viewerId!==row.viewerId);return row;}
+export function learnSpatial(s:State,input:unknown){const row=spatialKnowledgeSchema.parse(input),i=information(s);getEntity(s,row.viewerId,'character');getEntity(s,row.subjectId);getEntity(s,row.areaId,'location');if(row.locationId)getEntity(s,row.locationId,'location');requireThat(sourceKnown(s,row.viewerId,row.sourceId),'source_unavailable');requireThat(row.precision!=='exact'||row.locationId,'exact_location_required');requireThat(!['area','rumored'].includes(row.precision)||row.locationId===null,'approximate_location_cannot_have_exact_pin');i.spatial.push(row);return row;}
+export function interpretObservation(s:State,input:unknown){const row=interpretationSchema.parse(input),i=information(s);requireThat(i.observations.some(o=>o.id===row.observationId&&o.observerId===row.viewerId));for(const sourceId of row.sourceIds)requireThat(sourceKnown(s,row.viewerId,sourceId),'source_unavailable');if(row.recognizedAsId)getEntity(s,row.recognizedAsId);if(row.supersedesId)requireThat(i.interpretations.some(r=>r.id===row.supersedesId&&r.observationId===row.observationId&&r.viewerId===row.viewerId));i.interpretations.push(row);return row;}
+export function authorKnowledgePackage(s:State,input:unknown){const row=knowledgePackageSchema.parse(input),i=information(s);requireThat(!i.packages.some(p=>p.id===row.id),'duplicate_package');for(const claim of row.claims)requireThat(i.propositions.some(p=>p.id===claim.propositionId));i.packages.push(row);return row;}
+export function grantKnowledgePackage(s:State,characterId:string,packageId:string,eventId:string){const row=information(s).packages.find(p=>p.id===packageId);requireThat(row);return row!.claims.map(claim=>{const entry=grantInformation(s,characterId,claim.propositionId,claim.text,eventId,'knowledge',row!.category);entry.confidence=claim.confidence;return entry;});}
+export function copyInformationRecord(s:State,characterId:string,recordId:string,eventId:string){const i=information(s),record=i.records.find(r=>r.id===recordId);requireThat(record&&i.accessLog.some(a=>a.characterId===characterId&&a.recordIds.includes(recordId)));return addInformationRecord(s,{...record!,id:randomUUID(),title:'Copy: '+record!.title.slice(0,194),scope:'private',allowedCharacterIds:[characterId],requiredItemIds:[],requiredTags:[],locationId:null,sourceIds:[recordId,eventId],supersedesId:null,createdAt:s.clock});}
+export function repairAcquisition(s:State,entryId:string,reason:string,eventId:string,committedEventIds:string[]=[]){
+ const i=information(s),entry=i.entries.find(e=>e.id===entryId);requireThat(entry);const previous=i.repairs.find(r=>r.entryId===entryId);if(previous)return previous;
+ const before=structuredClone(entry!),impact=retconImpact(s,[entryId]),affectedIds=[...new Set([entryId,...Object.values(impact).flat()])];
+ // Preserve observations and all committed events. Quarantine invalid acquisition derivatives.
+ for(const e of i.entries)if(affectedIds.includes(e.id))e.status='invalidated';i.invalidatedNodeIds=[...new Set([...i.invalidatedNodeIds,...affectedIds])];
+ for(const active of i.active)if(affectedIds.includes(active.id))active.status='stale';i.summaries=i.summaries.filter(summary=>!affectedIds.includes(summary.id));
+ const invalidPairs=new Set(i.entries.filter(e=>e.status==='invalidated'&&!i.entries.some(other=>other.characterId===e.characterId&&other.propositionId===e.propositionId&&acquisitionUsable(s,other))).map(e=>e.characterId+':'+e.propositionId));
+ s.knowledge=s.knowledge.filter(k=>!invalidPairs.has(k.observerId+':'+k.factId));
+ const repair={id:randomUUID(),eventId,entryId,reason,at:s.clock,before:before as unknown as Record<string,never>,after:structuredClone(entry!) as unknown as Record<string,never>,affectedIds,committedEventIds};i.repairs.push(repair);i.generation++;return repair;
+}
+export function recallInformation(s:State,characterId:string,query:string,limit=20){
+ getEntity(s,characterId,'character');const words=query.toLowerCase().split(/\W+/).filter(w=>w.length>2),entityIds=s.entities.filter(e=>e.name.toLowerCase().split(/\W+/).some(w=>words.includes(w))).map(e=>e.id);
+ const sanitizeRecall=informationSanitizer(s,characterId);
+ const candidates=recallMemories(s,characterId,{query,entityIds,explicit:true,limit}).map(m=>({...m,text:sanitizeRecall(m.text),interpretation:sanitizeRecall(m.interpretation),source:sanitizeRecall(m.source),exactFragments:m.exactFragments.map(f=>({...f,text:sanitizeRecall(f.text)}))}));
+ return {stage:'recalled',memories:candidates.map(({score,...m})=>m),mentioned:false,changesKnowledge:false,advancesTime:false,meaning:candidates.length?'Subjective recall from eligible sources.':'Nothing was recalled for this query; stored history was not deleted.'};
+}
+export function retellMemory(s:State,characterId:string,memoryId:string,recipientId:string,eventId:string){
+ const memory=s.memories.find(m=>m.id===memoryId&&m.observerId===characterId),recalled=recallMemories(s,characterId,{eventIds:memory?[memory.eventId]:[],explicit:true,limit:50}).find(m=>m.id===memoryId);
+ if(!memory||!recalled)throw new Error('memory_unavailable');
+ const i=information(s),entries=i.entries.filter(e=>memory.cognition?.sourceInformationIds.includes(e.id)&&e.characterId===characterId&&acquisitionUsable(s,e));if(!entries.length)throw new Error('memory_claim_unavailable');
+ const previous=i.transmissions.find(t=>entries.some(e=>e.sourceId===t.id)),text=safeInformationText(s,characterId,recalled.interpretation||recalled.text);
+ const transmission=transmitInformation(s,{id:eventId,senderId:characterId,intendedRecipientIds:[recipientId],propositionIds:[...new Set(entries.map(e=>e.propositionId))],text,channel:'rumor',at:s.clock,secrecy:false,parentId:previous?.id??null,originIds:[],mutation:'Retold from subjective memory; '+(recalled.source==='Source not recalled'?'original attribution not recalled':'source retained'),artifactId:null,recipients:[]});
+ exposeTransmission(s,transmission.id,recipientId,{delivered:true,exposed:true,acceptance:recalled.confidence});return transmission;
+}
+export function queryInformation(s:State,characterId:string,kind:'know'|'remember'|'observed'|'where'|'why',query:string){
+ if(kind==='remember')return recallInformation(s,characterId,query);const view=informationProjection(s,characterId),match=(text:string)=>!query||query.toLowerCase().split(/\W+/).filter(w=>w.length>2).every(w=>text.toLowerCase().includes(w));
+ if(kind==='observed')return {observations:view.observations.filter(o=>match(o.raw)).slice(-100),advancesTime:false};if(kind==='where')return {locations:spatialMarkers(s,characterId).filter(r=>match(r.label)),advancesTime:false};
+ const entries=view.entries.filter(e=>match(e.text)||e.id===query).slice(-100);return {entries,...(kind==='why'?{provenance:entries.map(e=>({entryId:e.id,acquisition:e.acquisition,sourceId:e.sourceId,origins:e.originIds,acquiredAt:e.acquiredAt,informationAt:e.informationAt}))}:{}),conflicts:view.conflicts,advancesTime:false};
+}
+export function contextTiers(s:State,viewerId:string){
+ const viewer=getEntity(s,viewerId,'character'),i=information(s),warmIds=new Set(i.active.filter(a=>a.characterId===viewerId&&['open','pending','waiting'].includes(a.status)).flatMap(a=>a.entityIds));
+ return s.entities.filter(e=>e.kind==='character'&&!e.data.playable).map(e=>{const c=data(e,'character'),tier=c.locationId&&c.locationId===viewer.data.locationId?3:warmIds.has(e.id)||c.simulationTier==='relevant'?2:c.plans.some(p=>p.enabled)||c.schedule.length||c.journey?1:0;return {characterId:e.id,tier,label:['dormant','background','warm','active-scene'][tier],canonicalStatePreserved:true,contextMaterialized:tier>=2};});
+}
+export function extendedDiagnostics(s:State){const i=information(s);return {sources:i.sources,secrets:i.secrets.map(secret=>({...secret,facets:secret.facets.map(facet=>({...facet,knownHolders:i.entries.filter(e=>e.propositionId===facet.propositionId&&acquisitionUsable(s,e)&&e.type==='knowledge').map(e=>e.characterId),suspectedHolders:i.entries.filter(e=>e.propositionId===facet.propositionId&&acquisitionUsable(s,e)&&e.type!=='knowledge').map(e=>e.characterId)}))})),identities:i.identities,spatial:i.spatial,interpretations:i.interpretations,repairs:i.repairs,accessChanges:i.accessChanges,circularRumors:i.transmissions.filter(t=>t.senderId&&i.entries.some(e=>e.characterId===t.senderId&&t.originIds.some(id=>e.originIds.includes(id))&&e.sourceId!==t.id)).map(t=>({transmissionId:t.id,originIds:t.originIds,independent:false})),derivedChecksum:informationHash({identities:i.identities,spatial:i.spatial})};}

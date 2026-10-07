@@ -1,3 +1,5 @@
+import {formObservationMemory,formInformationMemory} from './memory.ts';
+import {acquisitionUsable,informationSanitizer,spatialMarkers} from './information-access.ts';
 import {createHash} from 'node:crypto';
 import {simulationId as randomUUID} from './turn-runtime.ts';
 import {informationStateSchema,propositionSchema,informationRecordSchema,transmissionSchema,observationSchema,activeInformationSchema,type InformationEntry,type InformationState} from './information-contracts.ts';
@@ -15,7 +17,7 @@ export function acquireInformation(s:State,input:Omit<InformationEntry,'id'|'acq
  if(input.supersedesId)requireThat(prior);if(prior)prior.status='superseded';
  // Repeated exposure to the same origin is retained in transmission history, not counted as independent evidence.
  const duplicate=i.entries.find(e=>e.characterId===input.characterId&&e.propositionId===input.propositionId&&e.sourceId===input.sourceId&&e.status==='active');if(duplicate)return duplicate;
- const entry:InformationEntry={...input,id:randomUUID(),originIds:unique(input.originIds),acquiredAt:s.clock,status:'active',supersedesId:input.supersedesId??null};i.entries.push(entry);i.generation++;return entry;
+ const entry:InformationEntry={...input,id:randomUUID(),originIds:unique(input.originIds),acquiredAt:s.clock,status:'active',supersedesId:input.supersedesId??null};i.entries.push(entry);if(!i.sources.some(source=>source.id===input.sourceId))i.sources.push({id:input.sourceId,type:input.acquisition==='observation'?'observation':['record','research'].includes(input.acquisition)?'record':input.acquisition==='rumor'?'rumor':input.acquisition==='background'?'background':input.acquisition==='creator'?'creator':input.acquisition==='inference'||input.acquisition==='player-belief'?'inference':'testimony',entityId:input.characterId,recordId:['record','research'].includes(input.acquisition)?input.sourceId:null,originalClaim:input.text,reliability:input.confidence,createdAt:s.clock,eventId:input.sourceId});i.generation++;formInformationMemory(s,entry);return entry;
 }
 export function recordObservation(s:State,input:unknown){
  const o=observationSchema.parse(input),i=information(s);getEntity(s,o.observerId,'character');if(o.targetId)getEntity(s,o.targetId);
@@ -24,7 +26,7 @@ export function recordObservation(s:State,input:unknown){
  if(o.salience<0.4&&o.attention!=='focused'&&!o.propositionIds.length)return {durable:false,observation:o};
  i.observations.push(o);
  for(const propositionId of o.propositionIds)acquireInformation(s,{characterId:o.observerId,propositionId,type:'knowledge',confidence:o.confidence,acquisition:'observation',sourceId:o.id,originIds:[o.id],informationAt:o.at,lastConfirmedAt:o.at,freshness:'current',secrecyAwareness:'unknown',text:o.raw});
- return {durable:true,observation:o};
+ formObservationMemory(s,o);return {durable:true,observation:o};
 }
 // Called by sensory resolvers: only the supplied perceived fragment enters an observation.
 export function perceiveInformation(s:State,input:{observerId:string;targetId:string;eventId:string;channel:'vision'|'hearing'|'reading';raw:string;propositionIds?:string[];method:string;salience?:number;languageUnderstood?:boolean;hidden?:boolean;recognition?:'unidentified'|'likely'|'recognized';recognizedAsId?:string}){
@@ -46,6 +48,7 @@ export function transmitInformation(s:State,input:unknown){
  const t=transmissionSchema.parse(input),i=information(s);requireThat(!i.transmissions.some(row=>row.id===t.id),'duplicate_information');
  if(t.senderId){getEntity(s,t.senderId,'character');for(const id of t.propositionIds)requireThat(i.entries.some(e=>e.characterId===t.senderId&&e.propositionId===id&&e.status==='active'),'sender_information_unavailable');}
  for(const id of t.intendedRecipientIds)getEntity(s,id,'character');for(const id of t.propositionIds)requireThat(i.propositions.some(p=>p.id===id));
+ t.sourceEntryIds=t.senderId?i.entries.filter(e=>e.characterId===t.senderId&&t.propositionIds.includes(e.propositionId)&&acquisitionUsable(s,e)).map(e=>e.id):[];
  if(t.parentId){const parent=i.transmissions.find(row=>row.id===t.parentId);requireThat(parent&&t.senderId&&parent.recipients.some(r=>r.characterId===t.senderId&&r.exposedAt&&r.comprehension>0),'transmission_parent_unavailable');t.originIds=parent!.originIds;}
  else t.originIds=t.senderId?unique(i.entries.filter(e=>e.characterId===t.senderId&&t.propositionIds.includes(e.propositionId)&&e.status==='active').flatMap(e=>e.originIds)):[t.id];
  // Exposure is a separate operation even when callers provide a delivery envelope.
@@ -65,7 +68,7 @@ export function exposeTransmission(s:State,id:string,characterId:string,input:{d
 export function addInformationRecord(s:State,input:unknown){const r=informationRecordSchema.parse(input),i=information(s);requireThat(!i.records.some(row=>row.id===r.id),'immutable_record');for(const id of r.propositionIds)requireThat(i.propositions.some(p=>p.id===id));if(r.supersedesId)requireThat(i.records.some(row=>row.id===r.supersedesId));i.records.push(r);return r;}
 export function accessibleRecords(s:State,characterId:string){
  const c=data(getEntity(s,characterId,'character'),'character'),items=s.entities.filter(e=>e.kind==='item'&&!e.archived&&carriedBy(s,e,characterId));
- return information(s).records.filter(r=>!r.sealed&&(r.scope==='public'||r.allowedCharacterIds.includes(characterId))&&(!r.locationId||r.locationId===c.locationId)&&r.requiredItemIds.every(id=>items.some(e=>e.id===id&&e.data.condition!==0&&!e.data.locked))&&r.requiredTags.every(tag=>c.tags.includes(tag)||items.some(e=>(e.data.tags as string[]).includes(tag))));
+ return information(s).records.filter(r=>!r.sealed&&(r.custodyItemId?items.some(item=>item.id===r.custodyItemId&&!item.data.locked):r.scope==='public'||r.allowedCharacterIds.includes(characterId))&&(!r.locationId||r.locationId===c.locationId)&&r.requiredItemIds.every(id=>items.some(e=>e.id===id&&e.data.condition!==0&&!e.data.locked))&&r.requiredTags.every(tag=>c.tags.includes(tag)||items.some(e=>(e.data.tags as string[]).includes(tag))));
 }
 export function researchInformation(s:State,characterId:string,query:string,depth:'quick'|'standard'|'thorough'='standard'){
  const corpus=accessibleRecords(s,characterId),words=query.toLowerCase().split(/\W+/).filter(w=>w.length>2&&!['the','for','find','prior','calls','address','about','records','search'].includes(w));
@@ -75,19 +78,18 @@ export function researchInformation(s:State,characterId:string,query:string,dept
  i.accessLog.push({id:randomUUID(),characterId,recordIds:rows.map(r=>r.id),query,at:s.clock,unauthorized:rows.some(r=>r.misuseCharacterIds.includes(characterId)),minutes});
  return {records:rows.map(r=>({id:r.id,title:r.title,text:r.text,informationAt:r.informationAt,acquiredAt:s.clock,label:r.validUntil&&Date.parse(r.validUntil)<=Date.parse(s.clock)?'Stale':'Unverified'})),minutes,outcome:rows.length?'accessible-matches':'no-accessible-match',meaning:rows.length?'Source claims require interpretation.':'No accessible match was found; this does not establish nonexistence.'};
 }
-export function authorInformation(s:State,characterId:string,input:{kind:'belief'|'note'|'ooc-note'|'hypothesis'|'lead';text:string;sourceIds?:string[];confidence?:number},eventId:string){
+export function authorInformation(s:State,characterId:string,input:{kind:'belief'|'note'|'ooc-note'|'hypothesis'|'lead';text:string;sourceIds?:string[];confidence?:number;custodyItemId?:string|null},eventId:string){
  getEntity(s,characterId,'character');const i=information(s),known=new Set([...i.entries.filter(e=>e.characterId===characterId).flatMap(e=>[e.id,e.propositionId,e.sourceId]),...i.observations.filter(o=>o.observerId===characterId).map(o=>o.id),...i.accessLog.filter(a=>a.characterId===characterId).flatMap(a=>a.recordIds),...i.active.filter(a=>a.characterId===characterId&&a.kind!=='ooc-note').map(a=>a.id)]);for(const id of input.sourceIds??[])requireThat(known.has(id),'source_unavailable');
  if(input.kind==='belief'){const p=addProposition(s,{id:randomUUID(),subjectId:characterId,predicate:'player-belief',value:input.text,validFrom:s.clock,truth:'unknown',sourceIds:[eventId]});return acquireInformation(s,{characterId,propositionId:p.id,type:'belief',confidence:input.confidence??0.5,acquisition:'player-belief',sourceId:eventId,originIds:[eventId],informationAt:s.clock,lastConfirmedAt:null,freshness:'current',secrecyAwareness:'unknown',text:input.text});}
  const row=activeInformationSchema.parse({id:randomUUID(),characterId,kind:input.kind,text:input.text,status:'open',sourceIds:input.sourceIds??[],contradictsIds:[],entityIds:[],confidence:input.confidence??0.5,at:s.clock,updatedAt:s.clock,exact:true});
- if(input.kind==='note'){const record=addInformationRecord(s,{id:randomUUID(),title:'Character note',text:input.text,propositionIds:[],createdAt:s.clock,informationAt:s.clock,validUntil:null,scope:'private',allowedCharacterIds:[characterId],requiredItemIds:[],requiredTags:[],locationId:null,supersedesId:null,sourceIds:[eventId,...(input.sourceIds??[])]});row.sourceIds=[record.id];i.accessLog.push({id:randomUUID(),characterId,recordIds:[record.id],query:'character-note',at:s.clock,unauthorized:false,minutes:0});}
+ if(input.kind==='note'){const carrier=input.custodyItemId??s.entities.find(e=>e.kind==='item'&&e.data.category==='phone'&&carriedBy(s,e,characterId)&&!e.data.locked)?.id??null;if(carrier)requireThat(s.entities.some(e=>e.id===carrier&&e.kind==='item'&&carriedBy(s,e,characterId)&&!e.data.locked),'note_carrier_unavailable');const record=addInformationRecord(s,{id:randomUUID(),title:'Character note',custodyItemId:carrier,text:input.text,propositionIds:[],createdAt:s.clock,informationAt:s.clock,validUntil:null,scope:'private',allowedCharacterIds:[characterId],requiredItemIds:[],requiredTags:[],locationId:null,supersedesId:null,sourceIds:[eventId,...(input.sourceIds??[])]});row.sourceIds=[record.id];i.accessLog.push({id:randomUUID(),characterId,recordIds:[record.id],query:'character-note',at:s.clock,unauthorized:false,minutes:0});}
  i.active.push(row);i.generation++;return row;
 }
 export function informationProjection(s:State,characterId:string){
- const i=information(s),entries=i.entries.filter(e=>e.characterId===characterId),knownIds=new Set(entries.map(e=>e.propositionId)),readIds=new Set(i.accessLog.filter(a=>a.characterId===characterId).flatMap(a=>a.recordIds));
+ const i=information(s),entries=i.entries.filter(e=>e.characterId===characterId&&e.acquiredAt<=s.clock&&e.status!=='invalidated'&&!i.invalidatedNodeIds.includes(e.sourceId)),knownIds=new Set(entries.map(e=>e.propositionId)),accessibleIds=new Set(accessibleRecords(s,characterId).map(r=>r.id)),readIds=new Set(i.accessLog.filter(a=>a.characterId===characterId).flatMap(a=>a.recordIds));
  // No truth flags, hidden identifiers, source corpus counts, or creator conflict edges.
- const result={entries:entries.map(e=>({...e,label:e.status!=='active'||['historical','superseded'].includes(e.freshness)?'Historical':e.freshness==='stale'?'Stale':e.freshness==='last_known'?'Last Known':e.type==='knowledge'?'Known':e.type==='rumor'?'Rumored':e.type==='suspicion'?'Suspected':'Unverified'})),observations:i.observations.filter(o=>o.observerId===characterId),active:i.active.filter(a=>a.characterId===characterId),conflicts:i.conflicts.filter(c=>knownIds.has(c.a)&&knownIds.has(c.b)).map(({id,a,b,status})=>({id,a,b,status})),records:i.records.filter(r=>readIds.has(r.id)).map(r=>({id:r.id,title:r.title,text:r.text,informationAt:r.informationAt})),unknownMeaning:'Not observed or established; not confirmed absent.'};
- const aliases=s.entities.filter(e=>e.kind==='character'&&e.id!==characterId).flatMap(e=>{const identity=e.data.identityDisclosure as {concealed:boolean;knownByIds:string[];label:string}|null;return identity?.concealed&&!identity.knownByIds.includes(characterId)?[e.name,String(e.data.legalName??''),...((e.data.aliases??[]) as string[])].filter(Boolean).map(name=>({name,label:identity.label})):[];});
- return aliases.length?JSON.parse(JSON.stringify(result,(_key,value)=>{if(typeof value==='string')for(const alias of aliases)value=value.replaceAll(alias.name,alias.label);return value;})) as typeof result:result;
+ const result={entries:entries.map(e=>({...e,label:e.status!=='active'||['historical','superseded'].includes(e.freshness)?'Historical':e.freshness==='stale'?'Stale':e.freshness==='last_known'?'Last Known':e.type==='knowledge'?'Known':e.type==='rumor'?'Rumored':e.type==='suspicion'?'Suspected':'Unverified'})),observations:i.observations.filter(o=>o.observerId===characterId&&o.at<=s.clock&&!i.invalidatedNodeIds.includes(o.id)),active:i.active.filter(a=>a.characterId===characterId&&!i.invalidatedNodeIds.includes(a.id)&&(a.kind!=='note'||a.sourceIds.some(id=>accessibleIds.has(id)))),conflicts:i.conflicts.filter(c=>knownIds.has(c.a)&&knownIds.has(c.b)).map(({id,a,b,status})=>({id,a,b,status})),records:i.records.filter(r=>readIds.has(r.id)&&accessibleIds.has(r.id)).map(r=>({id:r.id,title:r.title,text:r.text,informationAt:r.informationAt})),locations:spatialMarkers(s,characterId),interpretations:i.interpretations.filter(r=>r.viewerId===characterId&&r.at<=s.clock),unknownMeaning:'Not observed or established; not confirmed absent.'};
+ const sanitize=informationSanitizer(s,characterId);return sanitize.needed?JSON.parse(JSON.stringify(result,(_key,value)=>typeof value==='string'?sanitize(value):value)) as typeof result:result;
 }
 export function playerInformationProjection(s:State,characterId:string,query='',offset=0,limit=100){
  const view=informationProjection(s,characterId),matches=view.entries.filter(e=>e.text.toLowerCase().includes(query.toLowerCase())).reverse(),pageSize=Math.min(100,Math.max(1,limit));
@@ -110,8 +112,8 @@ export function retconImpact(s:State,sourceIds:string[]){
   ...i.entries.map(e=>({id:e.id,kind:'entries',sources:[e.propositionId,e.sourceId,...e.originIds]})),
   ...i.records.map(r=>({id:r.id,kind:'records',sources:[...r.sourceIds,...r.propositionIds]})),
   ...i.observations.map(o=>({id:o.id,kind:'observations',sources:[o.eventId,...o.propositionIds]})),
-  ...i.transmissions.map(t=>({id:t.id,kind:'transmissions',sources:[...t.propositionIds,...t.originIds,...(t.parentId?[t.parentId]:[])]})),
-  ...s.memories.map(m=>({id:m.id,kind:'memories',sources:[m.eventId,...(m.eventRefs??[])]})),
+  ...i.transmissions.map(t=>({id:t.id,kind:'transmissions',sources:[...t.sourceEntryIds,...t.propositionIds,...t.originIds,...(t.parentId?[t.parentId]:[])]})),
+  ...s.memories.map(m=>({id:m.id,kind:'memories',sources:[m.eventId,...(m.eventRefs??[]),...(m.cognition?.sourceObservationIds??[]),...(m.cognition?.sourceInformationIds??[]),...(m.cognition?.consolidation?.sourceMemoryIds??[])]})),
   ...s.entities.filter(e=>e.kind==='relationship').map(e=>({id:e.id,kind:'relationships',sources:(e.data.history as {eventId:string}[]).map(h=>h.eventId)})),
   ...i.active.map(a=>({id:a.id,kind:'hypotheses',sources:a.sourceIds})),...i.summaries.map(a=>({id:a.id,kind:'summaries',sources:a.sourceIds}))
  ];

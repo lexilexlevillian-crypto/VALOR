@@ -301,7 +301,7 @@ test('large authored roster and lore set remain bounded through catch-up, retrie
   delete (bundle as {manifest?:unknown}).manifest;bundle.checksum=checksum(bundle.payload);let began=performance.now();const preview=await f.game.import(f.creator,f.timeline.id,'Load fixture',bundle,true) as {confirmationToken:string},imported=(await f.game.import(f.creator,f.timeline.id,'Load fixture',bundle,false,preview.confirmationToken)) as {id:string};const importMs=performance.now()-began;
   began=performance.now();const context=(await f.game.context(f.creator,imported.id,f.pc,'benchmark reference'));const retrievalMs=performance.now()-began;assert.ok(context.sources.length<=12);
   began=performance.now();for(let i=0;i<10;i++)(await f.game.turn(f.creator,imported.id,{revision:(await f.game.access(f.creator,imported.id)).t.revision,characterId:f.pc,action:{type:'wait',minutes:60}},key()));const tenTurnsMs=performance.now()-began;
-  assert.equal((await f.game.view(f.creator,imported.id,f.pc)).turns.length,10);assert.ok(tenTurnsMs<30000,'ten hourly turns exceeded 30-second regression ceiling');
   t.diagnostic(JSON.stringify({npcCount:1001,loreCount:1000,importMs:Math.round(importMs),retrievalMs:Math.round(retrievalMs),tenTurnsMs:Math.round(tenTurnsMs)}));
+  assert.equal((await f.game.view(f.creator,imported.id,f.pc)).turns.length,10);assert.ok(tenTurnsMs<30000,'ten hourly turns exceeded 30-second regression ceiling');
  }finally{await f.close();}
 });

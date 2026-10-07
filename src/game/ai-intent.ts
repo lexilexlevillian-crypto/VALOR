@@ -1,4 +1,4 @@
-import {captureInformationScope,assertInformationScope} from './information-context.ts';
+import {captureInformationScope,assertInformationScope,persistInformationCall} from './information-context.ts';
 import {randomUUID} from 'node:crypto';
 import {z} from 'zod';
 import {ensure} from '../contracts.ts';
@@ -53,6 +53,7 @@ export class IntentGateway{
    {id:'player-input',source:'player-input',trust:'untrusted',privacy:'private',revision:String(t.revision),content:text},
    {id:'candidate-set',source:'lore',trust:'untrusted',privacy:'private',revision:String(t.revision),content:context.candidates}
   ]},cache:{kind:'none'}});
+  await persistInformationCall(this.game,informationScope,'input-parser',request);
   this.inflight.add(timelineId);this.contexts.set(traceId,context);
   try{
    await this.game.store.transaction(async()=>{

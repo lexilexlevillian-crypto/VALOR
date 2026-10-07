@@ -39,7 +39,7 @@ export const aiRequestSchema=z.strictObject({
  traceId:z.uuid(),purpose:aiPurposeSchema,model:modelIdentitySchema,budget:aiBudgetSchema,
  allowedTools:z.array(aiToolNameSchema).max(8).refine(value=>new Set(value).size===value.length,'duplicate_tool'),response:responseContractSchema,
  prompt:z.strictObject({id:z.string().trim().min(1).max(120),version:z.string().trim().min(1).max(80),instructions:z.string().min(1).max(32_000)}),
- context:z.strictObject({provenance:z.array(aiContextEntrySchema).max(500),snapshot:z.strictObject({campaignId:z.uuid(),timelineId:z.uuid(),viewerId:z.uuid(),stateVersion:z.number().int(),eventCursor:z.string(),purpose:z.string()}).optional()}),cache:cachePolicySchema,queuedAt:z.iso.datetime()
+ context:z.strictObject({provenance:z.array(aiContextEntrySchema).max(500),snapshot:z.strictObject({campaignId:z.uuid(),timelineId:z.uuid(),viewerId:z.uuid(),stateVersion:z.number().int(),eventCursor:z.string(),sceneId:z.string().nullable().optional(),profileVersion:z.number().int().optional(),purpose:z.string()}).optional()}),cache:cachePolicySchema,queuedAt:z.iso.datetime()
 });
 export type AiRequest=z.infer<typeof aiRequestSchema>;
 export const aiUsageSchema=z.strictObject({inputTokens:z.number().int().nonnegative(),outputTokens:z.number().int().nonnegative()});
