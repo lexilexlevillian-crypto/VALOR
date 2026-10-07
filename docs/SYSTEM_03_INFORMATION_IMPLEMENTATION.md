@@ -7,7 +7,7 @@ Authoritative specification: **VALOR_System_3_Context_Knowledge_Information_Mast
 - `information-contracts.ts`, `information-extensions.ts`: validated epistemic structures and backward-readable defaults.
 - `information.ts`, `information-access.ts`, `information-operations.ts`: acquisition, sources, facets, identity, spatial precision, recall eligibility, record custody, starting packages, and audited repair.
 - `information-context.ts`, `context.ts`, `epistemics.ts`: purpose profiles, deterministic candidate reduction, shared projection rules, summaries, scope binding, and call manifests.
-- `information-routes.ts`, `information-tools.ts`, `turn-kernel.ts`, `simulation.ts`, `extended-actions.ts`: authenticated player queries and Creator inspection, authoring, replay, grant, and repair interfaces.
+- `information-routes.ts`, `information-tools.ts`, `information-replay.ts`, `turn-kernel.ts`, `simulation.ts`, `extended-actions.ts`: authenticated player queries and Creator inspection, authoring, replay, grant, and repair interfaces.
 - `engine.ts`, `model.ts`, `ai.ts`, `ai-intent.ts`, `turn-planner.ts`, `src/ai/contracts.ts`: persistence, reference checks, immutable request capture, stale-output rejection, and safe generation fallback.
 - `public/phone-apps.js`, `public/app.js`, `public/sw.js`: notebook queries, approximate/last-known places, memory archive distinction, Creator perspectives/replay/repair, shell cache v31.
 - New completion and scale test suites; expanded notebook browser and NPC profile regressions. The existing large-roster timing threshold is unchanged.
@@ -30,7 +30,7 @@ Routes below are relative to `/game/timelines/:id/information`:
 | POST /author, /active/:recordId | Controlled character; revision and idempotency checked |
 | POST /research | Controlled character; access-filtered records and deterministic game-time cost |
 | GET /diagnostics, /inspect, /perspective, /why, /context, /calls | Creator; diagnostic reads grant no PC knowledge |
-| POST /replay, /repair-preview, /retcon-preview | Creator; noncanonical preview |
+| POST /replay, /repair-preview, /retcon-preview | Creator; noncanonical previews; explicit replay execution is budgeted |
 | POST /developer, /operations | Creator; revision, idempotency, schema checks, provenance, audit |
 
 Freeform character beliefs and knowledge/recall questions also use these domain operations. Named-PC beliefs are supported; OOC theories remain outside character knowledge.
@@ -63,7 +63,7 @@ Staged labels suppress unrevealed names and aliases. Approximate knowledge shows
 
 Context binds campaign, timeline, viewer, scene, state revision, event cursor, and retrieval-profile version. Bundles are frozen. Provider requests persist validated provenance and the exact request for inspection. Parser/planner/narrator responses recheck scope before acceptance. Branches and later discoveries cannot enter a saved earlier perspective.
 
-Replay reconstructs the recorded context with the original scope/profile, optional omissions, and a changed budget. It returns a noncanonical checksum and completeness result, and cannot remove required sources or write gameplay state. This is context replay; it does not purchase an additional external-model generation.
+Replay reconstructs the recorded context with the original scope/profile, optional omissions, and a changed budget. It returns a noncanonical checksum and completeness result, and cannot remove required sources or write gameplay state. An explicit rerun executes the saved provider request, optionally with another configured model. It enforces campaign/user token budgets, validates the response schema, disables tools, preserves historical input, and records an idempotent diagnostic result. Output remains noncanonical and cannot commit gameplay changes; current world state is never substituted into the frozen request. Context-only previews incur no provider charge.
 
 ## 9. Summaries and rebuilds
 
@@ -85,7 +85,7 @@ Repair previews traverse dependencies and locate committed contexts mentioning a
 
 ## 12. Verification
 
-The new completion suite covers the gaps above, including source repair after actual save/load, Creator/player authorization, noncanonical replay, progressive identity, stale profiles, custody, approximate mapping, circularity, recall eligibility, and faction availability. Existing suites cover communications, deletion, perception, hidden relationships, narration, tenant isolation, branch/save/restore, and release rehearsal. The 52 scenarios from section 18 are mapped in [SYSTEM_03_ACCEPTANCE_MATRIX.md](SYSTEM_03_ACCEPTANCE_MATRIX.md).
+The new completion suite covers the gaps above, including source repair after actual save/load, Creator/player authorization, noncanonical replay, progressive identity, stale profiles, custody, approximate mapping, circularity, recall eligibility, faction availability, future-date isolation, and budgeted/idempotent AI replay. Existing suites cover communications, deletion, perception, hidden relationships, narration, tenant isolation, branch/save/restore, and release rehearsal. The 52 scenarios from section 18 are mapped in [SYSTEM_03_ACCEPTANCE_MATRIX.md](SYSTEM_03_ACCEPTANCE_MATRIX.md).
 
 Focused domain and notebook regressions passed. Chromium and WebKit notebook checks passed at mobile and iPad viewport sizes, with zero axe violations and no page errors. TypeScript, JavaScript syntax, whitespace checks, and the production dependency audit passed. The dependency audit found zero vulnerabilities.
 

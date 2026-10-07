@@ -1,3 +1,7 @@
+import {executeInformationReplay} from '../src/game/information-replay.ts';
+import {persistInformationCall,captureInformationScope} from '../src/game/information-context.ts';
+import {makeAiRequest,responseContract} from '../src/ai/contracts.ts';
+import {localAdapter} from '../src/ai/gateway.ts';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID as uuid,createHash} from 'node:crypto';
@@ -70,4 +74,22 @@ test('System 3 future records, transmissions, acquisitions and messages remain u
  assert.throws(()=>authorInformation(s,pc.id,{kind:'hypothesis',text:'Derived claim',sourceIds:[entry.id]},uuid()),/source_unavailable/);
  const before=informationHash(s);assert.throws(()=>transmitInformation(s,{...t,id:uuid(),senderId:pc.id,at:s.clock}),/sender_information_unavailable/);assert.equal(informationHash(s),before);
  s.clock=future;assert.equal(researchInformation(s,pc.id,'FUTURE_CANARY').records.length,1);exposeTransmission(s,t.id,pc.id,{delivered:true,exposed:true});assert.match(JSON.stringify(observerView(s,pc.id)),/FUTURE_CANARY/);assert.equal(source.status,'active');
+});
+
+test('System 3 AI call replay freezes historical input, enforces budgets and roles, and never commits diagnostic output',async()=>{
+ const f=await fixture(),game=new Game(f.store);try{
+  const t=await game.initialize(f.creator,f.campaign.id),{s,pc}=setup();s.settings.tokenBudget=100000;s.settings.userTokenBudget=100000;await game.persist(t.id,s);
+  const scope=await captureInformationScope(game,t.id,pc.id),request=makeAiRequest({purpose:'classification',model:{provider:'replay-fixture',model:'v1',configurationId:'test-v1'},budget:{maxInputTokens:8000,maxOutputTokens:200,maxTotalTokens:8200,timeoutMs:1000,maxAttempts:1},allowedTools:[],response:responseContract('replay-test','1',{type:'object',properties:{answer:{type:'string'}},required:['answer'],additionalProperties:false}),prompt:{id:'replay',version:'1',instructions:'Return the recorded claim.'},context:{snapshot:{...scope,purpose:'input-parser'},provenance:[{id:'historical-input',source:'player-input',trust:'untrusted',privacy:'private',revision:'1',content:'Earlier belief'}]},cache:{kind:'none'}});
+  await persistInformationCall(game,scope,'input-parser',request);const saved=await f.store.get<{manifest_json:string}>('SELECT manifest_json FROM information_context_manifests WHERE id=?',request.traceId),replay=JSON.parse(saved!.manifest_json);replay.manifest.replayedFrom=request.traceId;
+  authorInformation(s,pc.id,{kind:'belief',text:'LATER_REPLAY_CANARY'},uuid());await game.persist(t.id,s);const before=informationHash(await game.load(t.id)),events=(await f.store.all('SELECT id FROM game_events WHERE timeline_id=?',t.id)).length;let calls=0;
+  const provider=localAdapter('replay-fixture',sent=>{calls++;assert.deepEqual(sent.context,request.context);assert.equal(sent.model.model,'alternate-v2');assert.deepEqual(sent.allowedTools,[]);assert.doesNotMatch(JSON.stringify(sent),/LATER_REPLAY_CANARY/);return {answer:'Earlier belief'};}),model={...request.model,model:'alternate-v2'},receipt=key();
+  await assert.rejects(executeInformationReplay(game,f.player,t.id,key(),replay,[provider],model),/forbidden/);assert.equal(calls,0);
+  const result=await executeInformationReplay(game,f.creator,t.id,receipt,replay,[provider],model);assert.equal(result.status,'succeeded');assert.equal(result.committed,false);assert.deepEqual(result.output,{answer:'Earlier belief'});assert.deepEqual(await executeInformationReplay(game,f.creator,t.id,receipt,replay,[provider],model),result);assert.equal(calls,1);
+  await assert.rejects(executeInformationReplay(game,f.creator,t.id,receipt,replay,[provider],{...model,model:'different'}),/idempotency_conflict/);
+  assert.equal(informationHash(await game.load(t.id)),before);assert.equal((await f.store.all('SELECT id FROM game_events WHERE timeline_id=?',t.id)).length,events);assert.equal((await f.store.get<{manifest_json:string}>('SELECT manifest_json FROM information_context_manifests WHERE id=?',request.traceId))!.manifest_json,saved!.manifest_json);
+  const bad=localAdapter('replay-fixture',()=>({unapproved:'not the response contract'}));assert.equal((await executeInformationReplay(game,f.creator,t.id,key(),replay,[bad])).status,'fallback');
+  s.settings.tokenBudget=0;await game.persist(t.id,s);await assert.rejects(executeInformationReplay(game,f.creator,t.id,key(),replay,[provider],model),/ai_budget_exceeded/);assert.equal(calls,1);
+  const fragmentId=uuid(),grounded=makeAiRequest({...request,traceId:uuid(),purpose:'narration',model:{provider:'grounded',model:'deterministic-v1',configurationId:'narration-grounded-v1'},response:responseContract('ordered-narration','2',{type:'object',properties:{order:{type:'array',items:{type:'string'}}},required:['order'],additionalProperties:false}),context:{...request.context,provenance:[{id:fragmentId,source:'simulation',trust:'trusted',privacy:'campaign',revision:'1',content:{id:fragmentId,text:'Alex waited.'}}]}});
+  await persistInformationCall(game,scope,'narration',grounded);const groundRow=await f.store.get<{manifest_json:string}>('SELECT manifest_json FROM information_context_manifests WHERE id=?',grounded.traceId),groundReplay=JSON.parse(groundRow!.manifest_json);groundReplay.manifest.replayedFrom=grounded.traceId;assert.deepEqual((await executeInformationReplay(game,f.creator,t.id,key(),groundReplay,[])).output,{order:[fragmentId]});
+ }finally{await f.close();}
 });

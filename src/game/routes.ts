@@ -21,7 +21,6 @@ import {IntentGateway} from './ai-intent.ts';
 import {simulationTiers} from './simulation.ts';
 import {listMasterBank} from './master-bank.ts';
 export function gameRoutes(app:FastifyInstance,game:Game,actor:(r:object)=>Actor,key:(headers:Record<string,unknown>)=>string){
- informationRoutes(app,game,actor,key);
  const world=new SharedWorld(game);
  const directProviders=directProvidersFromEnvironment(),preferredProvider=preferredDirectProvider(directProviders);
  const kernel=new TurnKernel(game,preferredProvider?new CreativeTurnPlanner(game,preferredProvider):undefined);
@@ -35,6 +34,7 @@ export function gameRoutes(app:FastifyInstance,game:Game,actor:(r:object)=>Actor
  app.post('/game/world/life',async r=>{z.strictObject({}).parse(r.body);return world.enter(actor(r),key(r.headers));});
  const providers:NarrativeProvider[]=[new GroundedProvider(),...(process.env.AI_GATEWAY_URL&&process.env.AI_GATEWAY_SECRET?[new JsonGatewayProvider(process.env.AI_GATEWAY_URL,process.env.AI_GATEWAY_SECRET)]:[])];
  providers.push(...directProviders);
+ informationRoutes(app,game,actor,key,providers.filter(provider=>!!provider.complete).map(provider=>({id:provider.id,complete:(request,signal)=>provider.complete!(request,signal)})));
  app.post('/game/ai/health',async r=>{
   const user=await game.domain.active(actor(r));if(!['creator','admin'].includes(user.role))throw new Fault(403,'forbidden');
   const b=z.strictObject({provider:z.enum(directProviderIds).optional()}).parse(r.body),selected=b.provider?directProviders.find(provider=>provider.id===b.provider):preferredProvider,providerId=b.provider??preferredDirectProviderId(directProviders);

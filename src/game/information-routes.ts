@@ -1,3 +1,4 @@
+import type {AiProviderAdapter} from '../ai/contracts.ts';
 import {informationTools} from './information-tools.ts';
 import {simulationId as randomUUID,withTurnRuntime} from './turn-runtime.ts';
 import {z} from 'zod';
@@ -12,8 +13,8 @@ import {advance} from './simulation.ts';
 import type {Effect} from './simulation.ts';
 import {reviseActiveInformation} from './information.ts';
 
-export function informationRoutes(app:FastifyInstance,game:Game,actor:(r:object)=>Actor,key:(headers:Record<string,unknown>)=>string){
- informationTools(app,game,actor,key);
+export function informationRoutes(app:FastifyInstance,game:Game,actor:(r:object)=>Actor,key:(headers:Record<string,unknown>)=>string,providers:AiProviderAdapter[]=[]){
+ informationTools(app,game,actor,key,providers);
  const path='/game/timelines/:id/information',params=z.strictObject({id:z.uuid()}),revision=z.number().int().positive(),characterId=z.uuid();
  const safe=async<T>(fn:()=>T|Promise<T>)=>{try{return await fn();}catch(e){if(e instanceof Fault||e instanceof z.ZodError)throw e;if(e instanceof Error&&/^[a-z_]+$/.test(e.message))throw new Fault(400,e.message);throw e;}};
  app.post(path+'/active/:recordId',async r=>safe(async()=>{const {id,recordId}=z.strictObject({id:z.uuid(),recordId:z.uuid()}).parse(r.params),b=z.strictObject({revision,characterId,status:activeInformationSchema.shape.status.optional(),confidence:z.number().min(0).max(1).optional(),sourceIds:z.array(z.uuid()).max(100).optional(),contradictsIds:z.array(z.uuid()).max(100).optional()}).parse(r.body);await game.authorizeCharacter(actor(r),id,b.characterId);return game.mutate(actor(r),id,b.revision,key(r.headers),b,'information.revised',false,async s=>{await game.authorizeCharacter(actor(r),id,b.characterId);const {revision,characterId,...patch}=b;return {result:{entry:reviseActiveInformation(s,characterId,recordId,patch)}};});}));
