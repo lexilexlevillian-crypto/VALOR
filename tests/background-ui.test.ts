@@ -81,7 +81,10 @@ test('pastel wallpapers, integrated title menu, motion controls and device prefe
   await page.emulateMedia({forcedColors:'active'});assert.equal(await page.locator('#valor-wallpaper').isVisible(),false);await page.emulateMedia({forcedColors:'none'});
   await page.evaluate(()=>localStorage.setItem('valor.background','unexpected-value'));await page.reload();await page.getByRole('heading',{name:'VALOR',exact:true}).waitFor();assert.equal(await page.locator('html').getAttribute('data-background'),'hearts');
   await page.evaluate(()=>navigator.serviceWorker.ready);
+  await page.waitForFunction(()=>Boolean(navigator.serviceWorker.controller));
   assert.equal(await page.evaluate(async()=>Boolean(await caches.match('/backgrounds.js'))),true);
+  assert.equal(await page.evaluate(async()=>Boolean(await caches.match('/app'))),true);
+  assert.equal(await page.evaluate(async()=>Boolean(await caches.match('/city-guide.js'))),true);
   await context.setOffline(true);await page.reload();await page.getByRole('button',{name:'Customize style'}).click();await page.getByRole('button',{name:'Stars',exact:true}).click();assert.equal(await page.locator('html').getAttribute('data-background'),'stars');await context.setOffline(false);
   assert.deepEqual(errors,[]);
  }finally{await browser.close();await f.close();}

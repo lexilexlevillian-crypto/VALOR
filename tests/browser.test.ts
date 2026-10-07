@@ -165,6 +165,9 @@ test('iPad shell, keyboard login, Creator form, long prose, reduced motion and o
   await page.keyboard.press('Tab');
   assert.ok(await page.evaluate(()=>document.activeElement!==document.body));
   await page.evaluate(()=>navigator.serviceWorker.ready);
+  await page.waitForFunction(()=>Boolean(navigator.serviceWorker.controller));
+  assert.equal(await page.evaluate(async()=>Boolean(await caches.match('/app'))),true);
+  assert.equal(await page.evaluate(async()=>Boolean(await caches.match('/city-guide.js'))),true);
   await context.setOffline(true);
   await page.reload();
   await page.getByRole('heading',{name:'Every choice leaves a trace.'}).waitFor();
