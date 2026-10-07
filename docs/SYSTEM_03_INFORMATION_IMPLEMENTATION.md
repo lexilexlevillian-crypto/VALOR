@@ -98,12 +98,12 @@ Windows measurements from the completion fixtures:
 | Fixture | Measurement |
 | --- | --- |
 | 50,000 in-memory event references | 329 ms assembly; 3,568 conservatively estimated input tokens |
-| 50,000 persisted game events and memories | 38,137 ms initial persistence; 2,195 ms load; 467 ms context assembly; 3,011 estimated input tokens |
-| 1,001 NPCs and 1,000 lore records | Ten persisted hourly turns including autosaves: 25,854 ms; unchanged 30,000 ms ceiling |
-| Persisted campaign state | 27,496,712 JSON bytes |
-| 10,000 deterministic resolver turns | 8,234 ms total; 100 context samples; p50 37 ms, p95 64 ms; maximum 1,603 estimated tokens |
+| 50,000 persisted game events and memories | 42,656 ms initial persistence; 1,714 ms load; 275 ms context assembly; 1,759 estimated input tokens |
+| 1,001 NPCs and 1,000 lore records | Ten persisted hourly turns including autosaves: 26,693 ms; unchanged 30,000 ms ceiling |
+| Persisted campaign state | 27,496,770 JSON bytes |
+| 10,000 deterministic resolver turns | 3,487 ms total; 100 context samples; p50 2 ms, p95 2 ms; maximum 1,448 estimated tokens |
 
-The resolver soak executes actual deterministic action resolution and time advancement in memory; it is **not 10,000 persisted TurnKernel commits or paid model calls**. The 50,000-event database fixture synthesizes canonical event history and performs real persistence, loading, and retrieval. All these fixtures make zero external-model calls and incur zero model charges. Provider-specific production latency, token billing, and spend are not inferred from local byte estimates.
+The resolver soak preserves a meaningful promise memory through 10,000 routine waits without forcing each idle turn to create a durable memory. It executes actual deterministic action resolution and time advancement in memory; it is **not 10,000 persisted TurnKernel commits or paid model calls**. The 50,000-event database fixture synthesizes canonical event history and performs real persistence, loading, and retrieval. All these fixtures make zero external-model calls and incur zero model charges. Provider-specific production latency, token billing, and spend are not inferred from local byte estimates.
 
 ## 14. Author choices and operational limits
 

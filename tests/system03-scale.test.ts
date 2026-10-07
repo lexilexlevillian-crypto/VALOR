@@ -1,3 +1,4 @@
+import {remember} from '../src/game/epistemics.ts';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
@@ -11,9 +12,10 @@ import {fixture,key} from './helpers.ts';
 
 test('System 3 10,000 deterministic resolver turns preserve bounded context without resets',()=>{
  const room=validateEntity({id:key(),kind:'location',name:'Quiet room',visibility:'campaign',data:{}}),pc=validateEntity({id:key(),kind:'character',name:'Soak player',visibility:'owner',data:{playable:true,locationId:room.id}}),s:State={clock:'2012-06-01T12:00:00.000Z',settings:settingsSchema.parse({needs:false,contextTokens:8000}),entities:[room,pc],facts:[],knowledge:[],beliefs:[],memories:[]},scope={campaignId:key(),timelineId:key(),viewerId:pc.id,stateVersion:1,eventCursor:key()};
+ remember(s,pc.id,'Promised to meet Nia at the diner.',key(),1,{decayPerDay:0});const retainedMemoryId=s.memories[0]!.id;
  const started=performance.now(),latencies:number[]=[];let maxTokens=0;
  for(let n=1;n<=10000;n++){const eventId=randomUUID(),result=resolveAction(s,pc.id,{type:'wait',minutes:1},eventId,n.toString(16).padStart(64,'0'));assert.ok(result.effects.length);if(n%100===0){syncInformation(s);const began=performance.now(),context=buildInformationContext(s,{...scope,stateVersion:n,eventCursor:eventId},'narration','quiet room',{tokenBudget:8000});latencies.push(performance.now()-began);maxTokens=Math.max(maxTokens,context.manifest.finalEstimatedTokens);assert.ok(context.manifest.ready);assert.ok(context.manifest.finalEstimatedTokens<=8000);}}
- assert.equal(Date.parse(s.clock)-Date.parse('2012-06-01T12:00:00.000Z'),10000*60000);assert.equal(pc.id,scope.viewerId);assert.equal(s.memories.length,10000);latencies.sort((a,b)=>a-b);console.log(JSON.stringify({system03ResolverSoak:{resolverTurns:10000,persistedCommits:0,elapsedMs:Math.round(performance.now()-started),contextSamples:latencies.length,contextP50Ms:Math.round(latencies[49]!),contextP95Ms:Math.round(latencies[94]!),maxEstimatedInputTokens:maxTokens,providerCalls:0,providerCost:0}}));
+ assert.equal(Date.parse(s.clock)-Date.parse('2012-06-01T12:00:00.000Z'),10000*60000);assert.equal(pc.id,scope.viewerId);assert.equal(s.memories.length,1,'Routine waits must not create 10,000 artificial memories');assert.equal(s.memories[0]!.id,retainedMemoryId);assert.match(s.memories[0]!.text,/Promised to meet Nia/);latencies.sort((a,b)=>a-b);console.log(JSON.stringify({system03ResolverSoak:{resolverTurns:10000,persistedCommits:0,elapsedMs:Math.round(performance.now()-started),contextSamples:latencies.length,contextP50Ms:Math.round(latencies[49]!),contextP95Ms:Math.round(latencies[94]!),maxEstimatedInputTokens:maxTokens,providerCalls:0,providerCost:0}}));
 });
 
 test('System 3 persisted 50,000-event campaign retrieves current relevant material within budget',async()=>{
