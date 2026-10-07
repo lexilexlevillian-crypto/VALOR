@@ -33,7 +33,59 @@ export const BACKGROUNDS=[
  ['security','Security guard','Security work taught awareness and de-escalation.',{Perception:1,Presence:1},{Search:.5,'Hand-to-hand':.25}],
  ['law-student','Legal education','Legal study taught research and understanding of procedure.',{Intellect:1,Presence:1},{Law:.5}],
  ['technician','Computer technician','Hands-on work taught troubleshooting with 2012-era technology.',{Intellect:2},{'2012 electronics / computers':.5}],
- ['boxer','Boxer','Gym training developed footwork and close-range technique.',{Strength:1,Agility:1},{'Hand-to-hand':.5,Athletics:.25}]
+ ['boxer','Boxer','Gym training developed footwork and close-range technique.',{Strength:1,Agility:1},{'Hand-to-hand':.5,Athletics:.25}],
+ ['doctor','Doctor','Clinical education and practice taught diagnosis and patient care.',{Intellect:1,Perception:1},{Medicine:.5,'First aid':.25}],
+ ['surgeon','Surgeon','Surgical training developed precision and clinical judgment.',{Intellect:1,Agility:1},{Surgery:.5,Medicine:.25}],
+ ['dentist','Dentist','Dental practice taught careful examination and treatment.',{Intellect:1,Agility:1},{Dentistry:.5,Medicine:.25}],
+ ['pharmacist','Pharmacist','Pharmacy work taught medication knowledge and attention to detail.',{Intellect:1,Perception:1},{Pharmacology:.5,Medicine:.25}],
+ ['therapist','Therapist','Counseling practice taught listening and supportive conversation.',{Perception:1,Presence:1},{Counseling:.5,Psychology:.25}],
+ ['veterinarian','Veterinarian','Animal medicine taught examination and care.',{Intellect:1,Perception:1},{'Veterinary care':.5,'Animal care':.25}],
+ ['social-worker','Social worker','Community support work taught advocacy and careful listening.',{Presence:1,Will:1},{'Social work':.5,Counseling:.25}],
+ ['childcare','Childcare worker','Daily care developed patience and practical supervision.',{Perception:1,Will:1},{Childcare:.5,'First aid':.25}],
+ ['elder-care','Elder care worker','Supporting older adults developed observation and patience.',{Perception:1,Will:1},{'Elder care':.5,Nursing:.25}],
+ ['scientist','Scientist','Lab and field research developed careful analysis.',{Intellect:1,Perception:1},{Research:.5,Statistics:.25}],
+ ['biologist','Biologist','Biology study taught observation of living systems.',{Intellect:1,Perception:1},{Biology:.5,Research:.25}],
+ ['chemist','Chemist','Chemistry training taught analysis and lab discipline.',{Intellect:1,Will:1},{Chemistry:.5,Research:.25}],
+ ['engineer','Engineer','Engineering work taught design and technical problem solving.',{Intellect:2},{Physics:.25,Mathematics:.5}],
+ ['programmer','Programmer','Software work taught logic and 2012-era computing.',{Intellect:2},{'Computer programming':.5,'2012 electronics / computers':.25}],
+ ['network-admin','Network administrator','IT operations taught connected systems and troubleshooting.',{Intellect:1,Perception:1},{'Computer networking':.5,'2012 electronics / computers':.25}],
+ ['librarian','Librarian','Library work taught research and finding reliable sources.',{Intellect:1,Will:1},{'Library science':.5,Research:.25}],
+ ['historian','Historian','Historical study taught source analysis and context.',{Intellect:1,Will:1},{History:.5,Research:.25}],
+ ['archaeologist','Archaeologist','Field research taught observation and material history.',{Intellect:1,Endurance:1},{Archaeology:.5,Research:.25}],
+ ['lawyer','Lawyer','Legal practice taught argument and case research.',{Intellect:1,Presence:1},{Law:.5,Persuasion:.25}],
+ ['accountant','Accountant','Accounting work taught records and financial detail.',{Intellect:1,Perception:1},{Accounting:.5,Finance:.25}],
+ ['banker','Banker','Financial services taught transactions and customer judgment.',{Intellect:1,Presence:1},{Finance:.5,'Customer service':.25}],
+ ['entrepreneur','Entrepreneur','Running a venture taught planning and negotiation.',{Presence:1,Will:1},{Business:.5,Negotiation:.25}],
+ ['manager','Manager','Coordinating teams taught planning and leadership.',{Presence:1,Will:1},{Management:.5,Leadership:.25}],
+ ['salesperson','Salesperson','Sales work taught conversation and customer needs.',{Presence:2},{Sales:.5,Persuasion:.25}],
+ ['server','Restaurant server','Service shifts taught coordination and hospitality.',{Agility:1,Presence:1},{Hospitality:.5,'Customer service':.25}],
+ ['bartender','Bartender','Bar work taught service and social awareness.',{Perception:1,Presence:1},{Bartending:.5,Hospitality:.25}],
+ ['baker','Baker','Bakery work taught precise preparation and timing.',{Perception:1,Endurance:1},{Baking:.5,Cooking:.25}],
+ ['farmer','Farmer','Farm work taught cultivation and practical endurance.',{Strength:1,Endurance:1},{Agriculture:.5,Gardening:.25}],
+ ['landscaper','Landscaper','Outdoor maintenance taught plants and physical work.',{Strength:1,Perception:1},{Landscaping:.5,Botany:.25}],
+ ['plumber','Plumber','Building maintenance taught pipe systems and repair.',{Strength:1,Intellect:1},{Plumbing:.5,Mechanics:.25}],
+ ['electrician','Electrician','Electrical trade work taught diagnosis and repair.',{Intellect:1,Perception:1},{'Electrical work':.5,Construction:.25}],
+ ['welder','Welder','Fabrication work taught precision and metalworking.',{Strength:1,Perception:1},{Welding:.5,Metalworking:.25}],
+ ['builder','Construction worker','Building sites taught tools and teamwork.',{Strength:1,Endurance:1},{Construction:.5,Carpentry:.25}],
+ ['pilot','Pilot','Flight training taught navigation and calm decisions.',{Perception:1,Will:1},{Piloting:.5,Navigation:.25}],
+ ['sailor','Sailor','Time at sea taught navigation and vessel handling.',{Endurance:1,Perception:1},{Sailing:.5,Navigation:.25}],
+ ['dispatcher','Dispatcher','Coordinating calls taught prioritization and clear communication.',{Perception:1,Will:1},{Dispatch:.5,'Emergency management':.25}],
+ ['logistics','Logistics coordinator','Moving goods taught routing and organization.',{Intellect:1,Will:1},{Logistics:.5,Navigation:.25}],
+ ['delivery','Delivery worker','Daily routes taught city navigation and reliable timing.',{Agility:1,Perception:1},{Driving:.5,Navigation:.25}],
+ ['artist','Visual artist','Creative practice taught composition and craft.',{Agility:1,Intellect:1},{Drawing:.5,Painting:.25}],
+ ['actor','Actor','Rehearsal and performance taught expression and timing.',{Presence:1,Will:1},{Acting:.5,'Public speaking':.25}],
+ ['musician','Musician','Practice and performance taught musical technique.',{Agility:1,Will:1},{Music:.5,'Audio production':.25}],
+ ['dancer','Dancer','Dance training taught movement and endurance.',{Agility:1,Endurance:1},{Dance:.5,Athletics:.25}],
+ ['photographer','Photographer','Photography work taught composition and visual observation.',{Perception:1,Intellect:1},{Photography:.5,'Graphic design':.25}],
+ ['filmmaker','Filmmaker','Production work taught visual storytelling and coordination.',{Intellect:1,Presence:1},{Filmmaking:.5,'Audio production':.25}],
+ ['writer','Writer','Writing practice taught language and revision.',{Intellect:1,Will:1},{Writing:.5,Editing:.25}],
+ ['translator','Translator','Language work taught careful interpretation.',{Intellect:1,Perception:1},{Translation:.5,Languages:.25}],
+ ['coach','Sports coach','Coaching taught instruction and athletic training.',{Presence:1,Endurance:1},{'Sports coaching':.5,Athletics:.25}],
+ ['outdoor-guide','Outdoor guide','Guiding others taught routes and field safety.',{Perception:1,Endurance:1},{Survival:.5,Navigation:.25}],
+ ['animal-trainer','Animal trainer','Working with animals taught observation and patient instruction.',{Perception:1,Will:1},{'Animal training':.5,'Animal handling':.25}],
+ ['real-estate','Real estate agent','Property work taught local knowledge and negotiation.',{Presence:1,Perception:1},{'Real estate':.5,Negotiation:.25}],
+ ['community-volunteer','Community volunteer','Volunteer work taught local needs and cooperation.',{Presence:1,Will:1},{'Community organizing':.5,'Social work':.25}],
+ ['unemployed','Between jobs','Navigating a work transition taught resourcefulness and persistence.',{Will:1,Perception:1},{Streetwise:.25,Search:.25}]
 ].map(([id,name,description,modifiers,skills])=>({id,name,description,modifiers,skills}));
 
 export const SKILL_DESCRIPTIONS={
@@ -62,6 +114,6 @@ export const SKILL_DESCRIPTIONS={
  Law:'Understanding legal rules and researching legal questions.', 'Criminal knowledge':'Recognizing criminal methods and practices.'
 };
 export function stockSkill(name){
- const description=SKILL_DESCRIPTIONS[name];if(!description)return null;
+ const description=SKILL_DESCRIPTIONS[name]??('Practical knowledge and experience in '+name.toLowerCase()+' for authored challenges.');
  return {description:description+' In game: your rating is added to checks using this skill. At half a bar or higher, Trained adds another +2 to those checks.'+(name==='Athletics'?' Trained Athletics also reduces ordinary fatigue buildup by 15%.':'')};
 }

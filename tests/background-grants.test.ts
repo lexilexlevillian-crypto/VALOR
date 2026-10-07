@@ -9,6 +9,7 @@ import {startingBudget,applyStartingGrants,skillGrants,skillStatus,stockSkill,OR
 import {applyPlayerChoices} from '../src/game/creation.ts';
 import {resolveAction} from '../src/game/actions.ts';
 import {advance} from '../src/game/simulation.ts';
+import {skillNames,traitGroups} from '../src/game/catalog.ts';
 const skill=(name:string,extra:Record<string,unknown>={})=>validateEntity({id:randomUUID(),kind:'skill',name,visibility:'campaign',data:{description:stockSkill(name)?.description??'',...extra}});
 const character=(extra:Record<string,unknown>={})=>validateEntity({id:randomUUID(),kind:'character',name:'Subject',visibility:'campaign',data:{playable:true,...extra}});
 const state=(entities:ReturnType<typeof validateEntity>[]):State=>({clock:'2012-06-01T12:00:00.000Z',settings:settingsSchema.parse({}),entities,facts:[],knowledge:[],beliefs:[],memories:[]});
@@ -21,6 +22,11 @@ test('four background slots grant free training, deduplicate, retain legacy hist
  assert.equal(selectedBackgrounds(d).length,3);assert.equal(d.background.history,'Preserved');
  assert.equal(selectedBackgrounds({background:{option1:'',originChoice:'local'}})[0]?.id,'local');
  assert.ok(ORIGINS.length>=30);assert.ok(ORIGINS.every(row=>row.description&&Object.keys(row.skills).length&&Object.keys(row.modifiers).length));
+ const doctor=ORIGINS.find(row=>row.id==='doctor')!;assert.equal(doctor.skills.Medicine,.5);assert.equal(Object.values(doctor.modifiers).reduce((sum,value)=>sum+value,0),2);
+ assert.equal(new Set(ORIGINS.map(row=>row.id)).size,ORIGINS.length);
+ assert.equal(new Set(skillNames).size,skillNames.length);
+ assert.equal(new Set(Object.values(traitGroups).flat()).size,Object.values(traitGroups).flat().length);
+ for(const row of ORIGINS)for(const name of Object.keys(row.skills))assert.ok(skillNames.includes(name),'missing catalog skill '+name+' for '+row.id);
  const hidden={...athletics,id:randomUUID(),visibility:'creator' as const};
  assert.equal(Object.hasOwn(skillGrants(d,[hidden,rifle]),hidden.id),false);
  assert.throws(()=>applyPlayerChoices(state(entities),{}, {background:{option1:'invented-bonus'}}),/unknown_creation_background/);
@@ -31,6 +37,8 @@ test('published life persists four backgrounds and trait training with server-ca
  try{
   const timeline=await game.initialize(f.creator,f.campaign.id);await game.installCatalog(f.creator,timeline.id,1,key());
   const s=await game.load(timeline.id),medic=s.entities.find(e=>e.name==='Medic'&&e.kind==='trait')!,firstAid=s.entities.find(e=>e.name==='First aid'&&e.kind==='skill')!,rifle=s.entities.find(e=>e.name==='Firearms: rifles'&&e.kind==='skill')!;
+  const medicine=s.entities.find(e=>e.name==='Medicine'&&e.kind==='skill')!,doctor=s.entities.find(e=>e.name==='Doctor'&&e.kind==='trait')!;
+  assert.equal(medicine.data.description,stockSkill('Medicine')?.description);assert.deepEqual(doctor.data.skillGrants,[{skillId:medicine.id,fraction:.5}]);
   assert.deepEqual(medic.data.skillGrants,[{skillId:firstAid.id,fraction:.5}]);
   const pkg=await game.createStartPackage(f.creator,timeline.id,{name:'Background test',slug:'background-test',kind:'guided',visibility:'campaign',status:'published',definition:{character:{name:'Recruit',description:'',data:{}},grantEntityIds:[],relationshipTemplates:[],reputation:[],plotHookIds:[],requiresSystems:[]}},key());
   const result=await game.start(f.player,timeline.id,{revision:2,packageId:pkg.id,choices:{traits:[medic.id],background:{option1:'marine',option2:'veteran',option3:'college',option4:'police'},skills:{[rifle.id]:70}}},key());

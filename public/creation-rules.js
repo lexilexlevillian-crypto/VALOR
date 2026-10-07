@@ -42,9 +42,21 @@ const rows={
  'Connected':['Presence',1], 'Respected':['Presence',2], 'Feared':['Presence',1],
  'Notorious':['Presence',-1], 'Affluent':['Presence',1], 'Poor':['Presence',-1],
  'Working class':['Endurance',1], 'Affiliated':['Presence',1], 'Criminal record':['Presence',-1],
- 'Ex-convict':['Will',1,'Presence',-1], 'Informant':['Perception',1], 'Snitch reputation':['Presence',-1]
+ 'Ex-convict':['Will',1,'Presence',-1], 'Informant':['Perception',1], 'Snitch reputation':['Presence',-1],
+ 'Flexible':['Agility',1], 'Steady hands':['Agility',1], 'Quick reflexes':['Agility',2], 'Sturdy':['Endurance',2],
+ 'Light sleeper':['Perception',1], 'Heavy sleeper':['Perception',-1], 'Keen hearing':['Perception',2], 'Keen eyesight':['Perception',2],
+ 'Motion sick':['Endurance',-1], 'Sure-footed':['Agility',2], 'Enduring':['Endurance',2], 'Fast runner':['Agility',2],
+ 'Curious':['Intellect',1], 'Resourceful':['Intellect',1], 'Methodical':['Will',1], 'Adaptable':['Will',1],
+ 'Optimistic':['Will',1], 'Pessimistic':['Will',-1], 'Skeptical':['Perception',1], 'Idealistic':['Will',1],
+ 'Diplomatic':['Presence',2], 'Blunt':['Presence',-1], 'Humorous':['Presence',1], 'Reserved':['Presence',-1],
+ 'Outgoing':['Presence',2], 'Perfectionist':['Will',1], 'Stubborn':['Will',1], 'Level-headed':['Will',2],
+ 'Easily distracted':['Perception',-1], 'Persistent':['Will',2], 'Creative':['Intellect',2], 'Pragmatic':['Intellect',1],
+ 'Generous':['Presence',1], 'Competitive':['Will',1], 'Cooperative':['Presence',1],
+ 'Local reputation':['Presence',1], 'Community leader':['Presence',2], 'Well traveled':['Perception',1],
+ 'New in town':['Presence',-1], 'Mentor':['Presence',1], 'Apprentice':['Will',1], 'Family ties':['Presence',1],
+ 'Union member':['Presence',1], 'Public figure':['Presence',1], 'Private person':['Presence',-1], 'Networker':['Presence',2]
 };
-const experience={'Street fighter':'Hand-to-hand','Boxer':'Hand-to-hand','Grappler':'Hand-to-hand','Firearms training':'Firearms: handguns','Police training':'Police procedure','Military training':'Firearms: rifles','Criminal experience':'Criminal knowledge','Driver':'Driving','Mechanic':'Mechanics','Medic':'First aid'};
+const experience={'Street fighter':'Hand-to-hand','Boxer':'Hand-to-hand','Grappler':'Hand-to-hand','Firearms training':'Firearms: handguns','Police training':'Police procedure','Military training':'Firearms: rifles','Criminal experience':'Criminal knowledge','Driver':'Driving','Mechanic':'Mechanics','Medic':'First aid',Doctor:'Medicine','Nurse training':'Nursing',Surgeon:'Surgery',Therapist:'Counseling',Veterinarian:'Veterinary care','Teacher training':'Teaching',Researcher:'Research',Programmer:'Computer programming',Pilot:'Piloting',Sailor:'Sailing','Firefighter training':'Firefighting','Chef training':'Cooking',Musician:'Music',Artist:'Drawing','Journalist training':'Journalism',Lawyer:'Law',Accountant:'Accounting',Builder:'Construction',Farmer:'Agriculture',Interpreter:'Translation',Investigator:'Investigation',Survivalist:'Survival'};
 function legacyStockTrait(name){
  if(experience[name])return {cost:2,modifiers:{},skill:experience[name],bonus:2,description:'Training grants +2 only on checks using '+experience[name]+'. It does not grant unrelated expertise.'};
  const row=rows[name];if(!row)return null;
@@ -108,7 +120,7 @@ const traitDescriptions={
 };
 export function stockTrait(name){
  const rule=legacyStockTrait(name);if(!rule)return null;
- return {...rule,description:(traitDescriptions[name]??('Practical training in '+rule.skill+'.'))+' In game: '+(effectText(rule.modifiers)||('+2 on checks using '+rule.skill))+'. These are authored game effects, not judgments about real people.',
+ return {...rule,description:(traitDescriptions[name]??(rule.skill?'Practical training in '+rule.skill+'.':'A chosen character tendency affecting '+Object.keys(rule.modifiers).join(' and ')+'.'))+' In game: '+(effectText(rule.modifiers)||('+2 on checks using '+rule.skill))+'. These are authored game effects, not judgments about real people.',
  grants:rule.skill?{[rule.skill]:.5}:name==='Athletic'?{Athletics:.5}:{}};
 }
 // Existing untouched stock records gain these rules without rewriting user-authored records.
