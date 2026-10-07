@@ -1,4 +1,4 @@
-import {captureInformationScope,assertInformationScope} from './information-context.ts';
+import {captureInformationScope,assertInformationScope,persistInformationCall} from './information-context.ts';
 import {z} from 'zod';
 import {randomUUID} from 'node:crypto';
 import {ensure,type Actor} from '../contracts.ts';
@@ -60,6 +60,7 @@ export class CreativeTurnPlanner implements TurnPlanner {
   if(inputTokens>s.settings.contextTokens)return null;
   const informationScope=await captureInformationScope(this.game,timelineId,characterId);ensure(informationScope.stateVersion===t.revision,409,'stale_information_context');
   const request=makeAiRequest({traceId,purpose:'extraction',model:this.provider.identity?.('extraction')??{provider:this.provider.id,model:this.provider.id,configurationId:'creative-plan-v1'},budget:{maxInputTokens:inputTokens,maxOutputTokens:outputTokens,maxTotalTokens:inputTokens+outputTokens,timeoutMs:12000,maxAttempts:2},allowedTools:[],response:responseContract('creative-turn-plan','1',outputSchema),prompt:{id:'creative-turn-plan',version:'1',instructions},context:{snapshot:{...informationScope,purpose:'input-parser'},provenance:[{id:'observer-plan-input',source:'player-input',trust:'untrusted',privacy:'private',revision:String(revision),content:context}]},cache:{kind:'none'}});
+  await persistInformationCall(this.game,informationScope,'input-parser',request);
   const reserved=(inputTokens+outputTokens)*2;this.inflight.add(timelineId);
   try{
    await this.game.store.transaction(async()=>{

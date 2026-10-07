@@ -61,6 +61,8 @@ test('System 15 player profile is generated only from authored-permitted and lea
   await f.game.epistemic(f.creator,f.timeline.id,await f.revision(),{layer:'knowledge',subjectId:f.pc.id,text:'Learn alias',factId:String(truth.recordId)},key());
   profile=await f.game.playerNpcProfile(f.player,f.timeline.id,npc.id,f.pc.id);
   assert.deepEqual(profile.entity.data.aliases,['Whisper']);assert.equal('legalName' in profile.entity.data,false);
+  assert.deepEqual(profile.entity.data.sections,[],'Learning an alias does not reveal unrelated profile fields');
+  const habitId=(npc.data.sections as Array<{fields:Array<{id:string}>}>)[0]!.fields[0]!.id;const habit=await f.game.epistemic(f.creator,f.timeline.id,await f.revision(),{layer:'truth',subjectId:npc.id,text:'The player observed the habit.',predicate:habitId,value:'Counts exits',audience:[f.pc.id]},key());await f.game.epistemic(f.creator,f.timeline.id,await f.revision(),{layer:'knowledge',subjectId:f.pc.id,text:'Learn habit',factId:String(habit.recordId)},key());profile=await f.game.playerNpcProfile(f.player,f.timeline.id,npc.id,f.pc.id);
   const fields=(profile.entity.data.sections as Array<{fields:Array<{name:string}>}>).flatMap(section=>section.fields);assert.deepEqual(fields.map(field=>field.name),['Known habit']);
   const dossier=await f.game.creatorNpcProfile(f.creator,f.timeline.id,npc.id);assert.equal(dossier.entity.data.legalName,'Secret Legal Name');assert.equal(dossier.entity.data.secrets,'Never expose');
  }finally{await f.close();}

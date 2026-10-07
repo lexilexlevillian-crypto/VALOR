@@ -181,8 +181,7 @@ function advanceStep(s:State,minutes:number,eventId:string,effects:Effect[],play
    message.recipientPhoneId=receiver.id;if(!message.availableAt)message.availableAt=new Date(Date.parse(message.sentAt??message.at)+communicationDelayMinutes(s,getEntity(s,message.phoneId,'item'),receiver)*60000).toISOString();message.status='sent';
    if(Date.parse(message.availableAt)>end){entity.data=message as Entity['data'];continue;}
    message.status='delivered';message.deliveredAt=s.clock;message.receivedAt=s.clock;entity.data=message as Entity['data'];
-   for(const f of s.facts.filter(f=>f.subjectId===entity.id&&f.predicate==='communication'))observe(s,message.toId,f.id,'delivered:'+entity.id);
-   if(message.body)s.beliefs.push({id:randomUUID(),observerId:message.toId,proposition:message.body,confidence:0.5,source:'message:'+entity.id,at:s.clock,correctedBy:null});
+   // Delivery makes the external record available; reading acquires its contents.
   }
  }
  const needsMultiplier=needsRate(s),injuryMultiplier=injuryRate(s);

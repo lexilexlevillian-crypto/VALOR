@@ -231,7 +231,7 @@ test('NPC work catch-up conserves funds and reaches the same result across parti
   assert.deepEqual(one.entities.find(e=>e.id===f.npc)!.data.plans,split.entities.find(e=>e.id===f.npc)!.data.plans);
  }finally{await f.close();}
 });
-test('death keeps belongings in a persistent corpse container, and messages deliver as beliefs',async()=>{
+test('death keeps belongings in a persistent corpse container, and delivered message contents remain unknown until read',async()=>{
  const f=await scenario();try{
   (await f.rules());const keepsake=(await f.add('item','Persistent keepsake',{ownerId:f.npc,equipped:true}));
   (await f.add('injury','Fatal test injury',{characterId:f.npc,category:'gunshot',bodyPart:'torso',severity:90,bleeding:100,startedAt:(await f.game.load(f.timeline.id)).clock}));
@@ -244,7 +244,7 @@ test('death keeps belongings in a persistent corpse container, and messages deli
   (await f.turn({type:'message',phoneId:phone,toId:receiver,text:'An unverified claim',medium:'sms'}));
   s=(await f.game.load(f.timeline.id));assert.equal(s.entities.find(e=>e.kind==='message')!.data.status,'queued');
   (await f.add('item','Receiver phone',{ownerId:receiver,category:'phone'}));(await f.turn({type:'wait',minutes:1}));
-  s=(await f.game.load(f.timeline.id));assert.equal(s.entities.find(e=>e.kind==='message')!.data.status,'delivered');assert.ok(s.beliefs.some(b=>b.observerId===receiver&&b.proposition==='An unverified claim'));
+  s=(await f.game.load(f.timeline.id));assert.equal(s.entities.find(e=>e.kind==='message')!.data.status,'delivered');assert.ok(!s.beliefs.some(b=>b.observerId===receiver&&b.proposition==='An unverified claim'));
   assert.ok(!s.facts.some(fact=>fact.value==='An unverified claim'));
  }finally{await f.close();}
 });
@@ -301,7 +301,8 @@ test('large authored roster and lore set remain bounded through catch-up, retrie
   delete (bundle as {manifest?:unknown}).manifest;bundle.checksum=checksum(bundle.payload);let began=performance.now();const preview=await f.game.import(f.creator,f.timeline.id,'Load fixture',bundle,true) as {confirmationToken:string},imported=(await f.game.import(f.creator,f.timeline.id,'Load fixture',bundle,false,preview.confirmationToken)) as {id:string};const importMs=performance.now()-began;
   began=performance.now();const context=(await f.game.context(f.creator,imported.id,f.pc,'benchmark reference'));const retrievalMs=performance.now()-began;assert.ok(context.sources.length<=12);
   began=performance.now();for(let i=0;i<10;i++)(await f.game.turn(f.creator,imported.id,{revision:(await f.game.access(f.creator,imported.id)).t.revision,characterId:f.pc,action:{type:'wait',minutes:60}},key()));const tenTurnsMs=performance.now()-began;
-  assert.equal((await f.game.view(f.creator,imported.id,f.pc)).turns.length,10);assert.ok(tenTurnsMs<30000,'ten hourly turns exceeded 30-second regression ceiling');
   t.diagnostic(JSON.stringify({npcCount:1001,loreCount:1000,importMs:Math.round(importMs),retrievalMs:Math.round(retrievalMs),tenTurnsMs:Math.round(tenTurnsMs)}));
+  assert.equal((await f.game.view(f.creator,imported.id,f.pc)).turns.length,10);assert.ok(tenTurnsMs<30000,'ten hourly turns exceeded 30-second regression ceiling');
+
  }finally{await f.close();}
 });

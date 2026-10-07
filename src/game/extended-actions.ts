@@ -1,7 +1,7 @@
 import {simulationId} from './turn-runtime.ts';
 import {data,getEntity} from './model.ts';
 import type {Action,Data,Entity,State} from './model.ts';
-import {visible,fact} from './epistemics.ts';
+import {visible,fact,observe} from './epistemics.ts';
 import {add,emit,isOpen} from './simulation.ts';
 import type {Effect} from './simulation.ts';
 import {needsEnabled} from './policy.ts';
@@ -54,8 +54,11 @@ export function extendedAction(s:State,actorId:string,pc:Data<'character'>,actio
   }
   case 'read-message':{
    phone(action.phoneId);const message=getEntity(s,action.messageId,'message'),m=data(message,'message');
-   requireCondition(m.recipientPhoneId===action.phoneId&&m.toId===actorId&&!['queued','sent','failed'].includes(m.status)&&visible(s,message,actorId),'message_unavailable');
-   m.read=true;m.status='read';m.readAt=s.clock;message.data=m as Entity['data'];output('Message marked as read.');return 0;
+   requireCondition([m.phoneId,m.recipientPhoneId].includes(action.phoneId)&&(m.phoneId===action.phoneId||!['draft','queued','sent','failed'].includes(m.status))&&visible(s,message,actorId),'message_unavailable');
+   if(!m.readByIds.includes(actorId))m.readByIds.push(actorId);if(m.toId===actorId){m.read=true;m.status='read';m.readAt??=s.clock;}message.data=m as Entity['data'];
+   for(const source of s.facts.filter(f=>f.subjectId===message.id&&f.predicate==='communication'))observe(s,actorId,source.id,'read:'+message.id);
+   if(m.body&&!s.beliefs.some(b=>b.observerId===actorId&&b.source==='message:'+message.id))s.beliefs.push({id:simulationId(),observerId:actorId,proposition:m.body,confidence:0.5,source:'message:'+message.id,qualifiers:{informationRecordId:message.id},at:s.clock,correctedBy:null});
+   output('Message read: '+m.body);return 0;
   }
   case 'phone-call':{
    const device=phone(action.phoneId),p=data(device,'item'),contact=contactFor(device,action.toId,action.number);requireCondition(action.number||contact,'contact_unknown');requireCondition(!contact?.blocked&&(!contact||contact.permissions.calls),'contact_blocked');

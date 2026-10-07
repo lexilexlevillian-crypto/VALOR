@@ -1,3 +1,4 @@
+import {queryInformation} from './information-operations.ts';
 import {deterministicNarrative,narrativeValidatorVersion} from './narrative-runtime.ts';
 import {parseDirectorText,saveNarrativeDirective,splitDirectorInput} from './narrative-directives.ts';
 import {narrativeProfileSchema} from './narrative-profile.ts';
@@ -31,13 +32,17 @@ export class TurnKernel {
   const split=input.kind==='freeform'?splitDirectorInput(input.text):null;
   const director=split?parseDirectorText(split.director):null;
   const canonicalText=input.kind==='freeform'?(split?.canonical??input.text):'';
-  const authoredBelief=input.kind==='freeform'&&!split?/^(?:I (?:think|believe|suspect)|my (?:character|PC) (?:thinks|believes|suspects))(?: that)?\s+(.+)$/i.exec(canonicalText.trim()):null;
+  const playerName=input.kind==='freeform'?(await this.game.load(id)).entities.find(e=>e.id===characterId)!.name:'';
+  const beliefText=canonicalText.toLowerCase().startsWith(playerName.toLowerCase()+' ')?'my character '+canonicalText.slice(playerName.length+1):canonicalText;
+  const queryText=canonicalText.replaceAll(playerName,'I').trim(),queryMatch=/^(?:what (?:do|does|did) I (know|remember|observe)(?: about)?|where (?:do|does) I know|why (?:do|does) I (?:think|believe))(?:\s+(.+?))?\??$/i.exec(queryText);
+  const informationQuery=input.kind==='freeform'&&!split&&queryMatch?{kind:(queryMatch[1]?.toLowerCase()==='observe'?'observed':queryMatch[1]?.toLowerCase()??(/^where/i.test(queryText)?'where':'why')) as 'know'|'remember'|'observed'|'where'|'why',query:(queryMatch[2]??'').replace(/\?$/,'')}:null;
+  const authoredBelief=input.kind==='freeform'&&!split?/^(?:I (?:think|believe|suspect)|my (?:character|PC) (?:thinks|believes|suspects))(?: that)?\s+(.+)$/i.exec(beliefText.trim()):null;
   // Reserve RNG lineage before the world transaction so rollback cannot reroll.
   const attempt=await beginTurnTrace(this.game.store,{timelineId:id,actorId:actor.id,requestKey:'command_'+checksum(command.commandId),bodyHash:checksum(command),originalText:input.kind==='freeform'?input.text:'',expectedRevision:command.expectedRevision});
   try{
    let proposal:CreativeProposal|null=null;
    // Provider I/O is outside the world transaction. Receipt replay never calls AI.
-   if(input.kind==='freeform'&&canonicalText&&!authoredBelief&&!director?.message&&!director?.query&&this.planner&&!await this.game.store.get('SELECT command_id FROM turn_interactions WHERE command_id=?',command.commandId)){
+   if(input.kind==='freeform'&&canonicalText&&!informationQuery&&!authoredBelief&&!director?.message&&!director?.query&&this.planner&&!await this.game.store.get('SELECT command_id FROM turn_interactions WHERE command_id=?',command.commandId)){
     const snapshot=await this.game.load(id),parsed=interpretTurn(snapshot,characterId,canonicalText);
     if(parsed.clarification||parsed.clauses.some(c=>c.action.type==='physical'&&c.action.operation==='attempt'))proposal=await this.planner.propose(actor,id,characterId,command.expectedRevision,canonicalText).catch(()=>null);
    }
@@ -54,7 +59,8 @@ export class TurnKernel {
    let directorResult:{text:string;scope?:string}|undefined;
    if(director?.focus){const view=observerView(state,characterId),targets=view.entities.filter(e=>e.name.toLowerCase()===director.focus!.toLowerCase()||director.focus==='environment'&&e.id===state.entities.find(e=>e.id===characterId)?.data.locationId);if(targets.length===1)directorResult=await saveNarrativeDirective(this.game,actor,id,characterId,mode,{focusId:targets[0]!.id,scope:director.scope});else director.message='Focus was not changed. Name one character or object your character can currently identify.';}
    if(input.kind==='narrative_directive'||director?.directive)directorResult=await saveNarrativeDirective(this.game,actor,id,characterId,mode,input.kind==='narrative_directive'?input.directive:director!.directive);
-   if(authoredBelief){
+   if(informationQuery){result={...base,status:'PRESENTED',inspection:queryInformation(state,characterId,informationQuery.kind,informationQuery.query),presentation:{kind:'director',text:'Your character’s accessible information. No world time passed.'}};}
+   else if(authoredBelief){
     const mutation=await this.game.mutate(actor,id,t.revision,'belief_'+checksum(command.commandId),command,'information.player-belief',false,async(s,eventId)=>{await this.game.authorizeCharacter(actor,id,characterId);return {result:{entryId:authorInformation(s,characterId,{kind:'belief',text:authoredBelief[1]!},eventId).id}};});
     result={...base,...mutation,status:'PRESENTED',presentation:{kind:'director',text:'Your character’s belief was recorded. No world time passed.'}};
    }else if(input.kind==='narrative_directive'||split&&(!canonicalText||director?.message||director?.query)){
