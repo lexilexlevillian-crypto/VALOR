@@ -89,7 +89,9 @@ The new completion suite covers the gaps above, including source repair after ac
 
 Focused domain and notebook regressions passed. Chromium and WebKit notebook checks passed at mobile and iPad viewport sizes, with zero axe violations and no page errors. TypeScript, JavaScript syntax, whitespace checks, and the production dependency audit passed. The dependency audit found zero vulnerabilities.
 
-Final complete-suite, candidate CI, and deployment evidence will be recorded here after the release gate completes.
+Final integrated code candidate `2ea45a482c40950a2964c203bf9baab8fab7f49b` passed **471/471 tests across 77 test files**, with zero failures and zero skips, in [CI run 37571328995](https://github.com/lexilexlevillian-crypto/VALOR/actions/runs/37571328995). That run also passed TypeScript and the production dependency audit. The release report update changes documentation only; runtime code, tests, dependencies, and migrations match that tested candidate. The final focused replay run passed 22 System 3 completion tests plus seven AI gateway tests. The integrated run also covers the existing System 4 memory code. Focused integration checks passed all 22 System 3 completion tests and 21 System 4 memory tests. WebKit notebook verification also passed.
+
+Release target: [VALOR](https://valor-uwgb.onrender.com/app). Local release/deployment receipts are recorded in `artifacts/system03-release-verification.json` and `artifacts/system03-live-smoke.json`, including the deployed commit and live browser/API results.
 
 ## 13. Measured latency, tokens, and cost
 
