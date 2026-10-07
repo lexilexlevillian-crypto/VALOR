@@ -1,4 +1,5 @@
-import {queryInformation} from './information-operations.ts';
+import {recallMemories,mutateMemory} from './memory.ts';
+import {recallInformation,queryInformation} from './information-operations.ts';
 import {deterministicNarrative,narrativeValidatorVersion} from './narrative-runtime.ts';
 import {parseDirectorText,saveNarrativeDirective,splitDirectorInput} from './narrative-directives.ts';
 import {narrativeProfileSchema} from './narrative-profile.ts';
@@ -37,12 +38,14 @@ export class TurnKernel {
   const queryText=canonicalText.replaceAll(playerName,'I').trim(),queryMatch=/^(?:what (?:do|does|did) I (know|remember|observe)(?: about)?|where (?:do|does) I know|why (?:do|does) I (?:think|believe))(?:\s+(.+?))?\??$/i.exec(queryText);
   const informationQuery=input.kind==='freeform'&&!split&&queryMatch?{kind:(queryMatch[1]?.toLowerCase()==='observe'?'observed':queryMatch[1]?.toLowerCase()??(/^where/i.test(queryText)?'where':'why')) as 'know'|'remember'|'observed'|'where'|'why',query:(queryMatch[2]??'').replace(/\?$/,'')}:null;
   const authoredBelief=input.kind==='freeform'&&!split?/^(?:I (?:think|believe|suspect)|my (?:character|PC) (?:thinks|believes|suspects))(?: that)?\s+(.+)$/i.exec(beliefText.trim()):null;
+  const memoryAnchor=input.kind==='freeform'&&!split?/^(I|my character|my PC|[\p{L}][\p{L} '-]{0,100}) (?:never forgot|will never forget) (?:this|that)[.!]?$/iu.exec(canonicalText.trim()):null;
+  const memoryQuery=input.kind==='freeform'&&!split?/^what do I remember(?: about (.+?))?[?]?$/i.exec(canonicalText.trim()):null;
   // Reserve RNG lineage before the world transaction so rollback cannot reroll.
   const attempt=await beginTurnTrace(this.game.store,{timelineId:id,actorId:actor.id,requestKey:'command_'+checksum(command.commandId),bodyHash:checksum(command),originalText:input.kind==='freeform'?input.text:'',expectedRevision:command.expectedRevision});
   try{
    let proposal:CreativeProposal|null=null;
    // Provider I/O is outside the world transaction. Receipt replay never calls AI.
-   if(input.kind==='freeform'&&canonicalText&&!informationQuery&&!authoredBelief&&!director?.message&&!director?.query&&this.planner&&!await this.game.store.get('SELECT command_id FROM turn_interactions WHERE command_id=?',command.commandId)){
+   if(input.kind==='freeform'&&canonicalText&&!memoryAnchor&&!memoryQuery&&!informationQuery&&!authoredBelief&&!director?.message&&!director?.query&&this.planner&&!await this.game.store.get('SELECT command_id FROM turn_interactions WHERE command_id=?',command.commandId)){
     const snapshot=await this.game.load(id),parsed=interpretTurn(snapshot,characterId,canonicalText);
     if(parsed.clarification||parsed.clauses.some(c=>c.action.type==='physical'&&c.action.operation==='attempt'))proposal=await this.planner.propose(actor,id,characterId,command.expectedRevision,canonicalText).catch(()=>null);
    }
@@ -59,7 +62,12 @@ export class TurnKernel {
    let directorResult:{text:string;scope?:string}|undefined;
    if(director?.focus){const view=observerView(state,characterId),targets=view.entities.filter(e=>e.name.toLowerCase()===director.focus!.toLowerCase()||director.focus==='environment'&&e.id===state.entities.find(e=>e.id===characterId)?.data.locationId);if(targets.length===1)directorResult=await saveNarrativeDirective(this.game,actor,id,characterId,mode,{focusId:targets[0]!.id,scope:director.scope});else director.message='Focus was not changed. Name one character or object your character can currently identify.';}
    if(input.kind==='narrative_directive'||director?.directive)directorResult=await saveNarrativeDirective(this.game,actor,id,characterId,mode,input.kind==='narrative_directive'?input.directive:director!.directive);
-   if(informationQuery){result={...base,status:'PRESENTED',inspection:queryInformation(state,characterId,informationQuery.kind,informationQuery.query),presentation:{kind:'director',text:'Your character’s accessible information. No world time passed.'}};}
+   if(memoryQuery){const recalled=recallInformation(state,characterId,memoryQuery[1]??'');result={...base,status:'PRESENTED',recall:recalled,presentation:{kind:'director',text:recalled.memories.length?recalled.memories.map(m=>m.text+' ('+m.detail+', '+Math.round(m.confidence*100)+'% confidence)').join('\n'):recalled.meaning}};
+   }else if(memoryAnchor){
+    const self=state.entities.find(e=>e.id===characterId)!,subject=memoryAnchor[1]!.toLowerCase(),permitted=['i','my character','my pc',self.name.toLowerCase()].includes(subject),rows=permitted?recallMemories(state,characterId,{explicit:true,limit:50}).sort((a,b)=>b.at.localeCompare(a.at)):[],latest=rows[0],anchors=latest?rows.filter(m=>m.sourceEventId===latest.sourceEventId):[];
+    if(!anchors.length)result={...base,status:'PRESENTED',presentation:{kind:'director',text:'No eligible experience was selected. Open Journal to choose an existing memory.'}};
+    else{const mutation=await this.game.mutate(actor,id,t.revision,'memory_'+checksum(command.commandId),command,'memory.anchor',false,(s,eventId)=>({result:{memoryIds:anchors.map(m=>{mutateMemory(s,characterId,m.id,'anchor',eventId,{reason:'Player-authored memory significance'});return m.id;})}}));result={...base,...mutation,status:'PRESENTED',presentation:{kind:'director',text:'The most recent recalled experience was marked as significant. No world time passed.'}};}
+   }else if(informationQuery){result={...base,status:'PRESENTED',inspection:queryInformation(state,characterId,informationQuery.kind,informationQuery.query),presentation:{kind:'director',text:'Your character’s accessible information. No world time passed.'}};}
    else if(authoredBelief){
     const mutation=await this.game.mutate(actor,id,t.revision,'belief_'+checksum(command.commandId),command,'information.player-belief',false,async(s,eventId)=>{await this.game.authorizeCharacter(actor,id,characterId);return {result:{entryId:authorInformation(s,characterId,{kind:'belief',text:authoredBelief[1]!},eventId).id}};});
     result={...base,...mutation,status:'PRESENTED',presentation:{kind:'director',text:'Your character’s belief was recorded. No world time passed.'}};

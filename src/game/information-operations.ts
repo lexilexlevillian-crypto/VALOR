@@ -1,8 +1,9 @@
+import {recallMemories} from './memory.ts';
 import {simulationId as randomUUID} from './turn-runtime.ts';
 import {data,getEntity,type State} from './model.ts';
-import {information,acquireInformation,informationProjection,retconImpact,informationHash,addInformationRecord,accessibleRecords} from './information.ts';
+import {information,acquireInformation,informationProjection,retconImpact,informationHash,addInformationRecord,accessibleRecords,transmitInformation,exposeTransmission} from './information.ts';
 import {secretSchema,identityKnowledgeSchema,spatialKnowledgeSchema,interpretationSchema,knowledgePackageSchema} from './information-extensions.ts';
-import {acquisitionUsable,recallEligible,informationLabel,safeInformationText,spatialMarkers,informationTemperature} from './information-access.ts';
+import {acquisitionUsable,recallEligible,informationLabel,safeInformationText,informationSanitizer,spatialMarkers,informationTemperature} from './information-access.ts';
 
 const requireThat=(condition:unknown,error='information_unavailable')=>{if(!condition)throw new Error(error);};
 export function sourceKnown(s:State,characterId:string,id:string){const i=information(s);return i.entries.some(e=>e.characterId===characterId&&acquisitionUsable(s,e)&&(e.id===id||e.sourceId===id||e.propositionId===id))||i.observations.some(o=>o.observerId===characterId&&o.at<=s.clock&&!i.invalidatedNodeIds.includes(o.id)&&(o.id===id||o.eventId===id))||informationProjection(s,characterId).records.some(r=>r.id===id);}
@@ -43,8 +44,17 @@ export function repairAcquisition(s:State,entryId:string,reason:string,eventId:s
 }
 export function recallInformation(s:State,characterId:string,query:string,limit=20){
  getEntity(s,characterId,'character');const words=query.toLowerCase().split(/\W+/).filter(w=>w.length>2),entityIds=s.entities.filter(e=>informationLabel(s,characterId,e.id).toLowerCase().split(/\W+/).some(w=>words.includes(w))).map(e=>e.id);
- const candidates=s.memories.filter(m=>recallEligible(s,m,characterId,query,entityIds)).map(m=>({...m,text:safeInformationText(s,characterId,m.text),score:words.reduce((n,w)=>n+(m.text.toLowerCase().includes(w)?10:0),m.salience)})).filter(m=>!words.length||m.score>=10).sort((a,b)=>b.score-a.score||b.at.localeCompare(a.at)).slice(0,limit);
+ const sanitizeRecall=informationSanitizer(s,characterId);
+ const candidates=recallMemories(s,characterId,{query,entityIds,explicit:true,limit}).map(m=>({...m,text:sanitizeRecall(m.text),interpretation:sanitizeRecall(m.interpretation),source:sanitizeRecall(m.source),exactFragments:m.exactFragments.map(f=>({...f,text:sanitizeRecall(f.text)}))}));
  return {stage:'recalled',memories:candidates.map(({score,...m})=>m),mentioned:false,changesKnowledge:false,advancesTime:false,meaning:candidates.length?'Subjective recall from eligible sources.':'Nothing was recalled for this query; stored history was not deleted.'};
+}
+export function retellMemory(s:State,characterId:string,memoryId:string,recipientId:string,eventId:string){
+ const memory=s.memories.find(m=>m.id===memoryId&&m.observerId===characterId),recalled=recallMemories(s,characterId,{eventIds:memory?[memory.eventId]:[],explicit:true,limit:50}).find(m=>m.id===memoryId);
+ if(!memory||!recalled)throw new Error('memory_unavailable');
+ const i=information(s),entries=i.entries.filter(e=>memory.cognition?.sourceInformationIds.includes(e.id)&&e.characterId===characterId&&acquisitionUsable(s,e));if(!entries.length)throw new Error('memory_claim_unavailable');
+ const previous=i.transmissions.find(t=>entries.some(e=>e.sourceId===t.id)),text=safeInformationText(s,characterId,recalled.interpretation||recalled.text);
+ const transmission=transmitInformation(s,{id:eventId,senderId:characterId,intendedRecipientIds:[recipientId],propositionIds:[...new Set(entries.map(e=>e.propositionId))],text,channel:'rumor',at:s.clock,secrecy:false,parentId:previous?.id??null,originIds:[],mutation:'Retold from subjective memory; '+(recalled.source==='Source not recalled'?'original attribution not recalled':'source retained'),artifactId:null,recipients:[]});
+ exposeTransmission(s,transmission.id,recipientId,{delivered:true,exposed:true,acceptance:recalled.confidence});return transmission;
 }
 export function queryInformation(s:State,characterId:string,kind:'know'|'remember'|'observed'|'where'|'why',query:string){
  if(kind==='remember')return recallInformation(s,characterId,query);const view=informationProjection(s,characterId),match=(text:string)=>!query||query.toLowerCase().split(/\W+/).filter(w=>w.length>2).every(w=>text.toLowerCase().includes(w));

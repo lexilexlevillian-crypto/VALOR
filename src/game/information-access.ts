@@ -1,3 +1,4 @@
+import {memoryValid,memoryRecallState} from './memory.ts';
 import type {State,Memory} from './model.ts';
 
 export function acquisitionUsable(s:State,e:NonNullable<State['information']>['entries'][number]){
@@ -18,8 +19,9 @@ export function safeInformationText(s:State,viewerId:string,text:string){
 }
 export function informationSanitizer(s:State,viewerId:string){
  const substitutions:Array<{name:string;label:string}>=[];
+ const identities=new Map((s.information?.identities??[]).filter(r=>r.viewerId===viewerId&&r.at<=s.clock&&!s.information?.invalidatedNodeIds?.includes(r.sourceId)).map(r=>[r.subjectId,r]));
  for(const entity of s.entities.filter(e=>e.kind==='character'&&e.id!==viewerId)){
-  const label=informationLabel(s,viewerId,entity.id);if(label===entity.name&&!knownIdentity(s,viewerId,entity.id))continue;
+  const learned=identities.get(entity.id),identity=entity.data.identityDisclosure as {concealed:boolean;knownByIds:string[];label:string}|undefined,label=learned?.label??(identity?.concealed&&!identity.knownByIds.includes(viewerId)?identity.label:entity.name);if(label===entity.name&&!learned)continue;
   const names=[entity.name,String(entity.data.legalName??''),...((entity.data.aliases??[]) as string[])].filter(name=>name&&name!==label).sort((a,b)=>b.length-a.length);
   for(const name of names)substitutions.push({name,label});
  }
@@ -41,9 +43,10 @@ export function spatialMarkers(s:State,viewerId:string){
  return [...new Map(rows.map(r=>[r.subjectId,r])).values()].map(r=>({id:r.id,label:safeInformationText(s,viewerId,r.label),precision:r.precision,areaId:r.areaId,locationId:r.precision==='exact'||r.precision==='last_known'?r.locationId:null,at:r.at,sourceId:r.sourceId}));
 }
 export function recallEligible(s:State,memory:Memory,viewerId:string,query='',entityIds:string[]=[]){
+ if(memory.cognition&&(!memoryValid(s,memory,viewerId)||memory.cognition.status==='consolidated'||memoryRecallState(s,memory).accessibility<0.2))return false;
  if(memory.observerId!==viewerId||memory.at>s.clock||memory.expiresAt&&memory.expiresAt<=s.clock||s.information?.invalidatedNodeIds?.includes(memory.id)||s.information?.invalidatedNodeIds?.includes(memory.eventId))return false;
  const conditions=memory.recallConditions,observer=s.entities.find(e=>e.id===viewerId),words=query.toLowerCase().split(/\W+/),age=(Date.parse(s.clock)-Date.parse(memory.lastRefreshedAt??memory.at))/86400000;
- if(memory.salience-age*memory.decayPerDay<=0)return false;
+ if(!memory.cognition&&memory.salience-age*memory.decayPerDay<=0)return false;
  return !conditions||(!conditions.from||conditions.from<=s.clock)&&(!conditions.until||conditions.until>s.clock)&&(!conditions.locationId||conditions.locationId===observer?.data.locationId)&&(!conditions.entityIds.length||conditions.entityIds.some(id=>entityIds.includes(id)))&&(!conditions.tags.length||conditions.tags.some(tag=>words.includes(tag.toLowerCase())));
 }
 export function informationTemperature(clock:string,at:string,active=false):'hot'|'warm'|'cold'{const days=(Date.parse(clock)-Date.parse(at))/86400000;return days<=3?'hot':active||days<=31?'warm':'cold';}

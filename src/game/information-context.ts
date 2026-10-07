@@ -1,3 +1,4 @@
+import {memoryValid,memoryRecallState} from './memory.ts';
 import {informationTemperature,recallEligible} from './information-access.ts';
 import type {AiRequest} from '../ai/contracts.ts';
 import {randomUUID} from 'node:crypto';
@@ -37,16 +38,17 @@ export async function persistInformationCall(game:Game,scope:InformationScope,pu
 }
 export const estimateInformationTokens=(text:string)=>Buffer.byteLength(text); // Conservative across providers and Unicode.
 function sourceRows(s:State,viewerId:string,summaryValidity:Map<string,boolean>):Candidate[]{
- const view=informationProjection(s,viewerId),i=information(s);
+ const view=informationProjection(s,viewerId),i=information(s),rememberedObservations=new Set(s.memories.filter(m=>m.observerId===viewerId).flatMap(m=>m.cognition?.sourceObservationIds??[]));
  return [
   ...view.entries.filter(e=>e.status==='active').map(e=>({id:e.id,category:e.type==='knowledge'?'knowledge' as const:'belief' as const,text:e.label+'; '+e.text+'; acquired '+e.acquiredAt+'; information dated '+e.informationAt+'; confidence '+e.confidence,sourceIds:[e.sourceId],required:false,score:10,exact:false})),
-  ...view.observations.map(o=>({id:o.id,category:'observation' as const,text:'OBSERVED: '+o.raw+'; recognition '+o.recognition+'; confidence '+o.confidence,sourceIds:[o.eventId],required:false,score:o.salience*15,exact:true})),
+  ...view.observations.filter(o=>Date.parse(s.clock)-Date.parse(o.at)<=86400000||!rememberedObservations.has(o.id)).map(o=>({id:o.id,category:'observation' as const,text:'OBSERVED: '+o.raw+'; recognition '+o.recognition+'; confidence '+o.confidence,sourceIds:[o.eventId],required:false,score:o.salience*15,exact:true})),
   ...view.records.map(r=>({id:r.id,category:'record' as const,text:'RECORD CLAIM ('+r.informationAt+'): '+r.title+': '+r.text,sourceIds:[r.id],required:false,score:5,exact:false})),
   ...view.active.filter(a=>a.kind!=='ooc-note'&&!['resolved','failed','canceled','expired','disproved'].includes(a.status)).map(a=>({id:a.id,category:'thread' as const,text:a.kind.toUpperCase()+' ['+a.status+']: '+a.text,sourceIds:a.sourceIds,required:a.exact&&['threat','promise','question'].includes(a.kind),score:['threat','promise','question'].includes(a.kind)?50:25,exact:a.exact})),
   ...i.summaries.filter(r=>r.viewerId===viewerId&&summaryValidity.get(r.id)===true).map(r=>({id:r.id,category:'summary' as const,text:r.text,sourceIds:r.sourceIds,required:false,score:8,exact:false}))
  ];
 }
 export function buildInformationContext(s:State,scope:InformationScope,purpose:InformationPurpose,query:string,options:{projection?:ReturnType<typeof observerView>;sceneOnly?:boolean;tokenBudget?:number;currentEvents?:Effect[];recentDialogue?:{id:string;text:string;sceneId?:string;required?:boolean}[];profile?:Partial<ReturnType<typeof profile>>;semanticScore?:(text:string,query:string)=>number}={}){
+ if(s.information?.memoryTimelineId&&s.information.memoryTimelineId!==scope.timelineId)throw new Error('memory_timeline_mismatch');
  informationPurposeSchema.parse(purpose);getEntity(s,scope.viewerId,'character');const p={...informationProfiles[purpose],...options.profile},budget=Math.max(256,Math.min(16000,options.tokenBudget??p.tokenBudget));
  const base=buildContextManifest(s,scope.viewerId,query,{maxTokens:16000,currentEvents:options.currentEvents,projection:options.projection,sceneOnly:options.sceneOnly,includePrivateGoals:purpose==='npc-planner'}),i=information(s),candidates:Candidate[]=[],summaryValidity=validateSummarySources(s,scope.viewerId);
  const map:Record<string,Category>={state:'state',rules:'state',event:'event',conversation:'conversation',fact:'knowledge',belief:'belief',memory:'memory',relationship:'relationship',canon:'lore',lore:'lore',storycard:'directive',directive:'directive',style:'directive'};
@@ -74,7 +76,7 @@ export function buildInformationContext(s:State,scope:InformationScope,purpose:I
 }
 const unique=<T>(rows:T[])=>[...new Set(rows)];
 export function contextStillCurrent(snapshot:{manifest:InformationScope},scope:InformationScope){return snapshot.manifest.campaignId===scope.campaignId&&snapshot.manifest.timelineId===scope.timelineId&&snapshot.manifest.viewerId===scope.viewerId&&snapshot.manifest.stateVersion===scope.stateVersion&&snapshot.manifest.eventCursor===scope.eventCursor&&(snapshot.manifest.sceneId??null)===(scope.sceneId??null)&&(snapshot.manifest.profileVersion??2)===(scope.profileVersion??2);}
-function canonicalSummaryRows(s:State,viewerId:string){const view=informationProjection(s,viewerId);return [...view.entries.map(e=>({id:e.id,text:e.type+' ['+e.status+', '+e.freshness+'] '+e.text+'; source '+e.sourceId+'; information '+e.informationAt+'; acquired '+e.acquiredAt})),...view.observations.map(o=>({id:o.id,text:'Observed '+o.at+': '+o.raw})),...view.active.filter(a=>a.kind!=='ooc-note').map(a=>({id:a.id,text:a.kind+' ['+a.status+']: '+a.text})),...s.memories.filter(m=>recallEligible(s,m,viewerId,'')).map(m=>({id:m.id,text:'Subjective memory: '+m.text}))];}
+function canonicalSummaryRows(s:State,viewerId:string){const view=informationProjection(s,viewerId);return [...view.entries.map(e=>({id:e.id,text:e.type+' ['+e.status+', '+e.freshness+'] '+e.text+'; source '+e.sourceId+'; information '+e.informationAt+'; acquired '+e.acquiredAt})),...view.observations.map(o=>({id:o.id,text:'Observed '+o.at+': '+o.raw})),...view.active.filter(a=>a.kind!=='ooc-note').map(a=>({id:a.id,text:a.kind+' ['+a.status+']: '+a.text})),...s.memories.filter(m=>recallEligible(s,m,viewerId,'')).map(m=>({id:m.id,text:'Subjective memory: '+(m.cognition?m.cognition.gist+'; '+memoryRecallState(s,m).detail+'; confidence '+memoryRecallState(s,m).confidence.toFixed(2)+'; interpretation '+m.cognition.interpretation:m.text)}))];}
 // Resolve canonical rows once per bundle; each summary visits only its own source IDs.
 function validateSummarySources(s:State,viewerId:string){
  const summaries=information(s).summaries.filter(r=>r.viewerId===viewerId),validity=new Map<string,boolean>();if(!summaries.length)return validity;

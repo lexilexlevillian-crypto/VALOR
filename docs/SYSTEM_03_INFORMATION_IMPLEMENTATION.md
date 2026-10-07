@@ -1,6 +1,6 @@
 # System 3 completion report
 
-Authoritative specification: **VALOR_System_3_Context_Knowledge_Information_Master_Spec-5.docx**, SHA-256 `138d4fadb66f237123eeef35b921a20aca84a3808f184e2bfe56363dbd06b0b2`. This report replaces the earlier report against the original attachment. This release contains System 3 only. It was prepared in an isolated checkout to preserve concurrent System 4 work.
+Authoritative specification: **VALOR_System_3_Context_Knowledge_Information_Master_Spec-5.docx**, SHA-256 `138d4fadb66f237123eeef35b921a20aca84a3808f184e2bfe56363dbd06b0b2`. This report replaces the earlier report against the original attachment. This work completes System 3. It was prepared in an isolated checkout. Concurrent System 4 commits `a78e747` and `26d0924` reached the deployment branch during verification, so this release preserves that existing baseline and validates their integration with System 3.
 
 ## 1. Changed modules
 
@@ -9,12 +9,12 @@ Authoritative specification: **VALOR_System_3_Context_Knowledge_Information_Mast
 - `information-context.ts`, `context.ts`, `epistemics.ts`: purpose profiles, deterministic candidate reduction, shared projection rules, summaries, scope binding, and call manifests.
 - `information-routes.ts`, `information-tools.ts`, `information-replay.ts`, `turn-kernel.ts`, `simulation.ts`, `extended-actions.ts`: authenticated player queries and Creator inspection, authoring, replay, grant, and repair interfaces.
 - `engine.ts`, `model.ts`, `ai.ts`, `ai-intent.ts`, `turn-planner.ts`, `src/ai/contracts.ts`: persistence, reference checks, immutable request capture, stale-output rejection, and safe generation fallback.
-- `public/phone-apps.js`, `public/app.js`, `public/sw.js`: notebook queries, approximate/last-known places, memory archive distinction, Creator perspectives/replay/repair, shell cache v31.
+- `public/phone-apps.js`, `public/app.js`, `public/sw.js`: notebook queries, approximate/last-known places, memory archive distinction, Creator perspectives/replay/repair, shell cache v32.
 - New completion and scale test suites; expanded notebook browser and NPC profile regressions. The existing large-roster timing threshold is unchanged.
 
 ## 2. Database and backfill
 
-Existing additive migration **049_system03_information.sql** remains the database boundary. No applied migration was edited and this completion release adds no SQL migration. Canonical information remains in timeline-local `timeline_information`; immutable recorded calls remain in `information_context_manifests`.
+System 3 uses additive migration **049_system03_information.sql**. The integrated deployment retains the already-released System 4 migration **050_system04_memory.sql**, so readiness reports schema 50. No applied migration was edited and this System 3 completion adds no SQL migration. Canonical information remains in timeline-local `timeline_information`; immutable recorded calls remain in `information_context_manifests`.
 
 New JSON fields have schema defaults. Existing facts and character acquisitions backfill typed source records during normal persistence without granting new knowledge. Historical snapshots load their own saved information; branches clear derived summaries. Acquisition quarantine survives persistence and prevents legacy facts from restoring repaired knowledge. Matching code and data must be retained when rolling back; older strict JSON readers cannot read newly extended documents without adaptation.
 
@@ -111,4 +111,4 @@ No world-authoring decision blocks these code paths. Campaign authors supply act
 
 Browser evidence uses desktop Chromium/WebKit with phone and iPad viewports, not a physical iPad Safari session. Local backup/restore and migration rehearsals are tested; no production database restore was performed because production database credentials are unavailable in this workspace. These are explicit verification limits, not claims of completed production recovery or physical-device certification.
 
-Stop at System 3. Separate System 4 workspace edits are preserved and excluded from this release.
+Stop at System 3. The deployment preserves the System 4 code that independently reached the release branch; this work adds no further System 4 features. Integration maintains source-date checks when acquired information becomes a cognitive memory.

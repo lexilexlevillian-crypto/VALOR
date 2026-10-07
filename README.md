@@ -12,6 +12,8 @@ The supplied System 2 Behavior Bible is implemented in the [narrative and storyt
 
 The supplied System 3 context, knowledge, and information specification is covered in the [System 3 implementation report](docs/SYSTEM_03_INFORMATION_IMPLEMENTATION.md). Phone → Journal separates knowledge, beliefs, notes, hypotheses, observations, and record research. Information provenance, rumor ancestry, purpose-specific context, and save/branch isolation use schema 49.
 
+The supplied System 4 memory specification is implemented in the [memory system report](docs/SYSTEM_04_MEMORY_IMPLEMENTATION.md). Journal supports subjective recall and memory anchors; Creator supports provenance inspection and repair. Memory retention, consolidation, source confidence, and branch lineage use schema 50.
+
 The latest [lifecycle systems guide](docs/LIFECYCLE_SYSTEMS.md) covers NPC route travel and fixed-step catch-up, production, quest branches, social consequences, dispatch, court/estate flows, private image assets, deduplicated saves, Creator diagnostics and confirmed AI action proposals.
 
 ## Run locally

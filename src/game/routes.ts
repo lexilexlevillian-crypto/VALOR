@@ -1,4 +1,5 @@
 import {NarrativePreferences} from './narrative-preferences.ts';
+import {memoryRoutes} from './memory-routes.ts';
 import {informationRoutes} from './information-routes.ts';
 import {phraseCommunication} from './communication.ts';
 import {CreativeTurnPlanner} from './turn-planner.ts';
@@ -21,6 +22,7 @@ import {IntentGateway} from './ai-intent.ts';
 import {simulationTiers} from './simulation.ts';
 import {listMasterBank} from './master-bank.ts';
 export function gameRoutes(app:FastifyInstance,game:Game,actor:(r:object)=>Actor,key:(headers:Record<string,unknown>)=>string){
+ memoryRoutes(app,game,actor,key);
  const world=new SharedWorld(game);
  const directProviders=directProvidersFromEnvironment(),preferredProvider=preferredDirectProvider(directProviders);
  const kernel=new TurnKernel(game,preferredProvider?new CreativeTurnPlanner(game,preferredProvider):undefined);

@@ -24,7 +24,7 @@ try {
       await restored.migrate();
       const integrity=(await restored.get<{integrity_check:string}>('PRAGMA integrity_check'))?.integrity_check,foreignKeys=(await restored.all('PRAGMA foreign_key_check')).length,schema=(await restored.get<{version:number}>('SELECT max(version) AS version FROM schema_migrations'))?.version??0;
       const restoredCounts=Object.fromEntries(await Promise.all(tables.map(async table=>[table,(await restored.get<{count:number}>('SELECT count(*) AS count FROM '+table))!.count])));
-      if(integrity!=='ok'||foreignKeys!==0||schema!==49||JSON.stringify(sourceCounts)!==JSON.stringify(restoredCounts))throw new Error('Release rehearsal verification failed');
+      if(integrity!=='ok'||foreignKeys!==0||schema!==50||JSON.stringify(sourceCounts)!==JSON.stringify(restoredCounts))throw new Error('Release rehearsal verification failed');
       console.log(JSON.stringify({status:'ready',schemaVersion:schema,integrity,foreignKeyViolations:foreignKeys,sourceCounts,restoredCounts,destination}));
     }finally{restored.close();}
   } else {

@@ -1,3 +1,4 @@
+import {formObservationMemory,formInformationMemory} from './memory.ts';
 import {acquisitionUsable,informationSanitizer,spatialMarkers} from './information-access.ts';
 import {createHash} from 'node:crypto';
 import {simulationId as randomUUID} from './turn-runtime.ts';
@@ -16,7 +17,7 @@ export function acquireInformation(s:State,input:Omit<InformationEntry,'id'|'acq
  if(input.supersedesId)requireThat(prior);if(prior)prior.status='superseded';
  // Repeated exposure to the same origin is retained in transmission history, not counted as independent evidence.
  const duplicate=i.entries.find(e=>e.characterId===input.characterId&&e.propositionId===input.propositionId&&e.sourceId===input.sourceId&&e.status==='active');if(duplicate)return duplicate;
- const entry:InformationEntry={...input,id:randomUUID(),originIds:unique(input.originIds),acquiredAt:s.clock,status:'active',supersedesId:input.supersedesId??null};i.entries.push(entry);if(!i.sources.some(source=>source.id===input.sourceId))i.sources.push({id:input.sourceId,type:input.acquisition==='observation'?'observation':['record','research'].includes(input.acquisition)?'record':input.acquisition==='rumor'?'rumor':input.acquisition==='background'?'background':input.acquisition==='creator'?'creator':input.acquisition==='inference'||input.acquisition==='player-belief'?'inference':'testimony',entityId:input.characterId,recordId:['record','research'].includes(input.acquisition)?input.sourceId:null,originalClaim:input.text,reliability:input.confidence,createdAt:s.clock,eventId:input.sourceId});i.generation++;return entry;
+ const entry:InformationEntry={...input,id:randomUUID(),originIds:unique(input.originIds),acquiredAt:s.clock,status:'active',supersedesId:input.supersedesId??null};i.entries.push(entry);if(!i.sources.some(source=>source.id===input.sourceId))i.sources.push({id:input.sourceId,type:input.acquisition==='observation'?'observation':['record','research'].includes(input.acquisition)?'record':input.acquisition==='rumor'?'rumor':input.acquisition==='background'?'background':input.acquisition==='creator'?'creator':input.acquisition==='inference'||input.acquisition==='player-belief'?'inference':'testimony',entityId:input.characterId,recordId:['record','research'].includes(input.acquisition)?input.sourceId:null,originalClaim:input.text,reliability:input.confidence,createdAt:s.clock,eventId:input.sourceId});i.generation++;formInformationMemory(s,entry);return entry;
 }
 export function recordObservation(s:State,input:unknown){
  const o=observationSchema.parse(input),i=information(s);getEntity(s,o.observerId,'character');if(o.targetId)getEntity(s,o.targetId);
@@ -25,7 +26,7 @@ export function recordObservation(s:State,input:unknown){
  if(o.salience<0.4&&o.attention!=='focused'&&!o.propositionIds.length)return {durable:false,observation:o};
  i.observations.push(o);
  for(const propositionId of o.propositionIds)acquireInformation(s,{characterId:o.observerId,propositionId,type:'knowledge',confidence:o.confidence,acquisition:'observation',sourceId:o.id,originIds:[o.id],informationAt:o.at,lastConfirmedAt:o.at,freshness:'current',secrecyAwareness:'unknown',text:o.raw});
- return {durable:true,observation:o};
+ formObservationMemory(s,o);return {durable:true,observation:o};
 }
 // Called by sensory resolvers: only the supplied perceived fragment enters an observation.
 export function perceiveInformation(s:State,input:{observerId:string;targetId:string;eventId:string;channel:'vision'|'hearing'|'reading';raw:string;propositionIds?:string[];method:string;salience?:number;languageUnderstood?:boolean;hidden?:boolean;recognition?:'unidentified'|'likely'|'recognized';recognizedAsId?:string}){
@@ -112,7 +113,7 @@ export function retconImpact(s:State,sourceIds:string[]){
   ...i.records.map(r=>({id:r.id,kind:'records',sources:[...r.sourceIds,...r.propositionIds]})),
   ...i.observations.map(o=>({id:o.id,kind:'observations',sources:[o.eventId,...o.propositionIds]})),
   ...i.transmissions.map(t=>({id:t.id,kind:'transmissions',sources:[...t.sourceEntryIds,...t.propositionIds,...t.originIds,...(t.parentId?[t.parentId]:[])]})),
-  ...s.memories.map(m=>({id:m.id,kind:'memories',sources:[m.eventId,...(m.eventRefs??[])]})),
+  ...s.memories.map(m=>({id:m.id,kind:'memories',sources:[m.eventId,...(m.eventRefs??[]),...(m.cognition?.sourceObservationIds??[]),...(m.cognition?.sourceInformationIds??[]),...(m.cognition?.consolidation?.sourceMemoryIds??[])]})),
   ...s.entities.filter(e=>e.kind==='relationship').map(e=>({id:e.id,kind:'relationships',sources:(e.data.history as {eventId:string}[]).map(h=>h.eventId)})),
   ...i.active.map(a=>({id:a.id,kind:'hypotheses',sources:a.sourceIds})),...i.summaries.map(a=>({id:a.id,kind:'summaries',sources:a.sourceIds}))
  ];
