@@ -19,7 +19,7 @@ test('starting budgets normalize campaign scales, cap refunds, and exempt NPCs',
  c.playable=false;assert.doesNotThrow(()=>validateStartingBuild(s,c));pc.data={...pc.data,playable:false,traits:[positive.id],attributes:Object.fromEntries(attributes.map(key=>[key,100]))};assert.doesNotThrow(()=>validateState(s));
  c.playable=true;c.attributes.Strength=50;c.traits=[positive.id];assert.throws(()=>validateStartingBuild(s,c),/starting_traits_budget_exceeded/);
  assert.equal(startingBudget({...c,traits:[]},s.entities,s.settings.attributeScale).traits,0);
- assert.ok(ORIGINS.every(origin=>Object.values(origin.modifiers).reduce((a,b)=>a+b,0)===2));
+ assert.ok(ORIGINS.every(origin=>Object.keys(origin.modifiers).length===0));
  assert.equal(stockTrait('Police training')?.skill,'Police procedure');
 });
 test('published starts enforce budgets on the server and reject private choices atomically',async()=>{
@@ -44,14 +44,14 @@ test('published starts enforce budgets on the server and reject private choices 
   assert.deepEqual((await game.load(t.id)).entities.find(e=>e.id===strong.id)!.data.modifiers,{Strength:3});
  }finally{await f.close();}
 });
-test('background bonuses are resolved once and do not rewrite base stats',()=>{
+test('background skill training does not add attribute check bonuses or rewrite base stats',()=>{
  const pc=person({background:{originChoice:'laborer'},attributes:Object.fromEntries(attributes.map(a=>[a,5]))});
  const check=validateEntity({id:randomUUID(),kind:'checkDefinition',name:'Strength test',visibility:'campaign',data:{attribute:'Strength',difficulty:1,formula:'additive-no-die'}});
  const s=state([pc,check]);s.settings.rules={dieSides:20,threshold:1,damage:1,treatmentMinutes:1,recoveryPerDay:1,unfamiliarPenalty:0,bleedPerMinute:0,formula:'additive-no-die',outcomeMode:'legacy-binary',outcomeBands:{criticalMargin:10,successAtCostMargin:2,partialFailureMargin:-2,failureInformationMargin:-10}};
  const before=structuredClone(pc.data.attributes);
- const result=resolveAction(s,pc.id,{type:'check',attribute:'Strength',skillId:null,checkId:check.id,context:''},randomUUID(),'a'.repeat(64));assert.equal(result.checks[0]!.total,6);assert.equal(result.checks[0]!.modifiers.filter(row=>row.name==='Background: Manual laborer').length,1);
+ const result=resolveAction(s,pc.id,{type:'check',attribute:'Strength',skillId:null,checkId:check.id,context:''},randomUUID(),'a'.repeat(64));assert.equal(result.checks[0]!.total,5);assert.equal(result.checks[0]!.modifiers.filter(row=>row.name==='Background: Manual laborer').length,0);
  (pc.data.background as Record<string,string>).originChoice='student';const changed=resolveAction(s,pc.id,{type:'check',attribute:'Strength',skillId:null,checkId:check.id,context:''},randomUUID(),'a'.repeat(64));assert.equal(changed.checks[0]!.total,5);
- assert.equal(ORIGINS.find(row=>row.id==='laborer')!.modifiers.Strength,1);
+ assert.equal(ORIGINS.find(row=>row.id==='laborer')!.skills.Athletics,.5);
  assert.deepEqual(pc.data.attributes,before);
  assert.throws(()=>applyPlayerChoices(state([pc]),{traits:[randomUUID()]},{traits:[]}),/authored_start_not_customizable/);
 });

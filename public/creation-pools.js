@@ -38,9 +38,9 @@ export function backgroundPicker(character,entities,onchange){
  const render=()=>{for(const {key,select,info}of rows){
   select.value=character.background[key]??'';for(const option of select.options)option.disabled=Boolean(option.value&&option.value!==select.value&&[1,2,3,4].some(n=>character.background['option'+n]===option.value));
   const row=ORIGINS.find(row=>row.id===select.value);info.replaceChildren();
-  if(row){info.append(el('p',row.description),el('p',effectText(row.modifiers)));
+  if(row){info.append(el('p',row.description));
    for(const [name,fraction]of Object.entries(row.skills)){const skill=entities.find(e=>e.kind==='skill'&&e.name===name&&!e.archived);info.append(el('p',skill?grantLines([{skillId:skill.id,fraction}],entities)[0]:name+': training unavailable until this skill is published.'));}
-  }else if(select.value)info.append(el('p','Saved written history. No automatic stat bonus; choose a listed background to add one.'));
+  }else if(select.value)info.append(el('p','Saved written history. Choose a listed background to add automatic skill training.'));
  }};
  register(character,render);render();return root;
 }

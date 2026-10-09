@@ -6,7 +6,7 @@ About Valor contains the supplied city document in regional pages, a searchable 
 
 The occupation list supplies 33 workplaces with matching player roles and additional supervisory NPC roles. Existing custom workplace/position values are preserved. Profile occupations alone do not create wages or employment contracts; those remain campaign job records.
 
-New playable characters and launched lives receive 35 attribute points (10 per full campaign-scale bar), 12 skill points (5 per full skill-scale bar), and 6 trait points with at most 6 disadvantage refunds. Unused points are allowed. Background dropdowns add their stated modifiers to specified checks, not stored ratings. Existing lives and later training are not rebalanced. NPCs have no point-spending or trait-count caps; valid scales, references, prerequisites, oppositions and effect conflicts still apply.
+New playable characters and launched lives receive 35 attribute points (10 per full campaign-scale bar), 12 skill points (5 per full skill-scale bar), and 6 trait points with at most 6 disadvantage refunds. Unused points are allowed. Background dropdowns grant stated skill ratings without adding attribute bonuses. Medicine, Surgery, and First aid are separate catalog skills. NPCs have no point-spending or trait-count caps; valid scales, references, prerequisites, oppositions and effect conflicts still apply.
 
 Trait, skill and background pools show descriptions and effects before selection. Ordinary players can customize public start-package builds and profile occupations. Starts with private trait or skill choices are protected. Validation and persistence use the existing atomic, permission-checked start workflow.
 
@@ -58,9 +58,9 @@ Map water is transparent; only the opaque map artwork receives theme color. Regi
 
 ## Background training and skill statuses
 
-Primary background and Backgrounds 2–4 are dropdowns in the existing sheet, not a separate selection pool. There are 34 choices, including Veteran, Army, Marine, Navy, Air Force, Coast Guard, Police officer, college and trade-school education. Existing written slots remain available as saved history without invented bonuses. Earlier originChoice values move into the primary slot when edited.
+Primary background and Backgrounds 2–4 are dropdowns in the existing sheet, not a separate selection pool. The choices include military, education, medical, service, trade, and automotive backgrounds. Existing written slots remain available as saved history without invented bonuses. Earlier originChoice values move into the primary slot when edited.
 
-Each unique background adds its stated check modifiers without changing base attributes. Backgrounds are free. Military/police choices grant relevant training, commonly half a skill bar. They do not issue equipment, cash, employment or legal powers. Multiple grants for the same skill use the highest floor, never a sum. Fractions follow each skill's authored scale and round down to a valid step.
+Each background grants at least one fitting skill at half a bar for free, without adding attribute bonuses. Some backgrounds grant a smaller secondary skill rating. They do not issue equipment, cash, employment or legal powers. Multiple grants for the same skill use the highest floor, never a sum. Fractions follow each skill's authored scale and round down to a valid step.
 
 Player skill points pay only for ratings above the granted floor (five points per full bar). Removing a choice removes its free portion while keeping paid improvements; it cannot bank free points. Server startup independently resolves and saves grants, including authored starts that skip customization. NPCs retain unlimited budgets. Grants are starting training, not a cap on later progression.
 

@@ -21,12 +21,15 @@ test('four background slots grant free training, deduplicate, retain legacy hist
  assert.equal(startingBudget(d,entities).skills,0);d.skills[athletics.id]=70;assert.equal(startingBudget(d,entities).skills,1);
  assert.equal(selectedBackgrounds(d).length,3);assert.equal(d.background.history,'Preserved');
  assert.equal(selectedBackgrounds({background:{option1:'',originChoice:'local'}})[0]?.id,'local');
- assert.ok(ORIGINS.length>=30);assert.ok(ORIGINS.every(row=>row.description&&Object.keys(row.skills).length&&Object.keys(row.modifiers).length));
- const doctor=ORIGINS.find(row=>row.id==='doctor')!;assert.equal(doctor.skills.Medicine,.5);assert.equal(Object.values(doctor.modifiers).reduce((sum,value)=>sum+value,0),2);
+ assert.ok(ORIGINS.length>=30);assert.ok(ORIGINS.every(row=>row.description&&Object.values(row.skills).some(value=>value===.5)&&Object.keys(row.modifiers).length===0));
+ for(const [backgroundId,skillName] of [['doctor','Medicine'],['surgeon','Surgery'],['paramedic','First aid'],['nurse','First aid'],['bartender','Bartending'],['driver','Driving'],['mechanic','Mechanics'],['auto-mechanic','Auto repair']] as const){const background=ORIGINS.find(row=>row.id===backgroundId)!;assert.equal(background.skills[skillName],.5,backgroundId);}
+ const doctor=ORIGINS.find(row=>row.id==='doctor')!;assert.equal(doctor.skills.Medicine,.5);
  assert.equal(new Set(ORIGINS.map(row=>row.id)).size,ORIGINS.length);
  assert.equal(new Set(skillNames).size,skillNames.length);
  assert.equal(new Set(Object.values(traitGroups).flat()).size,Object.values(traitGroups).flat().length);
  for(const row of ORIGINS)for(const name of Object.keys(row.skills))assert.ok(skillNames.includes(name),'missing catalog skill '+name+' for '+row.id);
+ const medicalSkills=['Medicine','Surgery','First aid','Bartending','Driving','Mechanics','Auto repair'].map(name=>skill(name));
+ for(const [backgroundId,skillName] of [['doctor','Medicine'],['surgeon','Surgery'],['paramedic','First aid'],['nurse','First aid'],['bartender','Bartending'],['driver','Driving'],['mechanic','Mechanics'],['auto-mechanic','Auto repair']] as const){const characterData=data(character({background:{option1:backgroundId}}),'character');applyStartingGrants(characterData,medicalSkills);assert.equal(characterData.skills[medicalSkills.find(row=>row.name===skillName)!.id],50,backgroundId);}
  const hidden={...athletics,id:randomUUID(),visibility:'creator' as const};
  assert.equal(Object.hasOwn(skillGrants(d,[hidden,rifle]),hidden.id),false);
  assert.throws(()=>applyPlayerChoices(state(entities),{}, {background:{option1:'invented-bonus'}}),/unknown_creation_background/);
