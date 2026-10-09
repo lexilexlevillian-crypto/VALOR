@@ -2,7 +2,8 @@ export type CreationEntity={id:string;kind:string;name?:string;visibility?:strin
 export function selectedBackgrounds(character:any):typeof ORIGINS;
 export function skillGrants(character:any,entities:CreationEntity[]):Record<string,{value:number;sources:string[]}>;
 export function applyStartingGrants<T>(character:T,entities:CreationEntity[]):T;
-export function stockSkill(name:string):{description:string}|null;
+export function stockSkill(name:string):{description:string;legacyDescription:string}|null;
+export function skillPointCost(skill:CreationEntity,value:number,grantedValue?:number):number;
 export function skillStatus(skill:CreationEntity,value:number):{checkBonus:number;fatigueRate:number;trained:boolean};
 export function traitSkillGrants(trait:CreationEntity,entities:CreationEntity[]):Array<{skillId:string;fraction:number}>;
 export const CREATION_BUDGETS:{attributes:number;skills:number;traits:number;refundCap:number};

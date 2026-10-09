@@ -89,6 +89,19 @@ export const BACKGROUNDS=[
 ].map(([id,name,description,modifiers,skills])=>({id,name,description,modifiers,skills}));
 
 export const SKILL_DESCRIPTIONS={
+ "Medicine":"Clinical knowledge for diagnosis and patient-care checks. Treatment outcomes, consent, supplies and licensing remain governed by their existing rules.",
+ "Clinical assessment":"Interpreting authored symptoms and examination findings.",
+ "Emergency medicine":"Clinical knowledge for authored urgent-care challenges.",
+ "Anatomy":"Knowledge of body structures for authored medical checks.",
+ "Medical research":"Evaluating clinical evidence and research in authored challenges.",
+ "Physical therapy":"Rehabilitation knowledge for authored care checks; skill alone does not restore health.",
+ "Medical imaging":"Interpreting authored medical images and findings.",
+ "Laboratory diagnostics":"Interpreting authored laboratory results with the required services and supplies.",
+ "Nutrition":"Dietary knowledge for authored care checks; skill alone does not change health.",
+ "Electronics repair":"Diagnosing and repairing 2012 electronic devices with appropriate tools.",
+ "Radio operation":"Operating available 2012 radios; skill does not create equipment or a communication channel.",
+ "Technical writing":"Preparing clear technical instructions and reports.",
+ "Wilderness first aid":"Assessing injuries and providing remote first aid with available supplies.",
  Explosives:'Abstract game knowledge for recognizing explosive hazards and resolving authored bomb-related checks. No real-world construction or handling instructions.',
  'Drug production':'Abstract game knowledge for authored illicit-production checks and recognizing related risks. No real-world recipes, ingredients or procedures.',
  Chemistry:'General scientific knowledge for fictional analysis checks.',Forensics:'Interpreting authored physical evidence.',Survival:'Coping with outdoor conditions and recognizing hazards.',Swimming:'Moving safely through water in authored challenges.',Navigation:'Reading maps and finding routes.',Crafting:'Making and repairing ordinary everyday objects.',Carpentry:'Working with wood and ordinary building repairs.', 'Electrical work':'Recognizing electrical faults in authored repair challenges.',Negotiation:'Reaching agreements and bargaining.', 'Animal handling':'Reading animal behavior and providing ordinary care.',Fishing:'Angling and understanding fishing conditions.',Gardening:'Growing and caring for ordinary plants.',Photography:'Composing photographs and documenting scenes.',Music:'Performing and understanding music.',Sewing:'Making and repairing clothing.',
@@ -115,5 +128,6 @@ export const SKILL_DESCRIPTIONS={
 };
 export function stockSkill(name){
  const description=SKILL_DESCRIPTIONS[name]??('Practical knowledge and experience in '+name.toLowerCase()+' for authored challenges.');
- return {description:description+' In game: your rating is added to checks using this skill. At half a bar or higher, Trained adds another +2 to those checks.'+(name==='Athletics'?' Trained Athletics also reduces ordinary fatigue buildup by 15%.':'')};
+ const effects=' In game: your rating is added to checks using this skill. At half a bar or higher, Trained adds another +2 to those checks.'+(name==='Athletics'?' Trained Athletics also reduces ordinary fatigue buildup by 15%.':'');
+ return {description:description+effects,legacyDescription:'Practical knowledge and experience in '+name.toLowerCase()+' for authored challenges.'+effects};
 }

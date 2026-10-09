@@ -6,6 +6,11 @@ export const ORIGINS=BACKGROUNDS;
 export const originFor=id=>ORIGINS.find(row=>row.id===id);
 export const effectText=modifiers=>Object.entries(modifiers??{}).map(([name,value])=>(value>0?'+':'')+value+' '+name+' checks').join(' · ');
 const round=value=>Math.round(value*1000)/1000;
+// Only purchased rating is refundable during creation; grants never mint points.
+export function skillPointCost(skill,value,grantedValue){
+ const scale=skill.data.scale??{min:0,max:100,step:1};
+ return scale.max===scale.min?0:round(Math.max(0,Number(value)-(grantedValue??scale.min))/(scale.max-scale.min)*5);
+}
 export function startingBudget(character,entities,attributeScale){
  const scale=attributeScale??{min:0,max:100,step:1};
  const normalized=(value,s,max)=>s.max===s.min?0:Math.max(0,(Number(value)-s.min)/(s.max-s.min))*max;
@@ -57,6 +62,14 @@ const rows={
  'Union member':['Presence',1], 'Public figure':['Presence',1], 'Private person':['Presence',-1], 'Networker':['Presence',2]
 };
 const experience={'Street fighter':'Hand-to-hand','Boxer':'Hand-to-hand','Grappler':'Hand-to-hand','Firearms training':'Firearms: handguns','Police training':'Police procedure','Military training':'Firearms: rifles','Criminal experience':'Criminal knowledge','Driver':'Driving','Mechanic':'Mechanics','Medic':'First aid',Doctor:'Medicine','Nurse training':'Nursing',Surgeon:'Surgery',Therapist:'Counseling',Veterinarian:'Veterinary care','Teacher training':'Teaching',Researcher:'Research',Programmer:'Computer programming',Pilot:'Piloting',Sailor:'Sailing','Firefighter training':'Firefighting','Chef training':'Cooking',Musician:'Music',Artist:'Drawing','Journalist training':'Journalism',Lawyer:'Law',Accountant:'Accounting',Builder:'Construction',Farmer:'Agriculture',Interpreter:'Translation',Investigator:'Investigation',Survivalist:'Survival'};
+Object.assign(rows,{
+ Dexterous:['Agility',2],'Unsteady hands':['Agility',-1],
+ 'Quick recovery from exertion':['Endurance',1],'Low stamina':['Endurance',-2],
+ Analytical:['Intellect',2],'Detail-oriented':['Perception',1],Focused:['Will',1],
+ 'Absent-minded':['Perception',-1],Composed:['Will',2],'Easily rattled':['Will',-2],
+ Tactful:['Presence',1],Abrasive:['Presence',-1]
+});
+Object.assign(experience,{'Clinical training':'Clinical assessment','Emergency care training':'Emergency medicine','Laboratory training':'Laboratory diagnostics','Field medic training':'Wilderness first aid'});
 function legacyStockTrait(name){
  if(experience[name])return {cost:2,modifiers:{},skill:experience[name],bonus:2,description:'Training grants +2 only on checks using '+experience[name]+'. It does not grant unrelated expertise.'};
  const row=rows[name];if(!row)return null;
@@ -96,6 +109,13 @@ export function applyStartingGrants(character,entities){
  return character;
 }
 const traitDescriptions={
+ Dexterous:'Precise movement supports coordination checks.', 'Unsteady hands':'Precision movement carries an authored coordination penalty.',
+ 'Quick recovery from exertion':'Conditioning supports Endurance checks; this does not grant healing or remove fatigue.',
+ 'Low stamina':'Sustained physical challenges carry an Endurance penalty.',
+ Analytical:'Structured reasoning supports Intellect checks.', 'Detail-oriented':'Careful observation supports Perception checks.',
+ Focused:'Concentration supports Will checks.', 'Absent-minded':'Overlooked details impose a Perception penalty.',
+ Composed:'Maintaining composure supports Will checks.', 'Easily rattled':'Pressure imposes a Will penalty.',
+ Tactful:'Considerate presentation supports Presence checks.', Abrasive:'A blunt presentation imposes a Presence penalty.',
  Short:'A shorter frame favors nimble movement over leverage.',Tall:'A taller frame favors reach and leverage over nimble movement.',
  Slim:'A light build favors movement over sustained exertion.',Stocky:'A sturdy build favors stamina over nimble movement.',
  Overweight:'An authored build choice with a stamina tradeoff.',Weak:'Physical tasks take more effort.',Strong:'Physical force is a strength.',
@@ -136,7 +156,7 @@ export function traitSkillGrants(trait,entities){
 }
 export function skillStatus(skill,value){
  const stock=stockSkill(skill.name),scale=skill.data.scale??{min:0,max:100,step:1};
- const standard=stock&&(skill.data.description===stock.description||skill.data.description==='Creator-editable skill descriptor. Mechanical effects and prerequisites must be authored.');
+ const standard=stock&&(skill.data.description===stock.description||skill.data.description===stock.legacyDescription||skill.data.description==='Creator-editable skill descriptor. Mechanical effects and prerequisites must be authored.');
  const trained=Boolean(standard&&scale.max>scale.min&&value>=scale.min+(scale.max-scale.min)/2);
  return {trained,checkBonus:trained?2:0,fatigueRate:trained&&skill.name==='Athletics'?-.15:0};
 }

@@ -1,4 +1,4 @@
-import {ORIGINS,startingBudget,startingRatingMaximum,effectText,skillGrants,applyStartingGrants,traitSkillGrants,stockTrait,stockSkill,skillStatus} from './creation-rules.js';
+import {ORIGINS,startingBudget,startingRatingMaximum,effectText,skillGrants,applyStartingGrants,traitSkillGrants,stockTrait,stockSkill,skillStatus,skillPointCost} from './creation-rules.js';
 import {APPEARANCE_TRAITS} from './profile-rules.js';
 import {ratingControl} from './studio.js';
 const el=(tag,text='',cls='')=>{const node=document.createElement(tag);node.textContent=text;if(cls)node.className=cls;return node;};
@@ -67,7 +67,7 @@ export function selectionPool(kind,character,entities,onchange){
  };
  const show=row=>{
   focused=row;const d=row.data,stock=kind==='skills'?stockSkill(row.name):stockTrait(row.name);
-  const legacy=/^(Creator-editable skill descriptor\.|Optional game interpretation:|Training grants \+2 only on checks using )/.test(d.description??'');
+  const legacy=/^(Creator-editable skill descriptor\.|Optional game interpretation:|Training grants \+2 only on checks using )/.test(d.description??'')||(kind==='skills'&&d.description===stock?.legacyDescription);
   detail.replaceChildren(el('h4',row.name),el('p',legacy&&stock?stock.description:d.description||'A creator-authored '+kind.slice(0,-1)+'.'));
   if(kind==='traits'){
    detail.append(el('strong',costLabel(row)),el('p',effectText(d.modifiers)||'No general attribute bonus.'));
@@ -80,15 +80,18 @@ export function selectionPool(kind,character,entities,onchange){
    detail.append(el('p','Costs and refunds apply only to player creation. Total refunds are capped at 6 points; NPCs have no point budget.'));
   }else{
    const scale=d.scale??{min:0,max:100,step:1},grant=skillGrants(character,entities)[row.id];
+   const paid=skillPointCost(row,character.skills?.[row.id]??scale.min,grant?.value);
+   detail.append(el('strong','Allocated: '+paid+' skill points'),el('p','Reducing to the free/minimum rating returns '+paid+' skill points during creation. Free training has no refund.'));
    detail.append(el('p','Your rating is added to checks using this skill. A full bar costs 5 starting points; free training is not charged. Range '+scale.min+'–'+scale.max+'.'));
    if(skillStatus(row,scale.max).trained)detail.append(el('p','Status: Trained at '+(scale.min+(scale.max-scale.min)/2)+' or higher. +2 to checks using this skill.'+(row.name==='Athletics'?' Also slows ordinary fatigue buildup by 15%.':'')));
+   if(skillStatus(row,scale.max).trained)detail.append(el('p','Trained threshold cost: '+skillPointCost(row,scale.min+(scale.max-scale.min)/2,grant?.value)+' skill points after free training.'));
    if(grant)detail.append(el('p','Free rating '+grant.value+' from '+grant.sources.join(', ')+'. Remove its background or trait to remove this grant.'));
   }
   const granted=kind==='skills'&&skillGrants(character,entities)[row.id];if(!granted){const action=button(isSelected(row)?'Remove '+row.name:'Choose '+row.name,()=>toggle(row));if(!canToggle(row)){action.disabled=true;action.title='This would exceed the player trait-point limit.';}detail.append(action);}
  };
  const draw=()=>{
   if(points){const remaining=startingBudget(character,entities).remaining.traits;points.textContent=character.playable?remaining+' trait points left':'Unlimited trait points for NPCs';points.dataset.budget='traits';points.classList.toggle('over-budget',remaining<0);}
-  grid.replaceChildren();for(const row of choices){if(!row.name.toLowerCase().includes(search.value.toLowerCase()))continue;const choice=button(row.name,()=>show(row));choice.className='pool-choice';choice.dataset.choiceId=row.id;choice.setAttribute('aria-label',row.name);choice.setAttribute('aria-pressed',String(isSelected(row)));if(kind==='traits')choice.append(el('small',costLabel(row)));grid.append(choice);}
+  grid.replaceChildren();for(const row of choices){if(!row.name.toLowerCase().includes(search.value.toLowerCase()))continue;const choice=button(row.name,()=>show(row));choice.className='pool-choice';choice.dataset.choiceId=row.id;choice.setAttribute('aria-label',row.name);choice.setAttribute('aria-pressed',String(isSelected(row)));choice.append(el('small',kind==='traits'?costLabel(row):'5 skill points / full bar'));grid.append(choice);}
   selected.replaceChildren();const grants=skillGrants(character,entities);
   for(const row of choices.filter(isSelected)){
    const item=el('div','','selected-choice'),grant=grants[row.id];
