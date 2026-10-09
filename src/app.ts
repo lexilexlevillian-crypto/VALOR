@@ -1,4 +1,5 @@
 import {system11Routes} from './system11-console.ts';
+import {system16Routes, SYSTEM16_VERSION} from './system16-runtime.ts';
 import {system13Routes, SYSTEM13_VERSION} from './system13-http.ts';
 import {installResponseTiming} from './game/response-timing.ts';
 import Fastify, { LogController } from 'fastify';
@@ -93,7 +94,7 @@ export function buildApp(store:Store,settings:Config,logging:boolean|{write(chun
     if(request.headers.accept?.includes('text/html'))return reply.header('Content-Security-Policy',shellPolicy).type('text/html').send(shell());
     return {name:'VALOR',version:'0.2.0-alpha',status:'integrated-alpha',playable:true,client:'/app'};
   });
-  app.get('/healthz',async(_request,reply)=>{reply.header('X-VALOR-System11','system11/1');reply.header('X-VALOR-System13',SYSTEM13_VERSION);reply.header('X-VALOR-Commit',process.env.RENDER_GIT_COMMIT??'local');(await store.get('SELECT 1'));return {status:'ok'};});
+  app.get('/healthz',async(_request,reply)=>{reply.header('X-VALOR-System11','system11/1');reply.header('X-VALOR-System13',SYSTEM13_VERSION);reply.header('X-VALOR-System16',SYSTEM16_VERSION);reply.header('X-VALOR-Commit',process.env.RENDER_GIT_COMMIT??'local');(await store.get('SELECT 1'));return {status:'ok'};});
   app.get('/readyz',async()=>{const schema=await store.get<{version:number}>('SELECT max(version) version FROM schema_migrations');ensure(schema?.version===51,503,'schema_not_ready');return {status:'ready',schemaVersion:schema.version};});
   app.post('/auth/login',async(request,reply)=>{
     const input=credentials.parse(request.body);
@@ -238,6 +239,7 @@ export function buildApp(store:Store,settings:Config,logging:boolean|{write(chun
   gameRoutes(app,new Game(store,{exportBytes:settings.exportBytes,importBytes:settings.importBytes}),actor,key);
   system11Routes(app,actor);
   system13Routes(app,actor);
+  system16Routes(app);
   staticRoutes(app);
   return app;
 }

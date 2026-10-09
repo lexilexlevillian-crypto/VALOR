@@ -10,3 +10,5 @@ backups/
 coverage/
 artifacts/
 *.log
+__pycache__/
+*.py[cod]
