@@ -11,9 +11,13 @@ jobs:
         with:
           node-version-file: .node-version
           cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
       - run: npm ci
       - run: npm audit --omit=dev --audit-level=high
       - run: npx playwright install --with-deps chromium
       - run: npm run check
       - run: npm test
       - run: node --test tests/system10/capability.test.mjs
+      - run: npm run test:system11

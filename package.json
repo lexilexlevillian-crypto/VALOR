@@ -17,7 +17,9 @@
     "release:rehearse": "node --env-file-if-exists=.env src/cli.ts release:rehearse",
     "db:import": "node --env-file-if-exists=.env src/cli.ts import-sqlite",
     "worker": "node --env-file-if-exists=.env src/notifications-worker.ts",
-    "user:create": "node --env-file-if-exists=.env src/cli.ts user:create"
+    "user:create": "node --env-file-if-exists=.env src/cli.ts user:create",
+    "postinstall": "node scripts/check-system11-runtime.ts",
+    "test:system11": "node scripts/test-system11.ts"
   },
   "dependencies": {
     "@countrystatecity/countries": "1.0.9",

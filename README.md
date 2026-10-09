@@ -18,9 +18,13 @@ The supplied System 5 NPC behavior specification has an [implementation and rele
 
 The latest [lifecycle systems guide](docs/LIFECYCLE_SYSTEMS.md) covers NPC route travel and fixed-step catch-up, production, quest branches, social consequences, dispatch, court/estate flows, private image assets, deduplicated saves, Creator diagnostics and confirmed AI action proposals.
 
+## Isolated System 11
+
+Creators and admins can open [Time, Schedule & Calendar](https://valor-uwgb.onrender.com/system11/console) after signing in. This scratch console uses the isolated Python module and mocked dependencies; it does not advance saved lives. See [System 11 deployment and API details](docs/SYSTEM_11_DEPLOYMENT.md).
+
 ## Run locally
 
-Requires Node **24.21.x** (see .node-version).
+Requires Node **24.21.x** (see .node-version) and Python **3.12+** for the System 11 console. If Python is not on PATH, set `VALOR_SYSTEM11_PYTHON` to its executable. The pinned timezone pack is bundled.
 
 ```sh
 npm ci
