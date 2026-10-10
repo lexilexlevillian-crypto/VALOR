@@ -10,7 +10,9 @@ New playable characters and launched lives receive 35 attribute points (10 per f
 
 Trait, skill and background pools show descriptions and effects before selection. Ordinary players can customize public start-package builds and profile occupations. Starts with private trait or skill choices are protected. Validation and persistence use the existing atomic, permission-checked start workflow.
 
-Reviewed catalog installation upgrades untouched stock trait descriptors to mechanical, costed definitions while preserving IDs and custom effects. This remains an explicit audited Creator action; deployment does not silently rewrite live catalogs. Existing legal trait counts and selections are retained when the upgrade adjusts campaign allowances. Newly created lives still have the independent starting budgets.
+Background skills are included automatically in new worlds. Migration 052 adds missing background skills to existing worlds and unfinished lives, preserving existing skill IDs, custom definitions, visibility and archived records. Backgrounds grant their primary skill at half rating for free, with any secondary training shown in the picker. Medicine, Surgery, First aid, Bartending, Driving, Mechanics and Auto repair are separate selectable skills. Engineering, Office administration and Security work also have their own skills.
+
+Reviewed full catalog installation upgrades untouched stock trait descriptors to mechanical, costed definitions while preserving IDs and custom effects. Trait upgrades remain an explicit audited Creator action. Existing legal trait counts and selections are retained when the upgrade adjusts campaign allowances. Newly created lives still have the independent starting budgets.
 
 The creation UI follows the OC-sheet hierarchy: essentials first, simulation and AI authoring underneath closed disclosure panels. The signed-in campaign menu uses a title-screen layout; the same visual themes extend through login, creation and play.
 

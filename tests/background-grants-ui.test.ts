@@ -1,16 +1,55 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {chromium} from '@playwright/test';
+import {chromium,type Page} from '@playwright/test';
+import {readFileSync} from 'node:fs';
 import {AxeBuilder} from '@axe-core/playwright';
 import {fixture,key} from './helpers.ts';
 import {Game} from '../src/game/engine.ts';
+import {ORIGINS} from '../public/creation-rules.js';
+
+// Serve the real creation modules while keeping other numbered systems closed.
+async function openCreationPage(page:Page){
+ await page.route('https://creation.test/**',async route=>{
+  const path=new URL(route.request().url()).pathname;
+  if(path==='/app')return route.fulfill({contentType:'text/html',body:'<!doctype html><html lang="en"><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Character creation</title><link rel="stylesheet" href="/style.css"><link rel="stylesheet" href="/studio.css"></head><body><main id="app"></main></body></html>'});
+  if(path.startsWith('/api/'))return route.fulfill({contentType:'application/json',body:'{}'});
+  if(!/^\/[\w.-]+\.(js|css)$/.test(path))return route.fulfill({status:404,body:''});
+  return route.fulfill({contentType:path.endsWith('.css')?'text/css':'text/javascript',body:readFileSync(new URL('../public'+path,import.meta.url),'utf8')});
+ });
+ await page.goto('https://creation.test/app');
+}
+
+test('every background adds its actual skills in the browser without installing a catalog',async()=>{
+ const f=await fixture(),browser=await chromium.launch({headless:true});
+ try{
+  const game=new Game(f.store),timeline=await game.initialize(f.creator,f.campaign.id);
+  const {entities}=await game.creationOptions(f.player,timeline.id);
+  const page=await browser.newPage();
+  await openCreationPage(page);
+  await page.evaluate(async serialized=>{
+   const entities=JSON.parse(serialized);
+   const path='/creation-pools.js',pools=await import(path),character={playable:true,background:{},traits:[],skills:{},attributes:{}};
+   document.querySelector('#app')!.replaceChildren(pools.backgroundPicker(character,entities,()=>{}),pools.selectionPool('skills',character,entities,()=>{}));
+  },JSON.stringify(entities));
+  for(const background of ORIGINS){
+   await page.getByLabel('Primary background',{exact:true}).selectOption(background.id);
+   for(const [name,fraction] of Object.entries(background.skills)){
+    assert.equal(await page.getByRole('button',{name,exact:true}).getAttribute('aria-pressed'),'true',background.name+' / '+name);
+    assert.equal(await page.getByLabel(name+' exact value',{exact:true}).inputValue(),String(fraction*100));
+   }
+   assert.equal(await page.getByText(/training unavailable/).count(),0);
+   await page.getByLabel('Primary background',{exact:true}).selectOption('');
+   assert.equal(await page.locator('.selected-choice').count(),0);
+  }
+ }finally{await browser.close();await f.close();}
+});
 test('background dropdowns and trait grants update skill floors and budgets without banking free points',async()=>{
  const f=await fixture(),browser=await chromium.launch({headless:true});
  try{
   const game=new Game(f.store),timeline=await game.initialize(f.creator,f.campaign.id);await game.installCatalog(f.creator,timeline.id,1,key());
   const entities=(await game.load(timeline.id)).entities;
-  const address=await f.app.listen({host:'127.0.0.1',port:0}),context=await browser.newContext({viewport:{width:820,height:1180}}),page=await context.newPage();
-  await page.goto(address+'/app');
+  const context=await browser.newContext({viewport:{width:820,height:1180}}),page=await context.newPage();
+  await openCreationPage(page);
   await page.evaluate(async serialized=>{
    const entities=JSON.parse(serialized);
    const path='/creation-pools.js',pools=await import(path),character={playable:true,background:{},traits:[],skills:{},attributes:{}};

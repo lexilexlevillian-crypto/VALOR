@@ -31,7 +31,7 @@ import {resolveAction} from './actions.ts';
 import type {CheckRecord} from './actions.ts';
 import {advance,type Effect} from './simulation.ts';
 import {maintainAutomaticStoryCards} from './story-cards.ts';
-import {skillNames,traitBackgroundRequirements,traitGenerationTags,traitGroups,traitOppositions} from './catalog.ts';
+import {backgroundSkillNames,skillNames,traitBackgroundRequirements,traitGenerationTags,traitGroups,traitOppositions} from './catalog.ts';
 import {generateNpcTraitSelection,validateTraitSelection} from './traits.ts';
 import {grantStarterEssentials} from './starter-items.ts';
 import {prepareAppearance,assignResidence} from './profile-creation.ts';
@@ -126,6 +126,12 @@ export class Game {
    const stored=campaign.defaults_json?parseStoredCampaignConfig({defaults_json:campaign.defaults_json,overrides_json:campaign.overrides_json,revision:1,schema_version:1}):{defaults:defaultCampaignConfig(campaign.starting_at,campaign.timezone),overrides:{},revision:1,schemaVersion:1};
    const resolved=resolveCampaignConfig(stored.defaults,stored.overrides),id=randomUUID(),settings=settingsSchema.parse({campaign:resolved,timezone:resolved.timezone,needs:resolved.needsIntensity!=='off',intensity:resolved.injuryIntensity==='restrained'?'restrained':'grounded'});
    (await this.store.run('INSERT INTO timelines(id,campaign_id,name,clock,settings_json,created_at) VALUES (?,?,?,?,?,?)',id,campaignId,'Original timeline',resolved.startAt,JSON.stringify(settings),now()));
+   // Background training is available even before the optional full catalog install.
+   const skillTimestamp=now();
+   await this.store.batch(backgroundSkillNames.map(name=>{
+    const skill=validateEntity({id:randomUUID(),kind:'skill',name,visibility:'campaign',data:{category:'skill',mode:'descriptive',description:stockSkill(name)!.description}});
+    return {sql:'INSERT INTO game_entities(timeline_id,id,kind,name,visibility,data_json,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)',args:[id,skill.id,skill.kind,skill.name,skill.visibility,JSON.stringify(skill.data),skillTimestamp,skillTimestamp]};
+   }));
    const binding=await this.store.get<{canon_revision_id:string}>('SELECT canon_revision_id FROM campaign_canon_bindings WHERE campaign_id=?',campaignId);
    if(binding)await this.store.run('INSERT INTO timeline_canon_bindings VALUES (?,?,?)',id,binding.canon_revision_id,now());
    if(await this.recoverySchemaReady()){const initial=await this.load(id),cursor=await this.store.get<{cursor:string}>('SELECT cursor FROM timeline_turn_cursors WHERE timeline_id=?',id);ensure(cursor,409,'turn_cursor_unavailable');let saveId:string|null=null;if((initial.settings.campaign?.saveBehavior.autosave??'safe-commit')==='safe-commit')saveId=await this.saveInternal(actor,id,'Initial checkpoint',initial,1,{automatic:true,checkpoint:'safe-commit',cursor:cursor.cursor,eventId:null});await this.store.run('INSERT INTO timeline_commit_history(timeline_id,revision,cursor,event_id,save_id,state_checksum,committed_at) VALUES (?,?,?,?,?,?,?)',id,1,cursor.cursor,null,saveId,checksum(initial),now());}
@@ -858,7 +864,7 @@ export class Game {
  }
  async export(actor:Actor,id:string,options:{mediaStrategy?:'inline'|'references'}={}){
   const {t}=await this.access(actor,id,true),payload={version:1 as const,worldHistory:await this.worldHistory(id),state:(await this.load(id)),transcript:(await this.transcript(id))},cursor=await this.store.get<{cursor:string}>('SELECT cursor FROM timeline_turn_cursors WHERE timeline_id=?',id),latest=await this.store.get<{id:string;created_at:string}>('SELECT id,created_at FROM game_events WHERE timeline_id=? ORDER BY revision DESC LIMIT 1',id);ensure(cursor,409,'turn_cursor_unavailable');
-  const media=payload.state.entities.filter(entity=>entity.kind==='media').map(entity=>({id:entity.id,checksum:checksum(entity.data.body),visibility:entity.visibility})),payloadChecksum=checksum(payload),manifest={format:'valor-timeline-export' as const,formatVersion:2 as const,schemaVersion:51,projectionVersion:1 as const,exportedAt:latest?.created_at??payload.state.clock,campaignId:t.campaign_id,timeline:{id,name:t.name,revision:t.revision,clock:payload.state.clock,eventCursor:cursor.cursor,eventId:latest?.id??null},payloadChecksum,dependencies:{canonRevisionId:payload.state.canon?.revisionId??null,entityKinds:[...new Set(payload.state.entities.map(entity=>entity.kind))].sort(),media},mediaStrategy:options.mediaStrategy??'inline',visibility:'preserved' as const,migration:{sourceSnapshotVersion:1,targetSnapshotVersion:1,steps:[] as string[]}},envelope={manifest,payload};
+  const media=payload.state.entities.filter(entity=>entity.kind==='media').map(entity=>({id:entity.id,checksum:checksum(entity.data.body),visibility:entity.visibility})),payloadChecksum=checksum(payload),manifest={format:'valor-timeline-export' as const,formatVersion:2 as const,schemaVersion:52,projectionVersion:1 as const,exportedAt:latest?.created_at??payload.state.clock,campaignId:t.campaign_id,timeline:{id,name:t.name,revision:t.revision,clock:payload.state.clock,eventCursor:cursor.cursor,eventId:latest?.id??null},payloadChecksum,dependencies:{canonRevisionId:payload.state.canon?.revisionId??null,entityKinds:[...new Set(payload.state.entities.map(entity=>entity.kind))].sort(),media},mediaStrategy:options.mediaStrategy??'inline',visibility:'preserved' as const,migration:{sourceSnapshotVersion:1,targetSnapshotVersion:1,steps:[] as string[]}},envelope={manifest,payload};
   const result={...envelope,checksum:checksum(envelope)};ensureJsonBytes(result,this.exportBytes,'export_too_large');return result;
  }
  private async inspectImport(actor:Actor,id:string,raw:unknown){
@@ -870,7 +876,7 @@ export class Game {
   const target=await this.load(id),targetIds=new Set(target.entities.map(entity=>entity.id)),collisions=state.entities.filter(entity=>targetIds.has(entity.id)).map(entity=>entity.id);
   for(const e of state.entities.filter(e=>e.kind==='character'))e.data.controllerUserId=e.data.playable?actor.id:null;
   const migrations=[...(manifest?.migration.steps??[])];if(!manifest)migrations.push('legacy-export-envelope');if(!parsed.metadata)migrations.push('legacy-snapshot-metadata-defaults');
-  return {state,parsed,bundleChecksum:checksum(raw),report:{valid:true,formatVersion:manifest?.formatVersion??1,snapshotVersion:parsed.version,sourceSchemaVersion:manifest?.schemaVersion??null,targetSchemaVersion:51,projectionVersion:manifest?.projectionVersion??1,entities:state.entities.length,transcriptTurns:parsed.transcript.length,idCollisions:collisions,conflictPolicy:'isolated-child-timeline',overwritesLiveCampaign:false,visibility:manifest?.visibility??'preserved',mediaStrategy:manifest?.mediaStrategy??'inline',migrations,changes:['create-child-timeline','rebuild-state-projection','restore-world-history','restore-transcript']}};
+  return {state,parsed,bundleChecksum:checksum(raw),report:{valid:true,formatVersion:manifest?.formatVersion??1,snapshotVersion:parsed.version,sourceSchemaVersion:manifest?.schemaVersion??null,targetSchemaVersion:52,projectionVersion:manifest?.projectionVersion??1,entities:state.entities.length,transcriptTurns:parsed.transcript.length,idCollisions:collisions,conflictPolicy:'isolated-child-timeline',overwritesLiveCampaign:false,visibility:manifest?.visibility??'preserved',mediaStrategy:manifest?.mediaStrategy??'inline',migrations,changes:['create-child-timeline','rebuild-state-projection','restore-world-history','restore-transcript']}};
  }
  async validateImport(actor:Actor,id:string,raw:unknown){return (await this.inspectImport(actor,id,raw)).state;}
  async import(actor:Actor,id:string,name:string,raw:unknown,dryRun=true,confirmationToken?:string){

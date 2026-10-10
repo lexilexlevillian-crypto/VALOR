@@ -95,7 +95,7 @@ export function buildApp(store:Store,settings:Config,logging:boolean|{write(chun
     return {name:'VALOR',version:'0.2.0-alpha',status:'integrated-alpha',playable:true,client:'/app'};
   });
   app.get('/healthz',async(_request,reply)=>{reply.header('X-VALOR-System11','system11/1');reply.header('X-VALOR-System13',SYSTEM13_VERSION);reply.header('X-VALOR-System16',SYSTEM16_VERSION);reply.header('X-VALOR-Commit',process.env.RENDER_GIT_COMMIT??'local');(await store.get('SELECT 1'));return {status:'ok'};});
-  app.get('/readyz',async()=>{const schema=await store.get<{version:number}>('SELECT max(version) version FROM schema_migrations');ensure(schema?.version===51,503,'schema_not_ready');return {status:'ready',schemaVersion:schema.version};});
+  app.get('/readyz',async()=>{const schema=await store.get<{version:number}>('SELECT max(version) version FROM schema_migrations');ensure(schema?.version===52,503,'schema_not_ready');return {status:'ready',schemaVersion:schema.version};});
   app.post('/auth/login',async(request,reply)=>{
     const input=credentials.parse(request.body);
     (await auth.limit('login-account',input.email,settings.loginLimit,900000));

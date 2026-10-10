@@ -2,7 +2,7 @@
 
 ## Database and migrations
 
-Local default: data/valor.sqlite, excluded from Git. Production uses external Turso via the official @libsql/client package. Run npm run migrate before use; startup also awaits verification/application of every migration before accepting requests. All SQL migrations run transactionally with checksums. Never edit an applied migration. Add a forward-compatible migration for future changes. Startup refuses unknown schema versions and modified migration checksums; connectivity/authentication failures never create a local fallback database. `/readyz` returns success only when the database is reachable and schema migration 051 is present; `/healthz` remains the liveness/dependency check.
+Local default: data/valor.sqlite, excluded from Git. Production uses external Turso via the official @libsql/client package. Run npm run migrate before use; startup also awaits verification/application of every migration before accepting requests. All SQL migrations run transactionally with checksums. Never edit an applied migration. Add a forward-compatible migration for future changes. Startup refuses unknown schema versions and modified migration checksums; connectivity/authentication failures never create a local fallback database. `/readyz` returns success only when the database is reachable and schema migration 052 is present; `/healthz` remains the liveness/dependency check.
 
 001_foundation establishes the durable model, constraints and immutable history triggers. 002_query_indexes adds scoped query indexes. 003_game adds timelines, typed entities, epistemic tables, game events, saves, templates and AI usage. 004_chronicle_lineage preserves historical turns across branches/imports. 005_game_delivery adds a leased game-event outbox, committed atomically with mutations. Tests migrate a populated 001 database forward through all migrations and inspect it from a new Node process.
 
@@ -73,7 +73,7 @@ Deployment sequence:
 2. Run the full CI gates and `npm run release:rehearse -- <new path>` against the intended source.
 3. Deploy to staging, run migrations, require `/healthz` and `/readyz`, then exercise the acceptance matrix in `SYSTEM32_RELEASE.md`.
 4. Deploy the same immutable artifact to production, run forward migrations once, require readiness, and inspect errors, latency, queue depth and storage growth before reopening writes.
-5. For code rollback, redeploy the prior artifact only if it understands schema 051. Otherwise keep the service stopped and restore the verified pre-release backup to a new database, validate it, then switch credentials. Never down-migrate or overwrite the live database in place.
+5. For code rollback, redeploy the prior artifact only if it understands schema 052. Otherwise keep the service stopped and restore the verified pre-release backup to a new database, validate it, then switch credentials. Never down-migrate or overwrite the live database in place.
 
 The release owner must record backup path/checksum custody, artifact/commit, migration result, health/readiness evidence, acceptance result, monitoring baseline, and rollback decision. See [System 32 release report](SYSTEM32_RELEASE.md).
 
