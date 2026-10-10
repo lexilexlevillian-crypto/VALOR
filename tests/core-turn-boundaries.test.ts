@@ -40,6 +40,9 @@ test('audit covers clock and knowledge roots, detects omitted, duplicated and fo
 });
 test('creative proposal is grounded, remains pending, commits only on confirmation and replays without another provider call',async()=>{
  const f=await setup();try{
+  // Keep this mocked planner fixture limited to its three authored scene entities.
+  // Background-catalog publication and training have separate integration coverage.
+  await f.store.run("DELETE FROM game_entities WHERE timeline_id=? AND kind='skill'",f.t.id);
   const settings=(await f.game.load(f.t.id)).settings;settings.contextTokens=16000;settings.tokenBudget=500000;settings.userTokenBudget=500000;await f.game.configure(f.creator,f.t.id,2,settings,key());
   const text='Lift the lid of Box, then pick up Box',clauses=[{clauseId:'1',dependency:'NONE' as const,action:{type:'physical' as const,operation:'open' as const,targetId:f.box.id,instrumentId:null,destinationId:null,quiet:false,goal:'open the box',approach:'lift the lid'}},{clauseId:'2',dependency:'PREVIOUS_SUCCESS' as const,action:{type:'take' as const,itemId:f.box.id}}];
   let calls=0;const planner=new CreativeTurnPlanner(f.game,{id:'mock-planner',estimateIntentTokens:()=>1,complete:async request=>{calls++;return {traceId:request.traceId,output:{clauses,evidence:clauses.map(c=>({clauseId:c.clauseId,start:0,end:text.length,text})),clarification:null},usage:{inputTokens:1,outputTokens:1},toolCalls:[]};}});
