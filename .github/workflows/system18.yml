@@ -1,0 +1,29 @@
+name: System 18 isolated verification
+
+on:
+  push:
+    branches: [full-game-implementation]
+    paths:
+      - 'system18/**'
+      - '.github/workflows/system18.yml'
+      - '.node-version'
+  pull_request:
+    paths:
+      - 'system18/**'
+      - '.github/workflows/system18.yml'
+      - '.node-version'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+      - run: node --check system18/health.mjs
+      - run: node --test system18/health.test.mjs

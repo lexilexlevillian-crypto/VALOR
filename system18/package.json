@@ -1,0 +1,13 @@
+{
+  "name": "@valor/system18",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "exports": "./health.mjs",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test health.test.mjs"
+  }
+}
