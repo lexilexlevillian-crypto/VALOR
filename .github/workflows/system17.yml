@@ -1,0 +1,27 @@
+name: System 17 isolated verification
+
+on:
+  push:
+    paths:
+      - src/system17_python/**
+      - tests/system17_python/**
+      - .github/workflows/system17.yml
+  pull_request:
+    paths:
+      - src/system17_python/**
+      - tests/system17_python/**
+      - .github/workflows/system17.yml
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -B -m unittest discover -s tests/system17_python -q
+      - run: python -B -c "from src.system17_python import Command, MockDependencies, Response, VehicleState, VehicleSystem, state_machine"
