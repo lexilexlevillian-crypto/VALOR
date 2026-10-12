@@ -1,0 +1,32 @@
+name: System 19 isolated verification
+
+on:
+  push:
+    paths:
+      - 'system19/**'
+      - '.github/workflows/system19.yml'
+  pull_request:
+    paths:
+      - 'system19/**'
+      - '.github/workflows/system19.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.12', '3.13']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: python -m unittest system19.test_combat -v
+      - name: Check JSON runner
+        shell: bash
+        run: |
+          printf '%s' '{}' | python -m system19 > /tmp/system19-result.json
+          python -c "import json; data=json.load(open('/tmp/system19-result.json')); assert data['reply']['status'] == 'rejected'"
