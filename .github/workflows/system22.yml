@@ -1,0 +1,25 @@
+name: System 22 isolated verification
+
+on:
+  push:
+    paths:
+      - 'system22/**'
+      - '.github/workflows/system22.yml'
+  pull_request:
+    paths:
+      - 'system22/**'
+      - '.github/workflows/system22.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+      - run: node --check system22/index.mjs
+      - run: node --test system22/index.test.mjs
