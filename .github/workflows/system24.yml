@@ -1,0 +1,36 @@
+name: System 24 isolated verification
+
+on:
+  push:
+    paths:
+      - 'system24/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.node-version'
+      - '.github/workflows/system24.yml'
+  pull_request:
+    paths:
+      - 'system24/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.node-version'
+      - '.github/workflows/system24.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-system24:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - run: npm ci
+      - run: node --test system24/system24.test.mjs
