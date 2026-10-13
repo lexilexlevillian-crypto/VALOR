@@ -1,0 +1,69 @@
+name: System 23 isolated verification
+
+on:
+  push:
+    paths:
+      - 'system23/**'
+      - '.github/workflows/system23.yml'
+  pull_request:
+    paths:
+      - 'system23/**'
+      - '.github/workflows/system23.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-system23:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify isolated living city and rumor module
+        run: python -B -m unittest system23.test_living_city_rumor -v
+
+  verify-live-release:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/full-game-implementation'
+    needs: verify-system23
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Verify Render serves this exact release
+        env:
+          EXPECTED_COMMIT: ${{ github.sha }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import time
+          import urllib.error
+          import urllib.request
+
+          origin = "https://valor-uwgb.onrender.com"
+          expected = os.environ["EXPECTED_COMMIT"]
+          deadline = time.monotonic() + 780
+          while time.monotonic() < deadline:
+              try:
+                  request = urllib.request.Request(
+                      origin + "/healthz", headers={"Cache-Control": "no-cache"}
+                  )
+                  with urllib.request.urlopen(request, timeout=20) as response:
+                      deployed = response.headers.get("X-VALOR-Commit", "")
+                      healthy = response.status == 200 and json.load(response).get("status") == "ok"
+                  if healthy and deployed == expected:
+                      for path in ("/readyz", "/app"):
+                          with urllib.request.urlopen(origin + path, timeout=20) as response:
+                              if response.status != 200:
+                                  raise RuntimeError("Release endpoint is not ready")
+                      print("Verified live release:", expected)
+                      break
+                  print("Waiting for expected Render commit; current:", deployed or "unavailable", flush=True)
+              except (urllib.error.URLError, TimeoutError, ValueError, RuntimeError):
+                  print("Waiting for Render readiness", flush=True)
+              time.sleep(15)
+          else:
+              raise SystemExit("Render did not verify the expected commit before the deadline")
+          PY
