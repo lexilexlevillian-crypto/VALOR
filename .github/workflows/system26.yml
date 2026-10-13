@@ -1,0 +1,24 @@
+name: System 26 isolated interface
+on:
+  push:
+    paths:
+      - 'system26/**'
+      - '.github/workflows/system26.yml'
+  pull_request:
+    paths:
+      - 'system26/**'
+      - '.github/workflows/system26.yml'
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.11', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: python -B -m unittest system26.test_interface -v
