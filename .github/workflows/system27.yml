@@ -1,0 +1,26 @@
+name: System 27 isolated verification
+
+on:
+  push:
+    paths:
+      - 'system27/**'
+      - '.github/workflows/system27.yml'
+  pull_request:
+    paths:
+      - 'system27/**'
+      - '.github/workflows/system27.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-system27:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify isolated control-plane workflows and persistence
+        run: python -B -m unittest system27.test_control_plane -v
