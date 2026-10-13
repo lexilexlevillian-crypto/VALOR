@@ -10,6 +10,11 @@ on:
       - 'system23/**'
       - '.github/workflows/system23.yml'
   workflow_dispatch:
+    inputs:
+      verify_live:
+        description: Verify the deployed commit after the normal CI checks
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -26,7 +31,7 @@ jobs:
         run: python -B -m unittest system23.test_living_city_rumor -v
 
   verify-live-release:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/full-game-implementation'
+    if: github.event_name == 'workflow_dispatch' && inputs.verify_live
     needs: verify-system23
     runs-on: ubuntu-latest
     timeout-minutes: 15
