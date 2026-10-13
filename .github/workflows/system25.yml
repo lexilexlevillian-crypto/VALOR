@@ -1,0 +1,31 @@
+name: System 25 isolated verification
+
+on:
+  push:
+    paths:
+      - 'system25/**'
+      - '.github/workflows/system25.yml'
+  pull_request:
+    paths:
+      - 'system25/**'
+      - '.github/workflows/system25.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-system25:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - name: Install type-checking dependencies without executing application hooks
+        run: npm ci --ignore-scripts
+      - name: Verify isolated persistence, saves, and timeline logic
+        run: node --test system25/system25.test.mjs
+      - name: Verify public JSON interface types
+        run: node node_modules/typescript/bin/tsc --noEmit --strict --target ES2023 --module NodeNext --moduleResolution NodeNext --skipLibCheck system25/contracts.test.mts
